@@ -14,11 +14,11 @@ locals {
   gcp_web_run_service_name = "web"
 
   gh_organization_name = "medusa-software-hq"
-  gh_repo_name         = "counter" # 🎨 TEMPLATE EJECT: Change the repo name
+  gh_repo_name         = "workload"
   gh_api_url_var_name  = "API_URL"
 
-  project_base_name = "counter" # 🎨 TEMPLATE EJECT: Choose an org-unique project base name
-  project_variant   = "v4"      # 🎨 TEMPLATE EJECT: Choose a project-unique variant name
+  project_base_name = "workload"
+  project_variant   = "baseline"
 
   # Google OAuth 2.0 client ID
   # https://console.cloud.google.com/auth/clients/852264381191-crah9udgr1d44tposdv348k091t2upb6.apps.googleusercontent.com?project=ms-auth-284371d2

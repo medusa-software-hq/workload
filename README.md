@@ -1,6 +1,6 @@
-# Counter
+# Workload
 
-This is an experimental internal project, which serves as a template for other internal projects.
+This is an internal project built from the Counter template.
 
 ## Architecture
 
@@ -137,9 +137,10 @@ The root Terraform project provisions shared platform resources such as:
 - GitHub integration
 - shared DNS/domain mapping support
 
-#### Backend infrastructure (`backend/api/infra/`)
+#### Backend infrastructure (`backend/infra/`)
 
-The backend Terraform project provisions resources required by the API, including:
+The backend Terraform project provisions resources required by the API (and, in the
+future, other backend services such as a worker), including:
 
 - Cloud Run service
 - Neon (serverless Postgres) project
@@ -171,32 +172,3 @@ The project is designed for automated delivery:
 
 This makes the repository usable both as a working example and as a starting point for new internal services.
 
-### Template considerations
-
-This repository is also a template. Files marked with `🎨 TEMPLATE EJECT` identify places that must be renamed or rewritten when creating a derived project, including:
-
-- package names
-- service names
-- Terraform state prefixes
-- cloud resource names
-- README content
-
-## Ejection
-
-To create a derived project, fork this repository and eject from the template.
-
-To eject from the template:
-
-- Visit all files that contain a `🎨 TEMPLATE EJECT` marker
-- Perform the ejection (mostly renaming)
-- Remove the markers (the comment or the whole file)
-- Commit to Git
-
-After ejecting from the template:
-
-- Visit all files that contain a `🎨 TEMPLATE POST-EJECT` marker
-- Perform appropriate manual actions
-- Remove the markers
-- Commit to Git
-
-<!-- 🎨 TEMPLATE EJECT: Replace this README.md -->

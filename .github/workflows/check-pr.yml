@@ -33,9 +33,9 @@ jobs:
     name: web (SPA)
     uses: ./.github/workflows/check-web-spa.yml
 
-  check-api-infra:
-    name: api (infra)
-    uses: ./.github/workflows/check-api-infra.yml
+  check-backend-infra:
+    name: backend (infra)
+    uses: ./.github/workflows/check-backend-infra.yml
     secrets: inherit
 
     permissions:

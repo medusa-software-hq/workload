@@ -57,8 +57,8 @@ protobuf {
 
 sqldelight {
   databases {
-    create("CounterDatabase") {
-      packageName.set("software.medusa.counter.db")
+    create("WorkloadDatabase") {
+      packageName.set("software.medusa.workload.db")
       dialect(libs.sqldelight.postgresql.dialect)
     }
   }

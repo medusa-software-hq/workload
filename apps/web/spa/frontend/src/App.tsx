@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import heroImg from './assets/hero.png';
 import reactLogo from './assets/react.svg';
 import viteLogo from './assets/vite.svg';
-import { CounterService } from './gen/medusa/counter/v1/counter_service_pb.ts';
+import { WorkloadService } from './gen/medusa/workload/v1/workload_service_pb.ts';
 import { SignInWall } from './SignInWall.tsx';
 import { useAuth } from './useAuth.tsx';
 import classes from './App.module.css';
@@ -20,7 +20,7 @@ const transport = createGrpcWebTransport({
   baseUrl: API_URL,
 });
 
-const client = createClient(CounterService, transport);
+const client = createClient(WorkloadService, transport);
 
 const socialLinks = [
   { label: 'GitHub', href: 'https://github.com/vitejs/vite', icon: 'github-icon' },

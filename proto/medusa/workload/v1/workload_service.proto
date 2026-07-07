@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package medusa.workload.v1;
+
+option java_multiple_files = true;
+
+option java_package = "software.medusa.workload.v1";
+
+service WorkloadService {
+  rpc GetCount(GetCountRequest) returns (GetCountResponse);
+  rpc Increment(IncrementRequest) returns (IncrementResponse);
+  rpc Decrement(DecrementRequest) returns (DecrementResponse);
+}
+
+message GetCountRequest {}
+
+message GetCountResponse {
+  int32 count = 1;
+}
+
+message IncrementRequest {}
+
+message IncrementResponse {
+  int32 count = 1;
+}
+
+message DecrementRequest {}
+
+message DecrementResponse {
+  int32 count = 1;
+}
