@@ -1,0 +1,54 @@
+version: '3'
+
+.caddySources: &caddySources
+  - Caddyfile
+
+includes:
+  frontend:
+    taskfile: frontend/Taskfile.yml
+    dir: frontend
+
+tasks:
+  caddy:checkFormatting:
+    desc: Check Caddyfile formatting
+    sources: *caddySources
+    cmds:
+      - caddy fmt --diff Caddyfile
+
+  caddy:fixFormatting:
+    desc: Fix Caddyfile formatting
+    sources: *caddySources
+    cmds:
+      - caddy fmt --overwrite Caddyfile
+
+  caddy:validate:
+    desc: Validate the Caddyfile
+    sources: *caddySources
+    cmds:
+      - caddy validate --config Caddyfile
+
+  checkFormatting:
+    desc: Check formatting (frontend + Caddyfile)
+    deps: [frontend:checkFormatting, caddy:checkFormatting]
+
+  fixFormatting:
+    desc: Fix formatting (frontend + Caddyfile)
+    deps: [frontend:fixFormatting, caddy:fixFormatting]
+
+  lint:
+    desc: Lint the app sources
+    deps: [frontend:lint]
+
+  analyze:
+    desc: Analyze the app sources (frontend typecheck + tests + Caddy validate)
+    deps: [frontend:typecheck, frontend:test, caddy:validate]
+
+  build:
+    desc: Build the frontend
+    cmds:
+      - task: frontend:build
+
+  run:
+    desc: Run the frontend dev server
+    cmds:
+      - task: frontend:dev

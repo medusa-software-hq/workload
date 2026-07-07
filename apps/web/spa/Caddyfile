@@ -1,0 +1,7 @@
+:{$PORT} {
+	handle {
+		root * /srv
+		file_server
+		try_files {path} /index.html
+	}
+}

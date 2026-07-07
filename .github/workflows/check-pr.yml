@@ -1,0 +1,48 @@
+name: Check PR
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check-workflows:
+    name: workflows
+    uses: ./.github/workflows/check-workflows.yml
+
+  check-infra:
+    name: infra
+    uses: ./.github/workflows/check-infra.yml
+
+  check-web-infra:
+    name: web (infra)
+    uses: ./.github/workflows/check-web-infra.yml
+    secrets: inherit
+
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+
+  check-web-domain-mapping:
+    name: web (domain mapping)
+    uses: ./.github/workflows/check-web-domain-mapping.yml
+
+  check-web-spa:
+    name: web (SPA)
+    uses: ./.github/workflows/check-web-spa.yml
+
+  check-api-infra:
+    name: api (infra)
+    uses: ./.github/workflows/check-api-infra.yml
+    secrets: inherit
+
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+
+  check-api-impl:
+    name: api (implementation)
+    uses: ./.github/workflows/check-api-impl.yml

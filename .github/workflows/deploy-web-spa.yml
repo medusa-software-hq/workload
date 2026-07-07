@@ -1,0 +1,78 @@
+name: Deploy web SPA
+
+on:
+  push:
+    branches: ["trunk/*"]
+    paths:
+      - "apps/web/spa/**"
+      - "proto/**"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NO_COLOR: 1
+
+  # Exact image path is arbitrary (as long as it's unique)
+  IMAGE_REF: ${{ vars.GCP_AR_REPO_ENDPOINT }}/web/${{ github.sha }}
+
+  APP_PATH: apps/web/spa
+
+jobs:
+  deploy-app:
+    name: Deploy app
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_AR_REPO_HOSTNAME }} --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7.1.0
+        with:
+          context: ${{ env.APP_PATH }}
+          build-contexts: |
+            proto=proto
+          push: true
+          tags: ${{ env.IMAGE_REF }}
+          build-args: |
+            VITE_GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
+            VITE_GOOGLE_HD=${{ vars.GOOGLE_ALLOWED_DOMAIN }}
+            VITE_API_URL=${{ vars.API_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ vars.GCP_WEB_RUN_SERVICE_NAME }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --image=${{ env.IMAGE_REF }} \
+            --quiet
+          gcloud run services describe ${{ vars.GCP_WEB_RUN_SERVICE_NAME }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --format='value(status.url)' | tee service-url.txt
+          {
+            echo '## Cloud Run deployment'
+            echo ''
+            echo "- Service URL: [$(cat service-url.txt)]($(cat service-url.txt))"
+          } >> "$GITHUB_STEP_SUMMARY"

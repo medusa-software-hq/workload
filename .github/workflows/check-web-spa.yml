@@ -1,0 +1,88 @@
+name: Check web SPA
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: 24
+  CADDY_VERSION: 2.11.2
+  NO_COLOR: 1
+
+  APP_PATH: apps/web/spa
+  FRONTEND_PATH: apps/web/spa/frontend
+
+jobs:
+  build-frontend:
+    name: Build frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-node@v6.3.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: yarn
+          cache-dependency-path: ${{ env.FRONTEND_PATH }}/yarn.lock
+
+      - uses: bufbuild/buf-action@v1.4.0
+        with:
+          setup_only: true
+
+      - uses: go-task/setup-task@v2
+
+      - name: Check formatting and lint
+        run: task checkFormatting lint
+        working-directory: ${{ env.FRONTEND_PATH }}
+
+      - name: Test
+        run: task test
+        working-directory: ${{ env.FRONTEND_PATH }}
+
+      - name: Build frontend
+        run: task build
+        working-directory: ${{ env.FRONTEND_PATH }}
+
+  check-caddyfile:
+    name: Check Caddyfile
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: ./.github/actions/setup-caddy
+        with:
+          caddy-version: ${{ env.CADDY_VERSION }}
+
+      - uses: go-task/setup-task@v2
+
+      - name: Check formatting
+        run: task caddy:checkFormatting
+        working-directory: ${{ env.APP_PATH }}
+
+      - name: Validate
+        run: task caddy:validate
+        working-directory: ${{ env.APP_PATH }}
+
+  build-image:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        uses: docker/build-push-action@v7.1.0
+        with:
+          context: ${{ env.APP_PATH }}
+          build-contexts: |
+            proto=proto
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

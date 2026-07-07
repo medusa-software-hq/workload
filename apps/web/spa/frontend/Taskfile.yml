@@ -1,0 +1,83 @@
+# yaml-language-server: $schema=https://taskfile.dev/schema.json
+
+version: '3'
+
+tasks:
+  install:
+    desc: Install dependencies
+    sources:
+      - package.json
+      - yarn.lock
+    generates:
+      - node_modules/.yarn-state.yml
+    cmds:
+      # Using `--immutable` ensures a clean install based on the lockfile
+      - yarn install --immutable
+
+  proto:
+    desc: Generate code from protobuf definitions
+    deps: [install]
+    sources:
+      - ../../../../proto/**/*.proto
+    generates:
+      - src/gen/**/*.ts
+    cmds:
+      - buf generate
+
+  checkFormatting:
+    desc: Check package formatting
+    deps: [install]
+    cmds:
+      - npx oxfmt --check "**/*.{ts,tsx,css}"
+
+  fixFormatting:
+    desc: Fix package formatting
+    deps: [install]
+    cmds:
+      - npx oxfmt --write "**/*.{ts,tsx,css}"
+
+  lint:
+    desc: Lint the package
+    deps: [install, proto]
+    cmds:
+      - npx oxlint
+      - npx stylelint '**/*.css' --cache
+
+  typecheck:
+    desc: Type check the package
+    deps: [install, proto]
+    cmds:
+      - npx tsc --noEmit
+
+  test:
+    desc: Run unit tests
+    deps: [install, proto]
+    cmds:
+      - npx vitest run
+
+  clean:
+    desc: Remove generated and build artifacts
+    cmds:
+      - rm -rf dist src/gen
+
+  build:
+    desc: Build the package
+    deps: [install, typecheck, proto]
+    cmds:
+      - npx vite build
+
+  dev:
+    desc: Start dev server
+    deps: [install, proto]
+    env:
+      VITE_API_URL: http://localhost:8081
+    cmds:
+      - npx vite
+    interactive: true
+
+  preview:
+    desc: Start preview server
+    deps: [build]
+    cmds:
+      - npx vite preview
+    interactive: true

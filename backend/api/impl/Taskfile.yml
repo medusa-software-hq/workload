@@ -1,0 +1,40 @@
+version: '3'
+
+.kotlinSources: &kotlinSources
+  - '**/*.kt'
+  - '**/*.kts'
+
+tasks:
+  checkFormatting:
+    desc: Check Kotlin formatting
+    sources: *kotlinSources
+    cmds:
+      - ./gradlew ktfmtCheck
+    interactive: true
+
+  fixFormatting:
+    desc: Fix Kotlin formatting
+    sources: *kotlinSources
+    cmds:
+      - ./gradlew ktfmtFormat
+    interactive: true
+
+  lint:
+    desc: Lint the Kotlin sources
+    sources: *kotlinSources
+    cmds:
+      - ./gradlew detekt
+    interactive: true
+
+  compile:
+    desc: Compile the Kotlin sources
+    sources: *kotlinSources
+    cmds:
+      - ./gradlew compileKotlin
+    interactive: true
+
+  run:
+    desc: Run the service locally (no auth, localhost CORS)
+    cmds:
+      - ./gradlew :local:run
+    interactive: true

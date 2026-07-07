@@ -1,0 +1,14 @@
+body {
+  margin: 0;
+}
+
+#root {
+  display: flex;
+  width: 1126px;
+  max-width: 100%;
+  min-height: 100svh;
+  flex-direction: column;
+  margin: 0 auto;
+  border-inline: 1px solid var(--mantine-color-default-border);
+  box-sizing: border-box;
+}
