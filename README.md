@@ -172,6 +172,11 @@ through Gradle directly. It is its own Gradle root, independent from
 `backend/api/impl/`, and currently just prints a greeting; it exists as a starting
 point for future tooling.
 
+On push to a `trunk/*` branch, the `publish-cli.yml` workflow builds the fat jar,
+publishes it as a GitHub release in a dedicated `workload-releases` repository, and
+updates a Homebrew formula in a shared `homebrew-tap` repository
+(`cli/tools/update-formula/`) so the CLI can be installed with `brew install`.
+
 ### Delivery model
 
 The project is designed for automated delivery:
