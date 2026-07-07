@@ -1,2 +1,5 @@
 # Task cache
 .task/
+
+# Claude Code
+.claude/
