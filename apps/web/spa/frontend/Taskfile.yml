@@ -5,6 +5,7 @@ version: '3'
 tasks:
   install:
     desc: Install dependencies
+    run: once
     sources:
       - package.json
       - yarn.lock
@@ -16,6 +17,7 @@ tasks:
 
   proto:
     desc: Generate code from protobuf definitions
+    run: once
     deps: [install]
     sources:
       - ../../../../proto/**/*.proto

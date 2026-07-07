@@ -1,4 +1,4 @@
-package software.medusa.counter.server
+package software.medusa.workload.server
 
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse

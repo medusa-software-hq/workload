@@ -1,4 +1,4 @@
-package software.medusa.counter.server
+package software.medusa.workload.server
 
 import com.linecorp.armeria.common.HttpHeaderNames
 import com.linecorp.armeria.common.HttpMethod
@@ -12,7 +12,7 @@ fun buildServer(
     originRegex: String,
     port: Int,
     auth: DecoratingHttpServiceFunction,
-    counterStore: CounterStore,
+    counterStore: WorkloadStore,
 ): Server {
   val cors =
       CorsService.builderForOriginRegex(originRegex)
@@ -38,7 +38,7 @@ fun buildServer(
   val grpcService =
       GrpcService.builder()
           .apply {
-            addService(CounterServiceImpl(counterStore))
+            addService(WorkloadServiceImpl(counterStore))
             enableUnframedRequests(true)
           }
           .build()

@@ -1,6 +1,6 @@
 -- Schema for SQLDelight compile-time query verification (Postgres dialect).
 -- The runtime schema is owned by Flyway; keep this table definition identical to
--- src/main/resources/db/migration/V1__create_counter.sql.
+-- src/main/resources/db/migration/V1__create_workload.sql.
 CREATE TABLE counter (
   id    TEXT NOT NULL PRIMARY KEY,
   count INTEGER NOT NULL DEFAULT 0

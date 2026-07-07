@@ -1,10 +1,10 @@
-name: Apply API infra
+name: Apply backend infra
 
 on:
   push:
     branches: ["trunk/*"]
     paths:
-      - "backend/api/infra/**"
+      - "backend/infra/**"
 
   workflow_dispatch:
 
@@ -43,7 +43,7 @@ jobs:
           terraform_version: ~> ${{ env.TERRAFORM_VERSION }}
 
       - name: Apply Terraform configuration
-        working-directory: backend/api/infra
+        working-directory: backend/infra
         env:
           TF_VAR_gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
           TF_VAR_neon_api_key: ${{ secrets.NEON_API_KEY }}

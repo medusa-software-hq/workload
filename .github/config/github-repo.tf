@@ -6,8 +6,7 @@ resource "github_repository" "this" {
   description = "Variant: ${module.common.project_variant}"
   visibility  = "private"
 
-  // 🎨 TEMPLATE EJECT: Make this false
-  is_template = true
+  is_template = false
 
   has_discussions = false
   has_issues      = false
@@ -35,7 +34,7 @@ locals {
   check_web_infra_job_name          = "web (infra)"
   check_web_domain_mapping_job_name = "web (domain mapping)"
   check_web_spa_job_name            = "web (SPA)"
-  check_api_infra_job_name          = "api (infra)"
+  check_backend_infra_job_name      = "backend (infra)"
   check_api_impl_job_name           = "api (implementation)"
 }
 
@@ -102,7 +101,7 @@ resource "github_repository_ruleset" "default_branch" {
       }
 
       required_check {
-        context        = "${local.check_api_infra_job_name} / Check Terraform configuration"
+        context        = "${local.check_backend_infra_job_name} / Check Terraform configuration"
         integration_id = local.gh_actions_integration_id
       }
 

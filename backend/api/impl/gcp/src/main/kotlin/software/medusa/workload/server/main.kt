@@ -1,4 +1,4 @@
-package software.medusa.counter.server
+package software.medusa.workload.server
 
 private const val portEnvVarName = "PORT"
 private const val clientIdEnvVarName = "GOOGLE_CLIENT_ID"
@@ -31,7 +31,7 @@ fun main() {
           originRegex = corsOriginRegex,
           port = port,
           auth = GoogleIdTokenAuthDecorator(clientId, allowedDomain),
-          counterStore = PostgresCounterStore.build(databaseUrl),
+          counterStore = PostgresWorkloadStore.build(databaseUrl),
       )
       .start()
       .join()

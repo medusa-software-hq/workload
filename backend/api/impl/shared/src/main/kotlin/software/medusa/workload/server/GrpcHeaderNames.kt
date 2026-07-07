@@ -1,4 +1,4 @@
-package software.medusa.counter.server
+package software.medusa.workload.server
 
 /**
  * HTTP header names relevant to gRPC-Web and Connect protocol CORS configuration.

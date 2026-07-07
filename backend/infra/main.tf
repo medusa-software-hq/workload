@@ -5,7 +5,7 @@ terraform {
 
   backend "gcs" {
     bucket = "ms-tfstate-c1984596bdabf023"
-    prefix = "projects/counter/v4/backend/api/foundation" # 🎨 TEMPLATE EJECT: Update the prefix (!)
+    prefix = "projects/workload/baseline/backend/foundation"
   }
 
   required_providers {
@@ -27,7 +27,7 @@ terraform {
 # Module imports
 
 module "common" {
-  source = "../../../infra/common"
+  source = "../../infra/common"
 }
 
 # Providers

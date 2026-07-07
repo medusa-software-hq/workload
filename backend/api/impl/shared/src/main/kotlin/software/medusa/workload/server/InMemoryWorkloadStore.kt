@@ -1,8 +1,8 @@
-package software.medusa.counter.server
+package software.medusa.workload.server
 
 import java.util.concurrent.atomic.AtomicInteger
 
-class InMemoryCounterStore : CounterStore {
+class InMemoryWorkloadStore : WorkloadStore {
   private val counters = java.util.concurrent.ConcurrentHashMap<CounterId, AtomicInteger>()
 
   override suspend fun getCount(counterId: CounterId): Int = counters[counterId]?.get() ?: 0

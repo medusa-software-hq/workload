@@ -1,15 +1,12 @@
 syntax = "proto3";
 
-// 🎨 TEMPLATE EJECT: Change the Protobuf package
-package medusa.counter.v1;
+package medusa.workload.v1;
 
 option java_multiple_files = true;
 
-// 🎨 TEMPLATE EJECT: Update this Java package reference
-option java_package = "software.medusa.counter.v1";
+option java_package = "software.medusa.workload.v1";
 
-// 🎨 TEMPLATE EJECT: Change the service name
-service CounterService {
+service WorkloadService {
   rpc GetCount(GetCountRequest) returns (GetCountResponse);
   rpc Increment(IncrementRequest) returns (IncrementResponse);
   rpc Decrement(DecrementRequest) returns (DecrementResponse);

@@ -1,6 +1,8 @@
-# Backend API Terraform configuration
+# Backend Terraform configuration
 
-Provisions the resources the API needs:
+Provisions the resources the backend needs. Currently that's just the API, but this
+is meant to stay a single Terraform config as other backend services (e.g. a worker)
+are added:
 
 - the Cloud Run service and its service account (`gcp-service.tf`)
 - a **Neon serverless Postgres** project backing the counter store (`neon.tf`)

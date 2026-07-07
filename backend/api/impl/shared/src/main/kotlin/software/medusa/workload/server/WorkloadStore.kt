@@ -1,4 +1,4 @@
-package software.medusa.counter.server
+package software.medusa.workload.server
 
 val mainCounterId = CounterId("main")
 
@@ -7,7 +7,7 @@ value class CounterId(
     val id: String,
 )
 
-interface CounterStore {
+interface WorkloadStore {
   suspend fun getCount(counterId: CounterId): Int
 
   suspend fun incrementAndGetCount(counterId: CounterId): Int
