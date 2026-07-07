@@ -46,3 +46,7 @@ jobs:
   check-api-impl:
     name: api (implementation)
     uses: ./.github/workflows/check-api-impl.yml
+
+  check-cli:
+    name: cli
+    uses: ./.github/workflows/check-cli.yml

@@ -25,6 +25,10 @@ includes:
     taskfile: backend/infra/Taskfile.yml
     dir: backend/infra
 
+  cli:
+    taskfile: cli/Taskfile.yml
+    dir: cli
+
 tasks:
   github-ci:lint:
     desc: Lint GitHub workflows
@@ -55,6 +59,7 @@ tasks:
       - web:domain-mapping:checkFormatting
       - api:impl:checkFormatting
       - backend:infra:checkFormatting
+      - cli:checkFormatting
 
   fixFormatting-all:
     desc: Fix formatting for the entire codebase
@@ -66,6 +71,7 @@ tasks:
       - web:domain-mapping:fixFormatting
       - api:impl:fixFormatting
       - backend:infra:fixFormatting
+      - cli:fixFormatting
 
   lint-all:
     desc: Lint the entire codebase
@@ -77,6 +83,7 @@ tasks:
       - web:domain-mapping:lint
       - api:impl:lint
       - backend:infra:lint
+      - cli:lint
 
   analyze-all:
     desc: Analyze the entire codebase
@@ -87,6 +94,7 @@ tasks:
       - web:domain-mapping:validate
       - api:impl:compile
       - backend:infra:validate
+      - cli:compile
 
   run:
     desc: Run the frontend and the API locally

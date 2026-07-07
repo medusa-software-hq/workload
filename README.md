@@ -33,6 +33,7 @@ The repository is organized as a multi-module project with clear separation betw
 - `backend/api/impl/local/` - local backend entry point
 - `proto/` - gRPC and protobuf definitions
 - `infra/` and per-module `infra/` directories - Terraform configuration
+- `cli/` - a standalone Kotlin CLI, its own Gradle root
 
 ### Frontend
 
@@ -161,6 +162,15 @@ This project manages public routing for the web app, including:
 - Cloudflare DNS records
 
 Terraform state is stored remotely in GCS, with a separate state prefix per Terraform project.
+
+### CLI
+
+`cli/` is a standalone Kotlin application, packaged with the **Shadow** plugin into a
+fat jar and exposed through a `bin/` wrapper script (`cli/bin/workload-cli`) plus a
+user-specific copy under `cli/bin/user/`, so it can be run locally without going
+through Gradle directly. It is its own Gradle root, independent from
+`backend/api/impl/`, and currently just prints a greeting; it exists as a starting
+point for future tooling.
 
 ### Delivery model
 
