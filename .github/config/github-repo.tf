@@ -127,3 +127,15 @@ resource "github_actions_repository_permissions" "this" {
   enabled         = true
   allowed_actions = "all"
 }
+
+# Placeholder for the worker MVP bootstrap token. The real value is created manually
+# and set out-of-band; Terraform only seeds a placeholder once.
+resource "github_actions_secret" "worker_mvp_bootstrap_token" {
+  repository  = github_repository.this.name
+  secret_name = "WORKER_MVP_BOOTSTRAP_TOKEN"
+  value       = "placeholder-set-manually"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}

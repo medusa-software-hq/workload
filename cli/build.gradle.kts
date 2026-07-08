@@ -2,6 +2,7 @@ plugins {
   application
 
   alias(libs.plugins.kotlin.jvm)
+  alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.shadow)
   alias(libs.plugins.ktfmt)
   alias(libs.plugins.detekt)
@@ -12,6 +13,9 @@ repositories { mavenCentral() }
 
 dependencies {
   implementation(libs.clikt)
+  implementation(platform(libs.google.cloud.libraries.bom))
+  implementation(libs.google.cloud.storage)
+  implementation(libs.kotlinx.serialization.json)
 
   testImplementation(libs.kotlin.test)
 }

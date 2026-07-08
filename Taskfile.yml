@@ -25,6 +25,10 @@ includes:
     taskfile: backend/infra/Taskfile.yml
     dir: backend/infra
 
+  worker-mvp:infra:
+    taskfile: worker-mvp/infra/Taskfile.yml
+    dir: worker-mvp/infra
+
   cli:
     taskfile: cli/Taskfile.yml
     dir: cli
@@ -59,6 +63,7 @@ tasks:
       - web:domain-mapping:checkFormatting
       - api:impl:checkFormatting
       - backend:infra:checkFormatting
+      - worker-mvp:infra:checkFormatting
       - cli:checkFormatting
 
   fixFormatting-all:
@@ -71,6 +76,7 @@ tasks:
       - web:domain-mapping:fixFormatting
       - api:impl:fixFormatting
       - backend:infra:fixFormatting
+      - worker-mvp:infra:fixFormatting
       - cli:fixFormatting
 
   lint-all:
@@ -83,6 +89,7 @@ tasks:
       - web:domain-mapping:lint
       - api:impl:lint
       - backend:infra:lint
+      - worker-mvp:infra:lint
       - cli:lint
 
   analyze-all:
@@ -94,6 +101,7 @@ tasks:
       - web:domain-mapping:validate
       - api:impl:compile
       - backend:infra:validate
+      - worker-mvp:infra:validate
       - cli:compile
 
   run:

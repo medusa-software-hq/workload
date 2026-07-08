@@ -1,16 +1,13 @@
 package software.medusa.workload.cli
 
-import com.github.ajalt.clikt.core.CliktCommand
+import com.github.ajalt.clikt.core.NoOpCliktCommand
 import com.github.ajalt.clikt.core.main
+import com.github.ajalt.clikt.core.subcommands
 
-class MainCommand : CliktCommand() {
-  override fun run() {
-    echo("Hello, world!")
-  }
-}
+class MainCommand : NoOpCliktCommand()
 
 fun main(
     args: Array<String>,
 ) {
-  MainCommand().main(args)
+  MainCommand().subcommands(TokenCommand(), ReadObjectCommand()).main(args)
 }

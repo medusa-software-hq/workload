@@ -67,3 +67,16 @@ resource "github_actions_variable" "google_allowed_domain" {
   variable_name = "GOOGLE_ALLOWED_DOMAIN"
   value         = module.common.organization_domain
 }
+
+resource "github_actions_variable" "target_service_account_email" {
+  repository    = data.github_repository.this.name
+  variable_name = "TARGET_SERVICE_ACCOUNT_EMAIL"
+
+  # Seeded manually once worker-mvp/infra has been applied (copy its
+  # target_service_account_email output here).
+  value = "worker-mvp@placeholder.iam.gserviceaccount.com"
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
