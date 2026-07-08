@@ -1,7 +1,3 @@
-# 🎨 TEMPLATE POST-EJECT: IAP requires an OAuth consent screen (brand) configured
-# for the project. Set it up once in the console
-# (https://console.cloud.google.com/auth/branding) before the first apply.
-
 # Ensure the IAP managed service agent exists for this project.
 resource "google_project_service_identity" "iap_sa" {
   provider = google-beta
