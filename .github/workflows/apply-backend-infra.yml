@@ -47,6 +47,7 @@ jobs:
         env:
           TF_VAR_gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
           TF_VAR_neon_api_key: ${{ secrets.NEON_API_KEY }}
+          TF_VAR_target_service_account_email: ${{ vars.TARGET_SERVICE_ACCOUNT_EMAIL }}
         run: |
           terraform init
           terraform apply -auto-approve

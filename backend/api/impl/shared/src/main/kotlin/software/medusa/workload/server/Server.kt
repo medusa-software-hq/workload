@@ -3,16 +3,22 @@ package software.medusa.workload.server
 import com.linecorp.armeria.common.HttpHeaderNames
 import com.linecorp.armeria.common.HttpMethod
 import com.linecorp.armeria.server.DecoratingHttpServiceFunction
+import com.linecorp.armeria.server.HttpService
 import com.linecorp.armeria.server.Server
 import com.linecorp.armeria.server.cors.CorsService
 import com.linecorp.armeria.server.grpc.GrpcService
 import com.linecorp.armeria.server.healthcheck.HealthCheckService
+import com.linecorp.armeria.server.throttling.ThrottlingService
+import com.linecorp.armeria.server.throttling.ThrottlingStrategy
+
+private const val workerTokenBrokerQps = 5.0
 
 fun buildServer(
     originRegex: String,
     port: Int,
     auth: DecoratingHttpServiceFunction,
     counterStore: WorkloadStore,
+    workerTokenBroker: HttpService? = null,
 ): Server {
   val cors =
       CorsService.builderForOriginRegex(originRegex)
@@ -51,6 +57,18 @@ fun buildServer(
         service("/health", HealthCheckService.of())
 
         serviceUnder("/", grpcService.decorate(auth).decorate(cors))
+
+        if (workerTokenBroker != null) {
+          route()
+              .post("/worker/v1/token")
+              .build(
+                  workerTokenBroker.decorate(
+                      ThrottlingService.newDecorator(
+                          ThrottlingStrategy.rateLimiting(workerTokenBrokerQps)
+                      )
+                  )
+              )
+        }
       }
       .build()
 }
