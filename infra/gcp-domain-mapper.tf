@@ -10,8 +10,6 @@ locals {
 # Narrow project-level role: manage Cloud Run domain mappings only —
 # deliberately not roles/run.admin, so the shared SA can never deploy or reach
 # data, only create/redirect/delete domain mappings.
-#
-# 🎨 TEMPLATE POST-EJECT: confirm this permission set is sufficient on first use.
 resource "google_project_iam_custom_role" "domain_mapper" {
   project     = local.gcp_project_id
   role_id     = "domainMapper"
