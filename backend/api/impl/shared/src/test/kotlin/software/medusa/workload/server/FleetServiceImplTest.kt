@@ -119,6 +119,13 @@ class FleetServiceImplTest {
         )
         assertTrue(fleetStore.hasGrant(worker.workerId, ProfileId("my-profile-1")))
 
+        // the grant is visible on the worker's proto representation too.
+        val withGrant =
+            stub.listWorkers(ListWorkersRequest.getDefaultInstance()).workersList.single {
+              it.workerId == worker.workerId.value.toString()
+            }
+        assertEquals(listOf("my-profile-1"), withGrant.grantedProfileIdsList)
+
         // revoke the grant, then revoke the worker.
         stub.revokeProfileGrant(
             RevokeProfileGrantRequest.newBuilder()

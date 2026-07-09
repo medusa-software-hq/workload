@@ -63,4 +63,6 @@ interface FleetStore {
   suspend fun revoke(workerId: WorkerId, profileId: ProfileId)
 
   suspend fun hasGrant(workerId: WorkerId, profileId: ProfileId): Boolean
+
+  suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId>
 }

@@ -268,6 +268,43 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
+  fun `listGrantedProfileIds reflects grant and revoke`() = test { store ->
+    val worker = store.createWorker(newWorker())
+    val profileA =
+        store.createProfile(
+            ProfileId("granted-a"),
+            displayName = null,
+            revision =
+                NewProfileRevision(
+                    "sa@project.iam.gserviceaccount.com",
+                    createdBy = "admin@example.com",
+                ),
+        )
+    val profileB =
+        store.createProfile(
+            ProfileId("granted-b"),
+            displayName = null,
+            revision =
+                NewProfileRevision(
+                    "sa@project.iam.gserviceaccount.com",
+                    createdBy = "admin@example.com",
+                ),
+        )
+
+    assertEquals(emptyList(), store.listGrantedProfileIds(worker.workerId))
+
+    store.grant(worker.workerId, profileA.profileId, grantedBy = "admin@example.com")
+    store.grant(worker.workerId, profileB.profileId, grantedBy = "admin@example.com")
+    assertEquals(
+        listOf("granted-a", "granted-b"),
+        store.listGrantedProfileIds(worker.workerId).map { it.value },
+    )
+
+    store.revoke(worker.workerId, profileA.profileId)
+    assertEquals(listOf("granted-b"), store.listGrantedProfileIds(worker.workerId).map { it.value })
+  }
+
+  @Test
   fun `granting an already-granted pair does not error`() = test { store ->
     val worker = store.createWorker(newWorker())
     val profile =
