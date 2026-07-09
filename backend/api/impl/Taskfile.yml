@@ -33,6 +33,13 @@ tasks:
       - ./gradlew compileKotlin
     interactive: true
 
+  test:
+    desc: Run the test suite
+    sources: *kotlinSources
+    cmds:
+      - ./gradlew test
+    interactive: true
+
   run:
     desc: Run the service locally (no auth, localhost CORS)
     cmds:
