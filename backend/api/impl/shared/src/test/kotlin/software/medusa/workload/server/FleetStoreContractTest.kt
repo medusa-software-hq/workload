@@ -41,6 +41,15 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
+  fun `listWorkers returns every created worker`() = test { store ->
+    val first = store.createWorker(newWorker(name = "worker-a"))
+    val second = store.createWorker(newWorker(name = "worker-b"))
+
+    val ids = store.listWorkers().map { it.workerId }
+    assertTrue(ids.containsAll(listOf(first.workerId, second.workerId)))
+  }
+
+  @Test
   fun `getWorker round-trips what createWorker returned`() = test { store ->
     val created = store.createWorker(newWorker())
     assertEquals(created, store.getWorker(created.workerId))
@@ -107,6 +116,46 @@ abstract class FleetStoreContractTest {
     val latest = store.getLatestProfileRevision(profile.profileId)
     assertEquals(1, latest?.revision)
     assertEquals("sa@project.iam.gserviceaccount.com", latest?.targetServiceAccount)
+    assertEquals(VerificationStatus.UNVERIFIED, latest?.verificationStatus)
+  }
+
+  @Test
+  fun `recordVerification updates only the targeted revision`() = test { store ->
+    val profileId = ProfileId("my-profile-verify")
+    store.createProfile(
+        profileId,
+        displayName = null,
+        revision =
+            NewProfileRevision(
+                "sa-v1@project.iam.gserviceaccount.com",
+                createdBy = "admin@example.com",
+            ),
+    )
+    store.appendProfileRevision(
+        profileId,
+        NewProfileRevision(
+            "sa-v2@project.iam.gserviceaccount.com",
+            createdBy = "admin@example.com",
+        ),
+    )
+
+    val updated = store.recordVerification(profileId, revision = 1, VerificationStatus.VERIFIED)
+    assertEquals(VerificationStatus.VERIFIED, updated?.verificationStatus)
+
+    val revisions = store.listProfileRevisions(profileId).associateBy { it.revision }
+    assertEquals(VerificationStatus.VERIFIED, revisions[1]?.verificationStatus)
+    assertEquals(VerificationStatus.UNVERIFIED, revisions[2]?.verificationStatus)
+  }
+
+  @Test
+  fun `recordVerification on an unknown revision returns null`() = test { store ->
+    assertNull(
+        store.recordVerification(
+            ProfileId("no-such-profile"),
+            revision = 1,
+            VerificationStatus.VERIFIED,
+        )
+    )
   }
 
   @Test
