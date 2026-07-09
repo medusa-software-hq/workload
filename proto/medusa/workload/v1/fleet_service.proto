@@ -1,0 +1,174 @@
+syntax = "proto3";
+
+package medusa.workload.v1;
+
+option java_multiple_files = true;
+
+option java_package = "software.medusa.workload.v1";
+
+// The admin plane: managing workers, profiles, and (worker, profile) grants. Consumed by the
+// console (SPA), behind the same auth as WorkloadService — not reachable with worker credentials.
+service FleetService {
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+  rpc ApproveWorker(ApproveWorkerRequest) returns (ApproveWorkerResponse);
+  rpc RejectWorker(RejectWorkerRequest) returns (RejectWorkerResponse);
+  rpc RevokeWorker(RevokeWorkerRequest) returns (RevokeWorkerResponse);
+
+  rpc ListProfiles(ListProfilesRequest) returns (ListProfilesResponse);
+  rpc CreateProfile(CreateProfileRequest) returns (CreateProfileResponse);
+  // Appends a revision; never mutates an existing one.
+  rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
+  rpc ArchiveProfile(ArchiveProfileRequest) returns (ArchiveProfileResponse);
+  rpc ListProfileRevisions(ListProfileRevisionsRequest) returns (ListProfileRevisionsResponse);
+  // Dry-run mint against the latest revision's target service account; never returns a usable
+  // token. CreateProfile/UpdateProfile run this implicitly against the revision they create.
+  rpc VerifyProfile(VerifyProfileRequest) returns (VerifyProfileResponse);
+
+  rpc GrantProfile(GrantProfileRequest) returns (GrantProfileResponse);
+  rpc RevokeProfileGrant(RevokeProfileGrantRequest) returns (RevokeProfileGrantResponse);
+}
+
+enum WorkerStatus {
+  WORKER_STATUS_UNSPECIFIED = 0;
+  WORKER_STATUS_PENDING = 1;
+  WORKER_STATUS_ACTIVE = 2;
+  WORKER_STATUS_REJECTED = 3;
+  WORKER_STATUS_REVOKED = 4;
+}
+
+// Whether the target SA's owning project has granted the broker impersonation rights.
+enum VerificationStatus {
+  VERIFICATION_STATUS_UNSPECIFIED = 0;
+  VERIFICATION_STATUS_UNVERIFIED = 1;
+  VERIFICATION_STATUS_VERIFIED = 2;
+  VERIFICATION_STATUS_BINDING_MISSING = 3;
+}
+
+message Worker {
+  string worker_id = 1;
+  string name = 2;
+  string hostname = 3;
+  string os = 4;
+  string cli_version = 5;
+  WorkerStatus status = 6;
+  // Only set while status is PENDING.
+  string confirmation_code = 7;
+  string created_at = 8;
+  string approved_at = 9;
+  string approved_by = 10;
+}
+
+message ListWorkersRequest {}
+
+message ListWorkersResponse {
+  repeated Worker workers = 1;
+}
+
+message ApproveWorkerRequest {
+  string worker_id = 1;
+}
+
+message ApproveWorkerResponse {
+  Worker worker = 1;
+}
+
+message RejectWorkerRequest {
+  string worker_id = 1;
+}
+
+message RejectWorkerResponse {
+  Worker worker = 1;
+}
+
+message RevokeWorkerRequest {
+  string worker_id = 1;
+}
+
+message RevokeWorkerResponse {
+  Worker worker = 1;
+}
+
+message Profile {
+  string profile_id = 1;
+  string display_name = 2;
+  int32 latest_revision = 3;
+  bool archived = 4;
+  string created_at = 5;
+}
+
+message ProfileRevision {
+  string profile_id = 1;
+  int32 revision = 2;
+  string target_service_account = 3;
+  string created_at = 4;
+  string created_by = 5;
+  string note = 6;
+  VerificationStatus verification_status = 7;
+}
+
+message ListProfilesRequest {}
+
+message ListProfilesResponse {
+  repeated Profile profiles = 1;
+}
+
+message CreateProfileRequest {
+  string profile_id = 1;
+  string display_name = 2;
+  string target_service_account = 3;
+  string note = 4;
+}
+
+message CreateProfileResponse {
+  Profile profile = 1;
+  ProfileRevision revision = 2;
+}
+
+message UpdateProfileRequest {
+  string profile_id = 1;
+  string target_service_account = 2;
+  string note = 3;
+}
+
+message UpdateProfileResponse {
+  Profile profile = 1;
+  ProfileRevision revision = 2;
+}
+
+message ArchiveProfileRequest {
+  string profile_id = 1;
+}
+
+message ArchiveProfileResponse {
+  Profile profile = 1;
+}
+
+message ListProfileRevisionsRequest {
+  string profile_id = 1;
+}
+
+message ListProfileRevisionsResponse {
+  repeated ProfileRevision revisions = 1;
+}
+
+message VerifyProfileRequest {
+  string profile_id = 1;
+}
+
+message VerifyProfileResponse {
+  ProfileRevision revision = 1;
+}
+
+message GrantProfileRequest {
+  string worker_id = 1;
+  string profile_id = 2;
+}
+
+message GrantProfileResponse {}
+
+message RevokeProfileGrantRequest {
+  string worker_id = 1;
+  string profile_id = 2;
+}
+
+message RevokeProfileGrantResponse {}
