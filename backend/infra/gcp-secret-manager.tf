@@ -39,3 +39,31 @@ resource "google_secret_manager_secret_iam_member" "primary_service_sa_worker_mv
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.primary_service_sa.email}"
 }
+
+# Deployment-wide UUID prefix that all worker-plane HTTP endpoints (e.g. the token broker) are
+# mounted under, purely to shed bot/scanner noise before it reaches billable logic — not a
+# security boundary. Generated and fully managed by Terraform (unlike the bootstrap token above),
+# since it doesn't need a human-approval step and rotating it is just a re-apply.
+resource "random_uuid" "worker_api_path_prefix" {}
+
+resource "google_secret_manager_secret" "worker_api_path_prefix" {
+  project   = var.gcp_project_id
+  secret_id = "worker-api-path-prefix"
+
+  replication {
+    auto {}
+  }
+}
+
+resource "google_secret_manager_secret_version" "worker_api_path_prefix" {
+  secret      = google_secret_manager_secret.worker_api_path_prefix.id
+  secret_data = random_uuid.worker_api_path_prefix.result
+}
+
+# Allow the Cloud Run service account to read the path prefix.
+resource "google_secret_manager_secret_iam_member" "primary_service_sa_worker_api_path_prefix_accessor" {
+  project   = var.gcp_project_id
+  secret_id = google_secret_manager_secret.worker_api_path_prefix.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.primary_service_sa.email}"
+}
