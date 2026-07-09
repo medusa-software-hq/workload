@@ -9,6 +9,8 @@ private const val allowedDomainEnvVarName = "GOOGLE_ALLOWED_DOMAIN"
 private const val corsOriginRegexEnvVarName = "CORS_ALLOWED_ORIGIN_REGEX"
 private const val databaseUrlEnvVarName = "DATABASE_URL"
 
+private const val workerApiPathPrefixSecretNameEnvVarName = "WORKER_API_PATH_PREFIX_SECRET_NAME"
+
 private const val workerTokenBrokerEnabledEnvVarName = "WORKER_TOKEN_BROKER_ENABLED"
 private const val targetServiceAccountEmailEnvVarName = "TARGET_SERVICE_ACCOUNT_EMAIL"
 private const val bootstrapTokenSecretNameEnvVarName = "BOOTSTRAP_TOKEN_SECRET_NAME"
@@ -34,6 +36,11 @@ fun main() {
   val databaseUrl =
       System.getenv(databaseUrlEnvVarName)
           ?: error("$databaseUrlEnvVarName environment variable must be set")
+
+  val workerApiPathPrefixSecretName =
+      System.getenv(workerApiPathPrefixSecretNameEnvVarName)
+          ?: error("$workerApiPathPrefixSecretNameEnvVarName environment variable must be set")
+  val workerApiPathPrefix = loadSecretPayload(workerApiPathPrefixSecretName)
 
   val workerTokenBroker: HttpService? =
       if (System.getenv(workerTokenBrokerEnabledEnvVarName) == "true") {
@@ -62,6 +69,7 @@ fun main() {
   buildServer(
           originRegex = corsOriginRegex,
           port = port,
+          workerApiPathPrefix = workerApiPathPrefix,
           auth = GoogleIdTokenAuthDecorator(clientId, allowedDomain),
           counterStore = PostgresWorkloadStore.build(databaseUrl),
           workerTokenBroker = workerTokenBroker,
