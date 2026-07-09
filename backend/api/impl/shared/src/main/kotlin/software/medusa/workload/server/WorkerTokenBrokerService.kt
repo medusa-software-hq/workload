@@ -52,8 +52,10 @@ internal fun extractBearerToken(req: HttpRequest): String? {
   return header.removePrefix(bearerPrefix).trim().takeIf { it.isNotEmpty() }
 }
 
+internal fun constantTimeEquals(a: ByteArray, b: ByteArray): Boolean = MessageDigest.isEqual(a, b)
+
 internal fun constantTimeEquals(a: String, b: String): Boolean =
-    MessageDigest.isEqual(a.toByteArray(), b.toByteArray())
+    constantTimeEquals(a.toByteArray(), b.toByteArray())
 
 /**
  * Implements `POST /worker/v1/token`: exchanges [WorkerTokenBrokerConfig.bootstrapToken] for a
