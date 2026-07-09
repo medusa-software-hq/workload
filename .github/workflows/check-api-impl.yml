@@ -40,3 +40,7 @@ jobs:
       - name: Compile
         run: task compile
         working-directory: ${{ env.SERVICE_PATH }}
+
+      - name: Test
+        run: task test
+        working-directory: ${{ env.SERVICE_PATH }}
