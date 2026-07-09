@@ -16,7 +16,12 @@ import com.linecorp.armeria.server.throttling.ThrottlingService
 import com.linecorp.armeria.server.throttling.ThrottlingStrategy
 
 private const val workerTokenBrokerQps = 5.0
-private const val workerTokenPath = "/worker/v1/token"
+
+/** A worker-plane HTTP route: an exact path (relative to the worker prefix) plus method. */
+internal data class WorkerPlaneRoute(
+    val method: HttpMethod,
+    val path: String,
+)
 
 // A fresh, headers-only HttpResponse per call: HttpResponse.of(HttpStatus) synthesizes a text
 // body ("404 Not Found"), which fails the "no body" requirement; HttpResponse instances are also
@@ -28,11 +33,13 @@ private fun bareNotFound(): HttpResponse = HttpResponse.of(ResponseHeaders.of(Ht
  * [workerApiPathPrefix] before they reach any service. A wrong/missing prefix is internet
  * background noise (bot scanners): it gets a bare 404 (no body) counted in
  * [RejectedWorkerRequestCounter], never an audit-log line. Everything else (gRPC, `/health`) passes
- * through untouched — the prefix is anti-noise hygiene, not a security boundary.
+ * through untouched — the prefix is anti-noise hygiene, not a security boundary. A correctly
+ * prefixed request for a path/method not in [workerPlaneRoutes] is a plain 404, not counted as
+ * rejected noise (it's not a wrong-prefix bot hit).
  */
 private fun workerApiPathPrefixDecorator(
     workerApiPathPrefix: String,
-    workerTokenBroker: HttpService?,
+    workerPlaneRoutes: Map<WorkerPlaneRoute, HttpService>,
 ): DecoratingHttpServiceFunction = DecoratingHttpServiceFunction { delegate, ctx, req ->
   when (val match = matchWorkerApiPath(ctx.path(), workerApiPathPrefix)) {
     WorkerApiPathMatch.NotWorkerPath -> delegate.serve(ctx, req)
@@ -41,12 +48,8 @@ private fun workerApiPathPrefixDecorator(
       bareNotFound()
     }
     is WorkerApiPathMatch.Matched -> {
-      val isTokenRequest = match.remainder == workerTokenPath && ctx.method() == HttpMethod.POST
-      if (workerTokenBroker != null && isTokenRequest) {
-        workerTokenBroker.serve(ctx, req)
-      } else {
-        bareNotFound()
-      }
+      val route = WorkerPlaneRoute(ctx.method(), match.remainder)
+      workerPlaneRoutes[route]?.serve(ctx, req) ?: bareNotFound()
     }
   }
 }
@@ -58,6 +61,8 @@ fun buildServer(
     auth: DecoratingHttpServiceFunction,
     counterStore: WorkloadStore,
     workerTokenBroker: HttpService? = null,
+    registrationService: HttpService? = null,
+    selfStatusService: HttpService? = null,
 ): Server {
   val cors =
       CorsService.builderForOriginRegex(originRegex)
@@ -93,6 +98,19 @@ fun buildServer(
           ThrottlingService.newDecorator(ThrottlingStrategy.rateLimiting(workerTokenBrokerQps))
       )
 
+  val workerPlaneRoutes =
+      buildMap<WorkerPlaneRoute, HttpService> {
+        throttledWorkerTokenBroker?.let {
+          put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/token"), it)
+        }
+        registrationService?.let {
+          put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/registrations"), it)
+        }
+        selfStatusService?.let {
+          put(WorkerPlaneRoute(HttpMethod.GET, "/worker/v1/registrations/self"), it)
+        }
+      }
+
   return Server.builder()
       .apply {
         http(port)
@@ -116,7 +134,7 @@ fun buildServer(
 
         serviceUnder("/", grpcService.decorate(auth).decorate(cors))
 
-        decorator(workerApiPathPrefixDecorator(workerApiPathPrefix, throttledWorkerTokenBroker))
+        decorator(workerApiPathPrefixDecorator(workerApiPathPrefix, workerPlaneRoutes))
       }
       .build()
 }

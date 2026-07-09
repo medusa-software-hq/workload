@@ -23,3 +23,8 @@ fun hashWorkerSecret(secret: String): SecretHash =
 /** Verifies a claimed [secret] against a stored [expected] hash, in constant time. */
 fun verifyWorkerSecret(secret: String, expected: SecretHash): Boolean =
     constantTimeEquals(hashWorkerSecret(secret).bytes, expected.bytes)
+
+/**
+ * A 4-digit, zero-padded code shown to the human approving a pending worker — never a credential.
+ */
+fun generateConfirmationCode(): String = "%04d".format(secureRandom.nextInt(10_000))
