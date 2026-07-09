@@ -31,6 +31,8 @@ class ServerWorkerApiPrefixTest {
             workerApiPathPrefix = prefix,
             auth = NoOpAuthDecorator,
             counterStore = InMemoryWorkloadStore(),
+            fleetStore = InMemoryFleetStore(),
+            impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
             workerTokenBroker =
                 HttpService { _, _ ->
                   HttpResponse.of(HttpStatus.OK, MediaType.PLAIN_TEXT_UTF_8, "ok")

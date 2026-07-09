@@ -17,6 +17,9 @@ value class ProfileId(
     require(profileIdPattern.matches(value)) {
       "profileId must match $profileIdPattern, was '$value'"
     }
+    require(!value.startsWith("-") && !value.endsWith("-")) {
+      "profileId must not start or end with '-', was '$value'"
+    }
   }
 
   companion object {
@@ -73,6 +76,17 @@ data class Profile(
     val createdAt: Instant,
 )
 
+/**
+ * Whether the target SA's owning project has granted the broker's runtime SA
+ * `roles/iam.serviceAccountTokenCreator` — checked with a dry-run mint on create/update/verify. See
+ * design doc 04-impersonation-opt-in.md.
+ */
+enum class VerificationStatus {
+  UNVERIFIED,
+  VERIFIED,
+  BINDING_MISSING,
+}
+
 data class ProfileRevision(
     val profileId: ProfileId,
     val revision: Int,
@@ -80,6 +94,7 @@ data class ProfileRevision(
     val createdAt: Instant,
     val createdBy: String,
     val note: String?,
+    val verificationStatus: VerificationStatus = VerificationStatus.UNVERIFIED,
 )
 
 data class NewProfileRevision(

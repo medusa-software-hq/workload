@@ -15,6 +15,8 @@ interface FleetStore {
 
   suspend fun getWorker(workerId: WorkerId): Worker?
 
+  suspend fun listWorkers(): List<Worker>
+
   /** Moves a `pending` worker to `active`, recording who approved it and when. */
   suspend fun approveWorker(workerId: WorkerId, approvedBy: String): Worker?
 
@@ -37,6 +39,8 @@ interface FleetStore {
       revision: NewProfileRevision,
   ): ProfileRevision
 
+  suspend fun archiveProfile(profileId: ProfileId): Profile?
+
   suspend fun getProfile(profileId: ProfileId): Profile?
 
   suspend fun listProfiles(): List<Profile>
@@ -44,6 +48,13 @@ interface FleetStore {
   suspend fun listProfileRevisions(profileId: ProfileId): List<ProfileRevision>
 
   suspend fun getLatestProfileRevision(profileId: ProfileId): ProfileRevision?
+
+  /** Records the result of a dry-run impersonation check for a specific revision. */
+  suspend fun recordVerification(
+      profileId: ProfileId,
+      revision: Int,
+      status: VerificationStatus,
+  ): ProfileRevision?
 
   // Grants
 

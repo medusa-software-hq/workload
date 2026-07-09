@@ -48,6 +48,7 @@ private fun Profile_revisions.toDomain(): ProfileRevision =
         createdAt = created_at.toInstant(),
         createdBy = created_by,
         note = note,
+        verificationStatus = VerificationStatus.valueOf(verification_status),
     )
 
 private fun Worker_profile_grants.toDomain(): Grant =
@@ -85,6 +86,13 @@ class PostgresFleetStore(
             .executeAsOneOrNull()
             ?.toDomain()
             ?.let { applyPendingExpiry(it) }
+      }
+
+  override suspend fun listWorkers(): List<Worker> =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.selectAllWorkers().executeAsList().map {
+          applyPendingExpiry(it.toDomain())
+        }
       }
 
   override suspend fun approveWorker(workerId: WorkerId, approvedBy: String): Worker? =
@@ -163,6 +171,12 @@ class PostgresFleetStore(
         }
       }
 
+  override suspend fun archiveProfile(profileId: ProfileId): Profile? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.archiveProfile(profileId.value)
+        database.fleetQueries.selectProfileById(profileId.value).executeAsOneOrNull()?.toDomain()
+      }
+
   override suspend fun getProfile(profileId: ProfileId): Profile? =
       withContext(Dispatchers.IO) {
         database.fleetQueries.selectProfileById(profileId.value).executeAsOneOrNull()?.toDomain()
@@ -187,6 +201,23 @@ class PostgresFleetStore(
                 ?: return@withContext null
         database.fleetQueries
             .selectProfileRevisionByNumber(profileId.value, profile.latest_revision)
+            .executeAsOneOrNull()
+            ?.toDomain()
+      }
+
+  override suspend fun recordVerification(
+      profileId: ProfileId,
+      revision: Int,
+      status: VerificationStatus,
+  ): ProfileRevision? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.updateProfileRevisionVerification(
+            status.name,
+            profileId.value,
+            revision,
+        )
+        database.fleetQueries
+            .selectProfileRevisionByNumber(profileId.value, revision)
             .executeAsOneOrNull()
             ?.toDomain()
       }

@@ -35,6 +35,8 @@ class RegistrationEndpointTest {
             workerApiPathPrefix = prefix,
             auth = NoOpAuthDecorator,
             counterStore = InMemoryWorkloadStore(),
+            fleetStore = fleetStore,
+            impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
             registrationService =
                 RegistrationService(
                     fleetStore,
@@ -162,6 +164,8 @@ class RegistrationEndpointTest {
             workerApiPathPrefix = prefix,
             auth = NoOpAuthDecorator,
             counterStore = InMemoryWorkloadStore(),
+            fleetStore = InMemoryFleetStore(),
+            impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
             registrationService =
                 RegistrationService(
                     InMemoryFleetStore(),

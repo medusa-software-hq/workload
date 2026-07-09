@@ -1,6 +1,7 @@
 -- Schema for SQLDelight compile-time query verification (Postgres dialect).
--- The runtime schema is owned by Flyway; keep these table definitions identical to
--- src/main/resources/db/migration/V2__create_fleet.sql.
+-- The runtime schema is owned by Flyway; keep these table definitions identical to the
+-- cumulative effect of src/main/resources/db/migration/V2__create_fleet.sql and later
+-- migrations in that directory.
 
 CREATE TABLE workers (
     worker_id         uuid PRIMARY KEY,
@@ -32,6 +33,7 @@ CREATE TABLE profile_revisions (
     created_at              TIMESTAMPTZ NOT NULL,
     created_by              text NOT NULL,
     note                    text,
+    verification_status    text NOT NULL DEFAULT 'UNVERIFIED',
     PRIMARY KEY (profile_id, revision)
 );
 
@@ -49,6 +51,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectWorkerById:
 SELECT * FROM workers WHERE worker_id = ?;
+
+selectAllWorkers:
+SELECT * FROM workers ORDER BY created_at;
 
 approveWorker:
 UPDATE workers
@@ -76,6 +81,9 @@ VALUES (?, ?, ?, ?, ?, ?);
 updateProfileLatestRevision:
 UPDATE profiles SET latest_revision = ? WHERE profile_id = ?;
 
+archiveProfile:
+UPDATE profiles SET archived = TRUE WHERE profile_id = ?;
+
 selectProfileById:
 SELECT * FROM profiles WHERE profile_id = ?;
 
@@ -87,6 +95,9 @@ SELECT * FROM profile_revisions WHERE profile_id = ? ORDER BY revision;
 
 selectProfileRevisionByNumber:
 SELECT * FROM profile_revisions WHERE profile_id = ? AND revision = ?;
+
+updateProfileRevisionVerification:
+UPDATE profile_revisions SET verification_status = ? WHERE profile_id = ? AND revision = ?;
 
 upsertGrant:
 INSERT INTO worker_profile_grants (worker_id, profile_id, granted_at, granted_by)

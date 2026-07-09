@@ -33,6 +33,9 @@ class InMemoryFleetStore : FleetStore {
   override suspend fun getWorker(workerId: WorkerId): Worker? =
       workers[workerId]?.let { applyPendingExpiry(it) }
 
+  override suspend fun listWorkers(): List<Worker> =
+      workers.values.map { applyPendingExpiry(it) }.sortedBy { it.createdAt }
+
   override suspend fun approveWorker(workerId: WorkerId, approvedBy: String): Worker? =
       workers.computeIfPresent(workerId) { _, worker ->
         worker.copy(
@@ -105,6 +108,9 @@ class InMemoryFleetStore : FleetStore {
     }
   }
 
+  override suspend fun archiveProfile(profileId: ProfileId): Profile? =
+      profiles.computeIfPresent(profileId) { _, profile -> profile.copy(archived = true) }
+
   override suspend fun getProfile(profileId: ProfileId): Profile? = profiles[profileId]
 
   override suspend fun listProfiles(): List<Profile> =
@@ -117,6 +123,21 @@ class InMemoryFleetStore : FleetStore {
     val profile = profiles[profileId] ?: return null
     val list = revisions[profileId] ?: return null
     return synchronized(list) { list.find { it.revision == profile.latestRevision } }
+  }
+
+  override suspend fun recordVerification(
+      profileId: ProfileId,
+      revision: Int,
+      status: VerificationStatus,
+  ): ProfileRevision? {
+    val list = revisions[profileId] ?: return null
+    return synchronized(list) {
+      val index = list.indexOfFirst { it.revision == revision }
+      if (index < 0) return null
+      val updated = list[index].copy(verificationStatus = status)
+      list[index] = updated
+      updated
+    }
   }
 
   override suspend fun grant(workerId: WorkerId, profileId: ProfileId, grantedBy: String): Grant {
