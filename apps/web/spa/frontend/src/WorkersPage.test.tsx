@@ -1,15 +1,30 @@
 import { render, screen, waitFor, within } from '@test-utils';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, test, vi } from 'vitest';
-import { WorkerStatus, type Worker } from './gen/medusa/workload/v1/fleet_service_pb.ts';
+import {
+  WorkerStatus,
+  type Profile,
+  type Worker,
+} from './gen/medusa/workload/v1/fleet_service_pb.ts';
 
 const listWorkers = vi.fn();
+const listProfiles = vi.fn();
 const approveWorker = vi.fn();
 const rejectWorker = vi.fn();
 const revokeWorker = vi.fn();
+const grantProfile = vi.fn();
+const revokeProfileGrant = vi.fn();
 
 vi.mock('@connectrpc/connect', () => ({
-  createClient: () => ({ listWorkers, approveWorker, rejectWorker, revokeWorker }),
+  createClient: () => ({
+    listWorkers,
+    listProfiles,
+    approveWorker,
+    rejectWorker,
+    revokeWorker,
+    grantProfile,
+    revokeProfileGrant,
+  }),
 }));
 vi.mock('@connectrpc/connect-web', () => ({ createGrpcWebTransport: () => ({}) }));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
@@ -35,14 +50,31 @@ function fakeWorker(overrides: Partial<Worker> = {}): Worker {
   } as Worker;
 }
 
+function fakeProfile(overrides: Partial<Profile> = {}): Profile {
+  return {
+    profileId: 'my-profile-1',
+    displayName: '',
+    latestRevision: 1,
+    archived: false,
+    createdAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  } as Profile;
+}
+
 beforeEach(() => {
   listWorkers.mockReset();
+  listProfiles.mockReset();
   approveWorker.mockReset();
   rejectWorker.mockReset();
   revokeWorker.mockReset();
+  grantProfile.mockReset();
+  revokeProfileGrant.mockReset();
+  listProfiles.mockResolvedValue({ profiles: [] });
   approveWorker.mockResolvedValue({});
   rejectWorker.mockResolvedValue({});
   revokeWorker.mockResolvedValue({});
+  grantProfile.mockResolvedValue({});
+  revokeProfileGrant.mockResolvedValue({});
 });
 
 test('shows a pending worker with its confirmation code', async () => {
@@ -139,6 +171,65 @@ test('revoking an active worker', async () => {
   await waitFor(() => {
     expect(revokeWorker).toHaveBeenCalledWith(
       { workerId: 'worker-1' },
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+});
+
+test('granting a profile to an active worker', async () => {
+  const user = userEvent.setup();
+  listWorkers.mockResolvedValue({
+    workers: [
+      fakeWorker({ status: WorkerStatus.ACTIVE, confirmationCode: '', grantedProfileIds: [] }),
+    ],
+  });
+  listProfiles.mockResolvedValue({
+    profiles: [
+      fakeProfile({ profileId: 'my-profile-1' }),
+      fakeProfile({ profileId: 'archived-profile', archived: true }),
+    ],
+  });
+  render(<WorkersPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Manage grants' }));
+  const dialog = await screen.findByRole('dialog');
+
+  const select = within(dialog).getByPlaceholderText('Pick a profile');
+  await user.click(select);
+  expect(screen.queryByText('archived-profile')).not.toBeInTheDocument();
+  await user.click(await screen.findByText('my-profile-1'));
+
+  await user.click(within(dialog).getByRole('button', { name: 'Grant' }));
+
+  await waitFor(() => {
+    expect(grantProfile).toHaveBeenCalledWith(
+      { workerId: 'worker-1', profileId: 'my-profile-1' },
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+});
+
+test('revoking a grant from the manage-grants dialog', async () => {
+  const user = userEvent.setup();
+  listWorkers.mockResolvedValue({
+    workers: [
+      fakeWorker({
+        status: WorkerStatus.ACTIVE,
+        confirmationCode: '',
+        grantedProfileIds: ['my-profile-1'],
+      }),
+    ],
+  });
+  render(<WorkersPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Manage grants' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.click(within(dialog).getByRole('button', { name: 'Revoke my-profile-1' }));
+
+  await waitFor(() => {
+    expect(revokeProfileGrant).toHaveBeenCalledWith(
+      { workerId: 'worker-1', profileId: 'my-profile-1' },
       { headers: { Authorization: 'Bearer tok' } }
     );
   });

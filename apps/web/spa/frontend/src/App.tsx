@@ -6,6 +6,7 @@ import heroImg from './assets/hero.png';
 import reactLogo from './assets/react.svg';
 import viteLogo from './assets/vite.svg';
 import { WorkloadService } from './gen/medusa/workload/v1/workload_service_pb.ts';
+import { ProfilesPage } from './ProfilesPage.tsx';
 import { SignInWall } from './SignInWall.tsx';
 import { useAuth } from './useAuth.tsx';
 import { WorkersPage } from './WorkersPage.tsx';
@@ -202,11 +203,15 @@ function AuthenticatedApp({ token }: { token: string }) {
     <Tabs value={tab} onChange={setTab}>
       <Tabs.List>
         <Tabs.Tab value="workers">Workers</Tabs.Tab>
+        <Tabs.Tab value="profiles">Profiles</Tabs.Tab>
         <Tabs.Tab value="counter">Counter</Tabs.Tab>
       </Tabs.List>
 
       <Tabs.Panel value="workers">
         <WorkersPage token={token} />
+      </Tabs.Panel>
+      <Tabs.Panel value="profiles">
+        <ProfilesPage token={token} />
       </Tabs.Panel>
       <Tabs.Panel value="counter">
         <AppContent token={token} />

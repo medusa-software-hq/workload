@@ -5,9 +5,11 @@ import {
   Badge,
   Button,
   Checkbox,
+  CloseButton,
   Group,
   Loader,
   Modal,
+  Select,
   Stack,
   Table,
   Text,
@@ -19,6 +21,7 @@ import { toast } from 'sonner';
 import {
   FleetService,
   WorkerStatus,
+  type Profile,
   type Worker,
 } from './gen/medusa/workload/v1/fleet_service_pb.ts';
 import { useAuth } from './useAuth.tsx';
@@ -42,6 +45,7 @@ type ActiveAction = { kind: 'revoke'; worker: Worker };
 export function WorkersPage({ token }: { token: string }) {
   const { handleUnauthorized } = useAuth();
   const [workers, setWorkers] = useState<Worker[] | null>(null);
+  const [profiles, setProfiles] = useState<Profile[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState(false);
 
@@ -61,8 +65,12 @@ export function WorkersPage({ token }: { token: string }) {
 
   const refresh = useCallback(async () => {
     try {
-      const response = await client.listWorkers({}, { headers });
-      setWorkers(response.workers);
+      const [workersResponse, profilesResponse] = await Promise.all([
+        client.listWorkers({}, { headers }),
+        client.listProfiles({}, { headers }),
+      ]);
+      setWorkers(workersResponse.workers);
+      setProfiles(profilesResponse.profiles);
       setError(null);
     } catch (err: unknown) {
       handleError(err);
@@ -94,6 +102,12 @@ export function WorkersPage({ token }: { token: string }) {
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [activeAction, setActiveAction] = useState<ActiveAction | null>(null);
   const [verified, { toggle: toggleVerified, close: resetVerified }] = useDisclosure(false);
+  const [grantsWorkerId, setGrantsWorkerId] = useState<string | null>(null);
+  const [profileToGrant, setProfileToGrant] = useState<string | null>(null);
+
+  // Re-derived from the latest `workers` state on every render, so the modal reflects
+  // grant/revoke changes immediately instead of showing a stale snapshot.
+  const grantsWorker = workers?.find((w) => w.workerId === grantsWorkerId) ?? null;
 
   async function submitPendingAction(action: PendingAction) {
     try {
@@ -118,6 +132,29 @@ export function WorkersPage({ token }: { token: string }) {
       await client.revokeWorker({ workerId: action.worker.workerId }, { headers });
       toast.success(`Revoked ${action.worker.name}`);
       setActiveAction(null);
+      await refresh();
+    } catch (err: unknown) {
+      handleError(err);
+      toast.error(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function submitGrant(workerId: string, profileId: string) {
+    try {
+      await client.grantProfile({ workerId, profileId }, { headers });
+      toast.success(`Granted ${profileId}`);
+      setProfileToGrant(null);
+      await refresh();
+    } catch (err: unknown) {
+      handleError(err);
+      toast.error(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function submitRevokeGrant(workerId: string, profileId: string) {
+    try {
+      await client.revokeProfileGrant({ workerId, profileId }, { headers });
+      toast.success(`Revoked ${profileId}`);
       await refresh();
     } catch (err: unknown) {
       handleError(err);
@@ -240,14 +277,23 @@ export function WorkersPage({ token }: { token: string }) {
                     )}
                   </Table.Td>
                   <Table.Td>
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      color="red"
-                      onClick={() => setActiveAction({ kind: 'revoke', worker })}
-                    >
-                      Revoke
-                    </Button>
+                    <Group gap="xs">
+                      <Button
+                        size="xs"
+                        variant="default"
+                        onClick={() => setGrantsWorkerId(worker.workerId)}
+                      >
+                        Manage grants
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        color="red"
+                        onClick={() => setActiveAction({ kind: 'revoke', worker })}
+                      >
+                        Revoke
+                      </Button>
+                    </Group>
                   </Table.Td>
                 </Table.Tr>
               ))}
@@ -347,6 +393,62 @@ export function WorkersPage({ token }: { token: string }) {
               </Button>
               <Button color="red" onClick={() => void submitRevoke(activeAction)}>
                 Revoke
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
+
+      <Modal
+        opened={grantsWorker !== null}
+        onClose={() => {
+          setGrantsWorkerId(null);
+          setProfileToGrant(null);
+        }}
+        title={grantsWorker ? `Grants for ${grantsWorker.name}` : ''}
+      >
+        {grantsWorker && (
+          <Stack gap="md">
+            <Stack gap="xs">
+              <Text fw={500} size="sm">
+                Currently granted
+              </Text>
+              {grantsWorker.grantedProfileIds.length === 0 ? (
+                <Text c="dimmed">None</Text>
+              ) : (
+                <Stack gap={4}>
+                  {grantsWorker.grantedProfileIds.map((profileId) => (
+                    <Group key={profileId} justify="space-between">
+                      <Badge variant="light">{profileId}</Badge>
+                      <CloseButton
+                        aria-label={`Revoke ${profileId}`}
+                        onClick={() => void submitRevokeGrant(grantsWorker.workerId, profileId)}
+                      />
+                    </Group>
+                  ))}
+                </Stack>
+              )}
+            </Stack>
+            <Group align="flex-end" gap="xs">
+              <Select
+                label="Grant a profile"
+                placeholder="Pick a profile"
+                flex={1}
+                data={profiles
+                  .filter(
+                    (p) => !p.archived && !grantsWorker.grantedProfileIds.includes(p.profileId)
+                  )
+                  .map((p) => p.profileId)}
+                value={profileToGrant}
+                onChange={setProfileToGrant}
+              />
+              <Button
+                disabled={profileToGrant === null}
+                onClick={() =>
+                  profileToGrant !== null && void submitGrant(grantsWorker.workerId, profileToGrant)
+                }
+              >
+                Grant
               </Button>
             </Group>
           </Stack>
