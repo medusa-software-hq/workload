@@ -1,66 +1,64 @@
 # Workload
 
-This is an internal project built from the Counter template.
+An in-house starting point for **plug-and-play, GCP-compatible workers**: small,
+self-contained jobs that need to touch Google Cloud resources without carrying any
+long-lived Google credentials of their own.
 
-## Architecture
+## The idea
 
-Workload is a small full-stack project split into a few main layers:
+A worker should be trivial to hand out and run anywhere. It gets a single bootstrap
+token — nothing more — and from that it can obtain real, short-lived GCP access on
+demand. No service-account key files, no `gcloud` login, no cloud-specific secrets
+baked into the worker.
 
-- **Frontend SPA** - a React/Vite application, served by Caddy
-- **Backend** - one or more Kotlin gRPC services built on Armeria
-- **Shared contract** - protobuf definitions used to generate client and server code
-- **CLI** - a standalone Kotlin command-line tool
-- **Infrastructure** - Terraform, split into a few projects by concern
+That indirection is the core of the project: a **token broker** running in our
+already-trusted backend. The flow is:
 
-At runtime, requests flow from the browser through the SPA, through sign-in, to a
-backend service on Cloud Run, down to a storage layer. Production and local
-development swap out the auth and storage implementations; the request-handling
-logic in between stays the same.
+1. A worker presents its bootstrap token to the broker.
+2. The broker verifies it, then uses its own GCP identity to mint a short-lived
+   access token that **impersonates a target service account**.
+3. The worker uses that token to talk to Google Cloud (read a bucket, call an API,
+   etc.) for the few minutes it stays valid, then it's gone.
 
-### Layout
+The trust and blast radius live in one place — the broker and the IAM binding behind
+it — instead of being spread across every worker. Workers stay dumb and disposable;
+the sensitive GCP permission stays server-side and short-lived. Everything the broker
+does is audit-logged.
 
-- `apps/web/spa/frontend/` - the browser application
-- `backend/` - backend service(s) and their infrastructure
-- `proto/` - the protobuf contract shared between frontend and backend
-- `infra/` - shared platform infrastructure
-- `cli/` - the CLI, its own Gradle root
+## What's in the repo
 
-### Frontend
+The repo is both the broker/worker mechanism above and the surrounding platform
+scaffolding a real service needs, so a new worker can be dropped in with batteries
+included:
 
-A single-page app built with **React**, **Vite**, and **Mantine**, calling the
-backend through generated gRPC client code. Authentication is pluggable: a
-production mode backed by Google sign-in, and a local mode that skips it. The app is
-packaged behind **Caddy** for static serving with SPA-style routing.
+- **`cli/`** — the worker, a standalone Kotlin CLI. It knows how to fetch a brokered
+  token and use it against GCP. This is the "plug" end of plug-and-play.
+- **`backend/`** — a Kotlin/Armeria service on Cloud Run that hosts the token broker,
+  plus the reference API it grew out of. Storage and auth are pluggable so the same
+  core runs in production and locally.
+- **`worker-mvp/`** — a deliberately throwaway, separately-managed slice of infra
+  (target service account, sample resources, cross-project IAM) that proves the
+  broker flow end to end without touching the real backend.
+- **`apps/web/`** — a React/Vite SPA, the human-facing front door, served by Caddy.
+- **`proto/`** — the protobuf contract shared between frontend and backend; the
+  single source of truth for the API, with client and server generated from it.
+- **`infra/`** — shared platform infrastructure (Terraform), split by concern into
+  separate roots with their own remote state rather than one monolith.
 
-### Backend
+## How it fits together
 
-A Kotlin server built on **Armeria**, exposing a gRPC API defined by the shared
-protobuf contract. Storage and authentication are both abstracted behind
-interfaces, so the same service core runs in production (backed by a managed
-Postgres database, with real auth) and locally (in-memory storage, no auth)
-without code changes.
+Production and local development swap out auth, storage, and the cloud identity
+underneath, but the shape stays the same: a worker (or the SPA) talks to the backend,
+and where GCP access is needed it's brokered rather than embedded.
 
-### API contract
+Delivery is automated: GitHub Actions validate every change on pull requests and
+apply/deploy on push to a trunk branch. The CLI is published as a GitHub release and
+a Homebrew formula so a worker is genuinely one install away.
 
-The frontend and backend share a protobuf-defined, versioned API contract under
-`proto/`. Server and client code are both generated from it, so the contract is the
-single source of truth for what an API looks like, and changes to it are
-centralized in one place.
+## Status
 
-### Infrastructure
-
-Managed with **Terraform**, split by concern into separate projects (shared
-platform resources, backend, web foundation, web domain mapping) rather than kept
-in a single root module, each with its own remote state.
-
-### CLI
-
-A standalone Kotlin CLI, built as its own Gradle root so it doesn't share a build
-with the backend. It's packaged as a fat jar and, on push to a trunk branch,
-published as a GitHub release and a Homebrew formula.
-
-### Delivery model
-
-The project is designed for automated delivery: GitHub Actions validate code and
-infrastructure changes on pull requests, and apply/deploy them on push to a trunk
-branch.
+This is an internal, experimental project — it began life as a full-stack template
+(hence the leftover counter service and SPA) and is being grown toward the worker
+story above. Expect template scaffolding alongside the parts that matter. The
+per-component `README.md` and `Taskfile.yml` files carry the operational detail; this
+document is only meant to explain what the project is for.
