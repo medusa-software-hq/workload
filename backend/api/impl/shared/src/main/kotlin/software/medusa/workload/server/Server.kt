@@ -60,6 +60,8 @@ fun buildServer(
     workerApiPathPrefix: String,
     auth: DecoratingHttpServiceFunction,
     counterStore: WorkloadStore,
+    fleetStore: FleetStore,
+    impersonationVerifier: ImpersonationVerifier,
     workerTokenBroker: HttpService? = null,
     registrationService: HttpService? = null,
     selfStatusService: HttpService? = null,
@@ -89,6 +91,7 @@ fun buildServer(
       GrpcService.builder()
           .apply {
             addService(WorkloadServiceImpl(counterStore))
+            addService(FleetServiceImpl(fleetStore, impersonationVerifier))
             enableUnframedRequests(true)
           }
           .build()

@@ -83,6 +83,7 @@ class GoogleIdTokenAuthDecorator(
     val hd = claims.getStringClaim("hd")
     if (hd != allowedDomain) return unauthorized
 
+    ctx.setAttr(adminEmailAttrKey, claims.getStringClaim("email"))
     return delegate.serve(ctx, req)
   }
 

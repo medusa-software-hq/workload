@@ -16,6 +16,8 @@ fun main() {
           workerApiPathPrefix = localWorkerApiPathPrefix,
           auth = NoOpAuthDecorator,
           counterStore = InMemoryWorkloadStore(),
+          fleetStore = fleetStore,
+          impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
           registrationService = RegistrationService(fleetStore),
           selfStatusService = SelfStatusService(fleetStore),
       )

@@ -47,6 +47,10 @@ fun main() {
   val database = buildPostgresWorkloadDatabase(databaseUrl)
   val fleetStore = PostgresFleetStore(database)
 
+  // Shared by the legacy broker (if enabled) and profile-verification dry-run mints — both are
+  // GenerateAccessToken calls against the same broker runtime SA, no reason to open two clients.
+  val iamCredentialsClient = IamCredentialsClient.create()
+
   val workerTokenBroker: HttpService? =
       if (System.getenv(workerTokenBrokerEnabledEnvVarName) == "true") {
         val targetServiceAccountEmail =
@@ -65,7 +69,7 @@ fun main() {
                     targetServiceAccountEmail = targetServiceAccountEmail,
                     tokenLifetimeSeconds = tokenLifetimeSeconds,
                 ),
-            iamCredentialsClient = IamCredentialsClient.create(),
+            iamCredentialsClient = iamCredentialsClient,
         )
       } else {
         null
@@ -77,6 +81,8 @@ fun main() {
           workerApiPathPrefix = workerApiPathPrefix,
           auth = GoogleIdTokenAuthDecorator(clientId, allowedDomain),
           counterStore = PostgresWorkloadStore(database),
+          fleetStore = fleetStore,
+          impersonationVerifier = IamImpersonationVerifier(iamCredentialsClient),
           workerTokenBroker = workerTokenBroker,
           registrationService = RegistrationService(fleetStore),
           selfStatusService = SelfStatusService(fleetStore),
