@@ -51,7 +51,7 @@ resource "google_cloud_run_v2_service" "primary" {
 
       env {
         name  = "WORKER_TOKEN_BROKER_ENABLED"
-        value = "false" # Flip to "true" (new revision) once worker-mvp/infra is applied and the bootstrap token secret has a real version.
+        value = "true"
       }
 
       env {
