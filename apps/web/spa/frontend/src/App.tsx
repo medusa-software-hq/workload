@@ -1,6 +1,6 @@
 import { createClient } from '@connectrpc/connect';
 import { createGrpcWebTransport } from '@connectrpc/connect-web';
-import { Box, Button, Group, SimpleGrid, Stack, Text, Title } from '@mantine/core';
+import { Box, Button, Group, SimpleGrid, Stack, Tabs, Text, Title } from '@mantine/core';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import heroImg from './assets/hero.png';
 import reactLogo from './assets/react.svg';
@@ -8,6 +8,7 @@ import viteLogo from './assets/vite.svg';
 import { WorkloadService } from './gen/medusa/workload/v1/workload_service_pb.ts';
 import { SignInWall } from './SignInWall.tsx';
 import { useAuth } from './useAuth.tsx';
+import { WorkersPage } from './WorkersPage.tsx';
 import classes from './App.module.css';
 
 const API_URL = import.meta.env.VITE_API_URL as string;
@@ -194,6 +195,26 @@ function AppContent({ token }: { token: string }) {
   );
 }
 
+function AuthenticatedApp({ token }: { token: string }) {
+  const [tab, setTab] = useState<string | null>('workers');
+
+  return (
+    <Tabs value={tab} onChange={setTab}>
+      <Tabs.List>
+        <Tabs.Tab value="workers">Workers</Tabs.Tab>
+        <Tabs.Tab value="counter">Counter</Tabs.Tab>
+      </Tabs.List>
+
+      <Tabs.Panel value="workers">
+        <WorkersPage token={token} />
+      </Tabs.Panel>
+      <Tabs.Panel value="counter">
+        <AppContent token={token} />
+      </Tabs.Panel>
+    </Tabs>
+  );
+}
+
 function App() {
   const { state } = useAuth();
 
@@ -203,7 +224,7 @@ function App() {
   if (state.status === 'unauthenticated') {
     return <SignInWall />;
   }
-  return <AppContent token={state.token} />;
+  return <AuthenticatedApp token={state.token} />;
 }
 
 export default App;
