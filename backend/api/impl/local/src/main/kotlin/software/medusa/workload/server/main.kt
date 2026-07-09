@@ -8,12 +8,16 @@ private const val localCorsOriginRegex = """http://localhost(:\d+)?"""
 private const val localWorkerApiPathPrefix = "local-dev"
 
 fun main() {
+  val fleetStore = InMemoryFleetStore()
+
   buildServer(
           originRegex = localCorsOriginRegex,
           port = localPort,
           workerApiPathPrefix = localWorkerApiPathPrefix,
           auth = NoOpAuthDecorator,
           counterStore = InMemoryWorkloadStore(),
+          registrationService = RegistrationService(fleetStore),
+          selfStatusService = SelfStatusService(fleetStore),
       )
       .start()
       .join()

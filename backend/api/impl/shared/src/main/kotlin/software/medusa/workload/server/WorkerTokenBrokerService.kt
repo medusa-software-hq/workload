@@ -15,8 +15,6 @@ import java.time.Instant
 import java.util.UUID
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import org.slf4j.LoggerFactory
 
 private const val httpAuthorizationHeaderName = "Authorization"
 private const val bearerPrefix = "Bearer "
@@ -28,23 +26,6 @@ internal data class WorkerTokenResponse(
     val expiresAt: String,
     val serviceAccount: String,
 )
-
-@Serializable internal data class WorkerTokenErrorResponse(val error: String)
-
-@Serializable
-private data class AuditLogEntry(
-    val event: String,
-    val requestId: String,
-    val timestamp: String,
-    val sourceIp: String,
-    val targetServiceAccount: String,
-    val result: String,
-    val expiresAt: String? = null,
-    val reason: String? = null,
-)
-
-private val json = Json { encodeDefaults = true }
-private val auditLogger = LoggerFactory.getLogger("worker.token.broker.audit")
 
 internal fun extractBearerToken(req: HttpRequest): String? {
   val header = req.headers().get(httpAuthorizationHeaderName) ?: return null
@@ -76,7 +57,7 @@ class WorkerTokenBrokerService(
     val token = extractBearerToken(req)
     if (token == null || !constantTimeEquals(token, config.bootstrapToken)) {
       audit(requestId, sourceIp, result = "unauthorized", reason = "invalid_or_missing_token")
-      return jsonResponse(HttpStatus.UNAUTHORIZED, WorkerTokenErrorResponse("unauthorized"))
+      return jsonResponse(HttpStatus.UNAUTHORIZED, WorkerErrorResponse("unauthorized"))
     }
 
     // generateAccessToken is a blocking call; keep it off Armeria's event-loop thread.
@@ -95,7 +76,7 @@ class WorkerTokenBrokerService(
             )
           } catch (e: Exception) {
             audit(requestId, sourceIp, result = "denied", reason = e::class.simpleName)
-            jsonResponse(HttpStatus.BAD_GATEWAY, WorkerTokenErrorResponse("failed_to_mint_token"))
+            jsonResponse(HttpStatus.BAD_GATEWAY, WorkerErrorResponse("failed_to_mint_token"))
           }
         },
         ctx.blockingTaskExecutor(),
@@ -117,10 +98,10 @@ class WorkerTokenBrokerService(
   }
 
   private fun jsonResponse(status: HttpStatus, body: WorkerTokenResponse): HttpResponse =
-      HttpResponse.of(status, MediaType.JSON, json.encodeToString(body))
+      HttpResponse.of(status, MediaType.JSON, workerJson.encodeToString(body))
 
-  private fun jsonResponse(status: HttpStatus, body: WorkerTokenErrorResponse): HttpResponse =
-      HttpResponse.of(status, MediaType.JSON, json.encodeToString(body))
+  private fun jsonResponse(status: HttpStatus, body: WorkerErrorResponse): HttpResponse =
+      HttpResponse.of(status, MediaType.JSON, workerJson.encodeToString(body))
 
   private fun audit(
       requestId: String,
@@ -129,7 +110,7 @@ class WorkerTokenBrokerService(
       expiresAt: String? = null,
       reason: String? = null,
   ) {
-    val entry =
+    audit(
         AuditLogEntry(
             event = "worker_gcp_token_${if (result == "success") "issued" else "denied"}",
             requestId = requestId,
@@ -140,6 +121,6 @@ class WorkerTokenBrokerService(
             expiresAt = expiresAt,
             reason = reason,
         )
-    auditLogger.info(json.encodeToString(entry))
+    )
   }
 }

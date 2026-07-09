@@ -42,6 +42,11 @@ fun main() {
           ?: error("$workerApiPathPrefixSecretNameEnvVarName environment variable must be set")
   val workerApiPathPrefix = loadSecretPayload(workerApiPathPrefixSecretName)
 
+  // One physical database, shared by every Postgres-backed store — a single connection pool and
+  // a single Flyway migration run.
+  val database = buildPostgresWorkloadDatabase(databaseUrl)
+  val fleetStore = PostgresFleetStore(database)
+
   val workerTokenBroker: HttpService? =
       if (System.getenv(workerTokenBrokerEnabledEnvVarName) == "true") {
         val targetServiceAccountEmail =
@@ -71,8 +76,10 @@ fun main() {
           port = port,
           workerApiPathPrefix = workerApiPathPrefix,
           auth = GoogleIdTokenAuthDecorator(clientId, allowedDomain),
-          counterStore = PostgresWorkloadStore.build(databaseUrl),
+          counterStore = PostgresWorkloadStore(database),
           workerTokenBroker = workerTokenBroker,
+          registrationService = RegistrationService(fleetStore),
+          selfStatusService = SelfStatusService(fleetStore),
       )
       .start()
       .join()
