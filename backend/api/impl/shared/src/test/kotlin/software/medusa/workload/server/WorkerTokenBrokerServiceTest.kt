@@ -82,8 +82,8 @@ class WorkerTokenBrokerServiceTest {
   }
 
   @Test
-  fun `WorkerTokenErrorResponse encodes with the exact field name from the API contract`() {
-    val encoded = Json.encodeToString(WorkerTokenErrorResponse("unauthorized"))
+  fun `WorkerErrorResponse encodes with the exact field name from the API contract`() {
+    val encoded = Json.encodeToString(WorkerErrorResponse("unauthorized"))
     assertEquals("""{"error":"unauthorized"}""", encoded)
   }
 }
