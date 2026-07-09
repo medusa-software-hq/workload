@@ -18,6 +18,7 @@ fun main() {
           counterStore = InMemoryWorkloadStore(),
           fleetStore = fleetStore,
           impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
+          workerTokenBroker = WorkerTokenBrokerService(fleetStore, FakeTokenMinter),
           registrationService = RegistrationService(fleetStore),
           selfStatusService = SelfStatusService(fleetStore),
       )

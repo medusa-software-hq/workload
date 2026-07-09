@@ -1,89 +1,253 @@
 package software.medusa.workload.server
 
+import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.HttpMethod
-import com.linecorp.armeria.common.HttpRequest
+import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.RequestHeaders
+import com.linecorp.armeria.server.Server
+import java.util.UUID
+import kotlin.test.AfterTest
+import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
+import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 
+private const val prefix = "test-prefix"
+private const val tokenPath = "/$prefix/worker/v1/token"
+
+/** End-to-end check of [WorkerTokenBrokerService] via a real running server. */
 class WorkerTokenBrokerServiceTest {
 
-  @Test
-  fun `constantTimeEquals returns true for equal tokens`() {
-    assertTrue(constantTimeEquals("secret-token", "secret-token"))
-  }
+  private lateinit var fleetStore: FleetStore
+  private lateinit var server: Server
+  private lateinit var client: WebClient
 
-  @Test
-  fun `constantTimeEquals returns false for unequal tokens of the same length`() {
-    assertFalse(constantTimeEquals("secret-token", "wrong-token!"))
-  }
-
-  @Test
-  fun `constantTimeEquals returns false for tokens of different length`() {
-    assertFalse(constantTimeEquals("short", "a-much-longer-token"))
-  }
-
-  @Test
-  fun `extractBearerToken returns null when the header is missing`() {
-    val req = HttpRequest.of(HttpMethod.POST, "/worker/v1/token")
-    assertNull(extractBearerToken(req))
-  }
-
-  @Test
-  fun `extractBearerToken returns null when the prefix is not Bearer`() {
-    val req =
-        HttpRequest.of(
-            RequestHeaders.of(HttpMethod.POST, "/worker/v1/token", "Authorization", "Basic abc123")
+  @BeforeTest
+  fun start() {
+    fleetStore = InMemoryFleetStore()
+    server =
+        buildServer(
+            originRegex = """http://localhost(:\d+)?""",
+            port = 0,
+            workerApiPathPrefix = prefix,
+            auth = NoOpAuthDecorator,
+            counterStore = InMemoryWorkloadStore(),
+            fleetStore = fleetStore,
+            impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
+            workerTokenBroker = WorkerTokenBrokerService(fleetStore, FakeTokenMinter),
         )
-    assertNull(extractBearerToken(req))
+    server.start().join()
+    client = WebClient.of("http://127.0.0.1:${server.activeLocalPort()}")
   }
 
-  @Test
-  fun `extractBearerToken returns null when the token is empty after the prefix`() {
-    val req =
-        HttpRequest.of(
-            RequestHeaders.of(HttpMethod.POST, "/worker/v1/token", "Authorization", "Bearer ")
-        )
-    assertNull(extractBearerToken(req))
+  @AfterTest
+  fun stop() {
+    server.stop().join()
   }
 
-  @Test
-  fun `extractBearerToken returns the token when well-formed`() {
-    val req =
-        HttpRequest.of(
+  private fun claim(
+      bearer: String,
+      profileId: String?,
+  ): com.linecorp.armeria.common.AggregatedHttpResponse {
+    val body =
+        if (profileId == null) "{}" else workerJson.encodeToString(TokenClaimRequest(profileId))
+    return client
+        .execute(
             RequestHeaders.of(
                 HttpMethod.POST,
-                "/worker/v1/token",
+                tokenPath,
                 "Authorization",
-                "Bearer my-bootstrap-token",
-            )
+                "Bearer $bearer",
+                "Content-Type",
+                "application/json",
+            ),
+            body,
         )
-    assertEquals("my-bootstrap-token", extractBearerToken(req))
+        .aggregate()
+        .join()
+  }
+
+  private fun registerActiveWorker(name: String = "worker-1"): Pair<WorkerId, String> =
+      runBlocking {
+        val secret = generateWorkerSecret()
+        val worker =
+            fleetStore.createWorker(
+                NewWorker(
+                    secretHash = hashWorkerSecret(secret),
+                    name = name,
+                    hostname = null,
+                    os = null,
+                    cliVersion = null,
+                    confirmationCode = "1234",
+                )
+            )
+        fleetStore.approveWorker(worker.workerId, approvedBy = "admin@example.com")
+        worker.workerId to secret
+      }
+
+  private fun createGrantedProfile(
+      workerId: WorkerId,
+      targetServiceAccount: String = "target@example.iam.gserviceaccount.com",
+  ): ProfileId = runBlocking {
+    val profileId = ProfileId("profile-${UUID.randomUUID()}")
+    fleetStore.createProfile(
+        profileId,
+        displayName = null,
+        revision = NewProfileRevision(targetServiceAccount, createdBy = "admin@example.com"),
+    )
+    fleetStore.grant(workerId, profileId, grantedBy = "admin@example.com")
+    profileId
   }
 
   @Test
-  fun `WorkerTokenResponse encodes with the exact field names from the API contract`() {
-    val body =
-        WorkerTokenResponse(
-            accessToken = "ya29.example",
-            expiresAt = "2026-07-07T12:34:56Z",
-            serviceAccount = "worker-mvp@example.iam.gserviceaccount.com",
+  fun `approved and granted worker gets a working token naming the profile, revision, and SA`() {
+    val (workerId, secret) = registerActiveWorker()
+    val profileId = createGrantedProfile(workerId, "target@example.iam.gserviceaccount.com")
+
+    val response = claim("${workerId.value}.$secret", profileId.value)
+
+    assertEquals(HttpStatus.OK, response.status())
+    val body = workerJson.decodeFromString<WorkerTokenResponse>(response.contentUtf8())
+    assertEquals(profileId.value, body.profileId)
+    assertEquals(1, body.revision)
+    assertEquals("target@example.iam.gserviceaccount.com", body.serviceAccount)
+    assertEquals("fake-access-token", body.accessToken)
+  }
+
+  @Test
+  fun `pending worker is unauthorized`() = runBlocking {
+    val secret = generateWorkerSecret()
+    val worker =
+        fleetStore.createWorker(
+            NewWorker(
+                secretHash = hashWorkerSecret(secret),
+                name = "worker-1",
+                hostname = null,
+                os = null,
+                cliVersion = null,
+                confirmationCode = "1234",
+            )
         )
-    val encoded = Json.encodeToString(body)
+
+    val response = claim("${worker.workerId.value}.$secret", "some-profile")
+    assertEquals(HttpStatus.UNAUTHORIZED, response.status())
+  }
+
+  @Test
+  fun `rejected worker is unauthorized`() = runBlocking {
+    val (workerId, secret) = registerActiveWorker()
+    fleetStore.rejectWorker(workerId)
+
+    val response = claim("${workerId.value}.$secret", "some-profile")
+    assertEquals(HttpStatus.UNAUTHORIZED, response.status())
+  }
+
+  @Test
+  fun `revoked worker is unauthorized`() = runBlocking {
+    val (workerId, secret) = registerActiveWorker()
+    fleetStore.revokeWorker(workerId)
+
+    val response = claim("${workerId.value}.$secret", "some-profile")
+    assertEquals(HttpStatus.UNAUTHORIZED, response.status())
+  }
+
+  @Test
+  fun `wrong secret is unauthorized`() {
+    val (workerId, _) = registerActiveWorker()
+
+    val response = claim("${workerId.value}.wrong-secret", "some-profile")
+    assertEquals(HttpStatus.UNAUTHORIZED, response.status())
+  }
+
+  @Test
+  fun `unknown worker is unauthorized`() {
+    val response = claim("${UUID.randomUUID()}.some-secret", "some-profile")
+    assertEquals(HttpStatus.UNAUTHORIZED, response.status())
+  }
+
+  @Test
+  fun `malformed bearer token is unauthorized`() {
+    val response = claim("not-a-valid-token", "some-profile")
+    assertEquals(HttpStatus.UNAUTHORIZED, response.status())
+  }
+
+  @Test
+  fun `missing profileId in body is a bad request`() {
+    val (workerId, secret) = registerActiveWorker()
+
+    val response = claim("${workerId.value}.$secret", null)
+    assertEquals(HttpStatus.BAD_REQUEST, response.status())
+  }
+
+  @Test
+  fun `active worker without a grant gets 403 naming the condition`() {
+    val (workerId, secret) = registerActiveWorker()
+
+    val response = claim("${workerId.value}.$secret", "never-granted")
+    assertEquals(HttpStatus.FORBIDDEN, response.status())
     assertEquals(
-        """{"accessToken":"ya29.example","expiresAt":"2026-07-07T12:34:56Z","serviceAccount":"worker-mvp@example.iam.gserviceaccount.com"}""",
-        encoded,
+        WorkerErrorResponse("profile_not_found"),
+        workerJson.decodeFromString<WorkerErrorResponse>(response.contentUtf8()),
     )
   }
 
   @Test
-  fun `WorkerErrorResponse encodes with the exact field name from the API contract`() {
-    val encoded = Json.encodeToString(WorkerErrorResponse("unauthorized"))
-    assertEquals("""{"error":"unauthorized"}""", encoded)
+  fun `archived profile gets 403 naming the condition`() = runBlocking {
+    val (workerId, secret) = registerActiveWorker()
+    val profileId = createGrantedProfile(workerId)
+    fleetStore.archiveProfile(profileId)
+
+    val response = claim("${workerId.value}.$secret", profileId.value)
+    assertEquals(HttpStatus.FORBIDDEN, response.status())
+    assertEquals(
+        WorkerErrorResponse("profile_archived"),
+        workerJson.decodeFromString<WorkerErrorResponse>(response.contentUtf8()),
+    )
+  }
+
+  @Test
+  fun `ungranted profile gets 403 naming the condition`() = runBlocking {
+    val (workerId, secret) = registerActiveWorker()
+    val otherWorkerId = registerActiveWorker(name = "worker-2").first
+    val profileId = createGrantedProfile(otherWorkerId)
+
+    val response = claim("${workerId.value}.$secret", profileId.value)
+    assertEquals(HttpStatus.FORBIDDEN, response.status())
+    assertEquals(
+        WorkerErrorResponse("not_granted"),
+        workerJson.decodeFromString<WorkerErrorResponse>(response.contentUtf8()),
+    )
+  }
+
+  @Test
+  fun `after UpdateProfile the next claim uses the new revision`() = runBlocking {
+    val (workerId, secret) = registerActiveWorker()
+    val profileId = createGrantedProfile(workerId, "old-sa@example.iam.gserviceaccount.com")
+
+    fleetStore.appendProfileRevision(
+        profileId,
+        NewProfileRevision(
+            "new-sa@example.iam.gserviceaccount.com",
+            createdBy = "admin@example.com",
+        ),
+    )
+
+    val response = claim("${workerId.value}.$secret", profileId.value)
+    assertEquals(HttpStatus.OK, response.status())
+    val body = workerJson.decodeFromString<WorkerTokenResponse>(response.contentUtf8())
+    assertEquals(2, body.revision)
+    assertEquals("new-sa@example.iam.gserviceaccount.com", body.serviceAccount)
+  }
+
+  @Test
+  fun `claiming a token updates the worker's lastSeenAt`() = runBlocking {
+    val (workerId, secret) = registerActiveWorker()
+    val profileId = createGrantedProfile(workerId)
+
+    claim("${workerId.value}.$secret", profileId.value)
+
+    kotlin.test.assertNotNull(fleetStore.getWorker(workerId)?.lastSeenAt)
   }
 }

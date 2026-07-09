@@ -1,7 +1,6 @@
 package software.medusa.workload.server
 
 import com.google.cloud.iam.credentials.v1.IamCredentialsClient
-import com.linecorp.armeria.server.HttpService
 
 private const val portEnvVarName = "PORT"
 private const val clientIdEnvVarName = "GOOGLE_CLIENT_ID"
@@ -11,9 +10,6 @@ private const val databaseUrlEnvVarName = "DATABASE_URL"
 
 private const val workerApiPathPrefixSecretNameEnvVarName = "WORKER_API_PATH_PREFIX_SECRET_NAME"
 
-private const val workerTokenBrokerEnabledEnvVarName = "WORKER_TOKEN_BROKER_ENABLED"
-private const val targetServiceAccountEmailEnvVarName = "TARGET_SERVICE_ACCOUNT_EMAIL"
-private const val bootstrapTokenSecretNameEnvVarName = "BOOTSTRAP_TOKEN_SECRET_NAME"
 private const val tokenLifetimeSecondsEnvVarName = "TOKEN_LIFETIME_SECONDS"
 
 fun main() {
@@ -47,33 +43,17 @@ fun main() {
   val database = buildPostgresWorkloadDatabase(databaseUrl)
   val fleetStore = PostgresFleetStore(database)
 
-  // Shared by the legacy broker (if enabled) and profile-verification dry-run mints — both are
+  // Shared by the token broker and profile-verification dry-run mints — both are
   // GenerateAccessToken calls against the same broker runtime SA, no reason to open two clients.
   val iamCredentialsClient = IamCredentialsClient.create()
 
-  val workerTokenBroker: HttpService? =
-      if (System.getenv(workerTokenBrokerEnabledEnvVarName) == "true") {
-        val targetServiceAccountEmail =
-            System.getenv(targetServiceAccountEmailEnvVarName)
-                ?: error("$targetServiceAccountEmailEnvVarName environment variable must be set")
-        val bootstrapTokenSecretName =
-            System.getenv(bootstrapTokenSecretNameEnvVarName)
-                ?: error("$bootstrapTokenSecretNameEnvVarName environment variable must be set")
-        val tokenLifetimeSeconds =
-            System.getenv(tokenLifetimeSecondsEnvVarName)?.toLongOrNull() ?: 900L
-
-        WorkerTokenBrokerService(
-            config =
-                WorkerTokenBrokerConfig(
-                    bootstrapToken = loadSecretPayload(bootstrapTokenSecretName),
-                    targetServiceAccountEmail = targetServiceAccountEmail,
-                    tokenLifetimeSeconds = tokenLifetimeSeconds,
-                ),
-            iamCredentialsClient = iamCredentialsClient,
-        )
-      } else {
-        null
-      }
+  val tokenLifetimeSeconds = System.getenv(tokenLifetimeSecondsEnvVarName)?.toLongOrNull() ?: 900L
+  val workerTokenBroker =
+      WorkerTokenBrokerService(
+          fleetStore = fleetStore,
+          tokenMinter = IamTokenMinter(iamCredentialsClient),
+          tokenLifetimeSeconds = tokenLifetimeSeconds,
+      )
 
   buildServer(
           originRegex = corsOriginRegex,
