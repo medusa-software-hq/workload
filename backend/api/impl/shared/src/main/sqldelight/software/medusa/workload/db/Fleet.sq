@@ -70,6 +70,11 @@ UPDATE workers
 SET status = 'REVOKED'
 WHERE worker_id = ?;
 
+updateLastSeen:
+UPDATE workers
+SET last_seen_at = ?
+WHERE worker_id = ?;
+
 insertProfile:
 INSERT INTO profiles (profile_id, display_name, latest_revision, archived, created_at)
 VALUES (?, ?, ?, ?, ?);

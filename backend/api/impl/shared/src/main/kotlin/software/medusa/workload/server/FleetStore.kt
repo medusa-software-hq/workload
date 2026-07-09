@@ -24,6 +24,9 @@ interface FleetStore {
 
   suspend fun revokeWorker(workerId: WorkerId): Worker?
 
+  /** Updates `lastSeenAt` to now; a no-op if the worker doesn't exist. */
+  suspend fun touchLastSeen(workerId: WorkerId)
+
   // Profiles + revisions
 
   /** Creates a profile together with its first revision — a profile never exists without one. */

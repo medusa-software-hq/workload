@@ -117,6 +117,12 @@ class PostgresFleetStore(
         database.fleetQueries.selectWorkerById(workerId.value).executeAsOneOrNull()?.toDomain()
       }
 
+  override suspend fun touchLastSeen(workerId: WorkerId) {
+    withContext(Dispatchers.IO) {
+      database.fleetQueries.updateLastSeen(Instant.now().toOffsetDateTime(), workerId.value)
+    }
+  }
+
   override suspend fun createProfile(
       profileId: ProfileId,
       displayName: String?,

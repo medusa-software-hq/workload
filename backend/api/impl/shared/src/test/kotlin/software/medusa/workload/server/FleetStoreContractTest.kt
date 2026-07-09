@@ -88,6 +88,21 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
+  fun `touchLastSeen sets lastSeenAt on the worker`() = test { store ->
+    val created = store.createWorker(newWorker())
+    assertNull(created.lastSeenAt)
+
+    store.touchLastSeen(created.workerId)
+
+    assertNotNull(store.getWorker(created.workerId)?.lastSeenAt)
+  }
+
+  @Test
+  fun `touchLastSeen on an unknown id is a no-op`() = test { store ->
+    store.touchLastSeen(WorkerId(java.util.UUID.randomUUID()))
+  }
+
+  @Test
   fun `worker secrets are never persisted in plaintext`() = test { store ->
     val secret = generateWorkerSecret()
     val worker = store.createWorker(newWorker().copy(secretHash = hashWorkerSecret(secret)))
