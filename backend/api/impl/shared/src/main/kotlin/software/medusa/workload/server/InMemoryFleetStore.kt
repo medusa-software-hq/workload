@@ -152,4 +152,7 @@ class InMemoryFleetStore : FleetStore {
 
   override suspend fun hasGrant(workerId: WorkerId, profileId: ProfileId): Boolean =
       grants.containsKey(workerId to profileId)
+
+  override suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId> =
+      grants.keys.filter { it.first == workerId }.map { it.second }.sortedBy { it.value }
 }

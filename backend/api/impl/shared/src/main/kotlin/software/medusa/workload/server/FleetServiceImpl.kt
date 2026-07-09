@@ -51,7 +51,7 @@ private fun VerificationStatus.toProto(): VerificationStatusProto =
           VerificationStatusProto.VERIFICATION_STATUS_BINDING_MISSING
     }
 
-private fun Worker.toProto(): WorkerProto =
+private fun Worker.toProto(grantedProfileIds: List<ProfileId>): WorkerProto =
     WorkerProto.newBuilder()
         .setWorkerId(workerId.value.toString())
         .setName(name)
@@ -64,6 +64,8 @@ private fun Worker.toProto(): WorkerProto =
         .setCreatedAt(createdAt.toString())
         .setApprovedAt(approvedAt?.toString().orEmpty())
         .setApprovedBy(approvedBy.orEmpty())
+        .setLastSeenAt(lastSeenAt?.toString().orEmpty())
+        .addAllGrantedProfileIds(grantedProfileIds.map { it.value })
         .build()
 
 private fun Profile.toProto(): ProfileProto =
@@ -126,7 +128,7 @@ class FleetServiceImpl(
 
   override suspend fun listWorkers(request: ListWorkersRequest): ListWorkersResponse =
       ListWorkersResponse.newBuilder()
-          .addAllWorkers(fleetStore.listWorkers().map { it.toProto() })
+          .addAllWorkers(fleetStore.listWorkers().map { toProto(it) })
           .build()
 
   override suspend fun approveWorker(request: ApproveWorkerRequest): ApproveWorkerResponse {
@@ -141,7 +143,7 @@ class FleetServiceImpl(
         fleetStore.approveWorker(workerId, approvedBy = admin)
             ?: throw notFound("worker", request.workerId)
     auditWorkerChange("worker_approved", workerId)
-    return ApproveWorkerResponse.newBuilder().setWorker(approved.toProto()).build()
+    return ApproveWorkerResponse.newBuilder().setWorker(toProto(approved)).build()
   }
 
   override suspend fun rejectWorker(request: RejectWorkerRequest): RejectWorkerResponse {
@@ -153,7 +155,7 @@ class FleetServiceImpl(
 
     val rejected = fleetStore.rejectWorker(workerId) ?: throw notFound("worker", request.workerId)
     auditWorkerChange("worker_rejected", workerId)
-    return RejectWorkerResponse.newBuilder().setWorker(rejected.toProto()).build()
+    return RejectWorkerResponse.newBuilder().setWorker(toProto(rejected)).build()
   }
 
   override suspend fun revokeWorker(request: RevokeWorkerRequest): RevokeWorkerResponse {
@@ -165,8 +167,11 @@ class FleetServiceImpl(
 
     val revoked = fleetStore.revokeWorker(workerId) ?: throw notFound("worker", request.workerId)
     auditWorkerChange("worker_revoked", workerId)
-    return RevokeWorkerResponse.newBuilder().setWorker(revoked.toProto()).build()
+    return RevokeWorkerResponse.newBuilder().setWorker(toProto(revoked)).build()
   }
+
+  private suspend fun toProto(worker: Worker): WorkerProto =
+      worker.toProto(fleetStore.listGrantedProfileIds(worker.workerId))
 
   override suspend fun listProfiles(request: ListProfilesRequest): ListProfilesResponse =
       ListProfilesResponse.newBuilder()

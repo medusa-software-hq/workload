@@ -56,6 +56,9 @@ message Worker {
   string created_at = 8;
   string approved_at = 9;
   string approved_by = 10;
+  // Empty until M2 adds worker heartbeats.
+  string last_seen_at = 11;
+  repeated string granted_profile_ids = 12;
 }
 
 message ListWorkersRequest {}

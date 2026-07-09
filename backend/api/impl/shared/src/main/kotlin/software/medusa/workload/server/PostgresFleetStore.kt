@@ -245,4 +245,11 @@ class PostgresFleetStore(
         database.fleetQueries.selectGrant(workerId.value, profileId.value).executeAsOneOrNull() !=
             null
       }
+
+  override suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId> =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.selectGrantsByWorker(workerId.value).executeAsList().map {
+          ProfileId(it.profile_id)
+        }
+      }
 }

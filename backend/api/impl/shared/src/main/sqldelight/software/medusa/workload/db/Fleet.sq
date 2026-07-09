@@ -109,3 +109,6 @@ DELETE FROM worker_profile_grants WHERE worker_id = ? AND profile_id = ?;
 
 selectGrant:
 SELECT * FROM worker_profile_grants WHERE worker_id = ? AND profile_id = ?;
+
+selectGrantsByWorker:
+SELECT * FROM worker_profile_grants WHERE worker_id = ? ORDER BY profile_id;
