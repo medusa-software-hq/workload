@@ -1,8 +1,7 @@
 package software.medusa.workload.server
 
 /**
- * Persistence for workers, profiles/revisions, and (worker, profile) grants — the fleet
- * registration system built on top of the original single-bootstrap-token broker.
+ * Persistence for workers, profiles/revisions, and (worker, profile) grants.
  *
  * Two implementations exist, both required to pass the same contract test suite
  * (`FleetStoreContractTest`): [InMemoryFleetStore] for local dev/tests, [PostgresFleetStore] for

@@ -43,11 +43,6 @@ variable "neon_api_key" {
   sensitive   = true
 }
 
-variable "target_service_account_email" {
-  description = "Email of the worker-mvp target service account (from worker-mvp/infra's output, seeded manually once — see worker-mvp/infra/README.md)."
-  type        = string
-}
-
 # Primary Google provider
 provider "google" {
   project = module.common.gcp_meta_project_id

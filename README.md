@@ -6,24 +6,35 @@ long-lived Google credentials of their own.
 
 ## The idea
 
-A worker should be trivial to hand out and run anywhere. It gets a single bootstrap
-token — nothing more — and from that it can obtain real, short-lived GCP access on
-demand. No service-account key files, no `gcloud` login, no cloud-specific secrets
-baked into the worker.
+A worker should be trivial to hand out and run anywhere. It registers itself, an
+admin approves it once, and from then on it can obtain real, short-lived GCP access
+on demand. No service-account key files, no `gcloud` login, no cloud-specific
+secrets baked into the worker.
 
 That indirection is the core of the project: a **token broker** running in our
 already-trusted backend. The flow is:
 
-1. A worker presents its bootstrap token to the broker.
-2. The broker verifies it, then uses its own GCP identity to mint a short-lived
-   access token that **impersonates a target service account**.
-3. The worker uses that token to talk to Google Cloud (read a bucket, call an API,
+1. A worker runs `workload register`, gets a worker identity (id + secret) and a
+   confirmation code, and waits.
+2. An admin approves it in the console (matching the confirmation code) and grants
+   it one or more **profiles** — each a target service account the worker is allowed
+   to impersonate.
+3. The worker claims a token for a specific profile (`workload token --profile
+   <id>`); the broker verifies the grant, then uses its own GCP identity to mint a
+   short-lived access token that **impersonates that profile's target service
+   account**.
+4. The worker uses that token to talk to Google Cloud (read a bucket, call an API,
    etc.) for the few minutes it stays valid, then it's gone.
 
-The trust and blast radius live in one place — the broker and the IAM binding behind
-it — instead of being spread across every worker. Workers stay dumb and disposable;
-the sensitive GCP permission stays server-side and short-lived. Everything the broker
-does is audit-logged.
+The trust and blast radius live in one place — the broker and the IAM bindings
+behind it — instead of being spread across every worker. Workers stay dumb and
+disposable; the sensitive GCP permission stays server-side, scoped per profile, and
+short-lived. Everything the broker does is audit-logged.
+
+A project that wants one of its service accounts to be claimable through Workload
+opts in from its own Terraform, via the shared
+[`infra/modules/workload-impersonation/`](infra/modules/workload-impersonation)
+module — ownership of the grant stays with whoever owns that Terraform.
 
 ## What's in the repo
 
@@ -31,19 +42,26 @@ The repo is both the broker/worker mechanism above and the surrounding platform
 scaffolding a real service needs, so a new worker can be dropped in with batteries
 included:
 
-- **`cli/`** — the worker, a standalone Kotlin CLI. It knows how to fetch a brokered
-  token and use it against GCP. This is the "plug" end of plug-and-play.
-- **`backend/`** — a Kotlin/Armeria service on Cloud Run that hosts the token broker,
-  plus the reference API it grew out of. Storage and auth are pluggable so the same
-  core runs in production and locally.
+- **`cli/`** (`ms-workload`) — the worker, a standalone Kotlin CLI. `register`,
+  `status`, `unregister`, and `token`/`read-object` to claim and use a brokered
+  token. This is the "plug" end of plug-and-play.
+- **`backend/`** — a Kotlin/Armeria service on Cloud Run that hosts the worker
+  registration/token-broker plane and the admin `FleetService` (workers, profiles,
+  grants) the console talks to, plus the reference API it grew out of. Storage and
+  auth are pluggable so the same core runs in production and locally.
 - **`worker-mvp/`** — a deliberately throwaway, separately-managed slice of infra
-  (target service account, sample resources, cross-project IAM) that proves the
-  broker flow end to end without touching the real backend.
-- **`apps/web/`** — a React/Vite SPA, the human-facing front door, served by Caddy.
+  (a target service account, sample resources, and a `workload-impersonation`
+  binding) that proves the broker flow end to end without touching the real
+  backend.
+- **`apps/web/`** — a React/Vite SPA, the human-facing front door (Workers and
+  Profiles console pages), served by Caddy.
 - **`proto/`** — the protobuf contract shared between frontend and backend; the
-  single source of truth for the API, with client and server generated from it.
+  single source of truth for the admin API, with client and server generated from
+  it.
 - **`infra/`** — shared platform infrastructure (Terraform), split by concern into
-  separate roots with their own remote state rather than one monolith.
+  separate roots with their own remote state rather than one monolith. Includes the
+  `modules/workload-impersonation/` module that other projects consume to opt a
+  service account in to being claimable.
 
 ## How it fits together
 
