@@ -49,6 +49,8 @@ private fun VerificationStatus.toProto(): VerificationStatusProto =
       VerificationStatus.VERIFIED -> VerificationStatusProto.VERIFICATION_STATUS_VERIFIED
       VerificationStatus.BINDING_MISSING ->
           VerificationStatusProto.VERIFICATION_STATUS_BINDING_MISSING
+      VerificationStatus.SECRET_INACCESSIBLE ->
+          VerificationStatusProto.VERIFICATION_STATUS_SECRET_INACCESSIBLE
     }
 
 private fun Worker.toProto(grantedProfileIds: List<ProfileId>): WorkerProto =
@@ -86,6 +88,8 @@ private fun ProfileRevision.toProto(): ProfileRevisionProto =
         .setCreatedBy(createdBy)
         .setNote(note.orEmpty())
         .setVerificationStatus(verificationStatus.toProto())
+        .putAllEnvVars(envVars)
+        .putAllSecretEnvVars(secretEnvVars)
         .build()
 
 private fun parseWorkerId(raw: String): WorkerId =
@@ -107,6 +111,45 @@ private fun requireTargetServiceAccount(value: String) {
     throw StatusException(
         Status.INVALID_ARGUMENT.withDescription("target_service_account is required")
     )
+  }
+}
+
+private val envVarNamePattern = Regex("[A-Z_][A-Z0-9_]*")
+private val secretResourceNamePattern =
+    Regex("""projects/[^/]+/secrets/[^/]+/versions/(latest|\d+)""")
+
+/**
+ * Validates env var names in both maps (`[A-Z_][A-Z0-9_]*`, no collisions between the two maps) and
+ * the resource-name format of every `secretEnvVars` value.
+ */
+private fun requireValidEnvVars(envVars: Map<String, String>, secretEnvVars: Map<String, String>) {
+  for (name in envVars.keys + secretEnvVars.keys) {
+    if (!envVarNamePattern.matches(name)) {
+      throw StatusException(
+          Status.INVALID_ARGUMENT.withDescription(
+              "env var name '$name' must match $envVarNamePattern"
+          )
+      )
+    }
+  }
+
+  val collisions = envVars.keys.intersect(secretEnvVars.keys)
+  if (collisions.isNotEmpty()) {
+    throw StatusException(
+        Status.INVALID_ARGUMENT.withDescription(
+            "env var name(s) ${collisions.sorted().joinToString()} set in both env_vars and secret_env_vars"
+        )
+    )
+  }
+
+  for ((name, resourceName) in secretEnvVars) {
+    if (!secretResourceNamePattern.matches(resourceName)) {
+      throw StatusException(
+          Status.INVALID_ARGUMENT.withDescription(
+              "secret_env_vars['$name'] = '$resourceName' must match $secretResourceNamePattern"
+          )
+      )
+    }
   }
 }
 
@@ -181,6 +224,7 @@ class FleetServiceImpl(
   override suspend fun createProfile(request: CreateProfileRequest): CreateProfileResponse {
     val profileId = parseProfileId(request.profileId)
     requireTargetServiceAccount(request.targetServiceAccount)
+    requireValidEnvVars(request.envVarsMap, request.secretEnvVarsMap)
     if (fleetStore.getProfile(profileId) != null) {
       throw StatusException(
           Status.ALREADY_EXISTS.withDescription("Profile '${profileId.value}' already exists")
@@ -196,6 +240,8 @@ class FleetServiceImpl(
                 targetServiceAccount = request.targetServiceAccount,
                 createdBy = admin,
                 note = request.note.ifBlank { null },
+                envVars = request.envVarsMap,
+                secretEnvVars = request.secretEnvVarsMap,
             ),
         )
     val revision = verifyAndRecord(profileId, fleetStore.getLatestProfileRevision(profileId)!!)
@@ -209,6 +255,7 @@ class FleetServiceImpl(
   override suspend fun updateProfile(request: UpdateProfileRequest): UpdateProfileResponse {
     val profileId = parseProfileId(request.profileId)
     requireTargetServiceAccount(request.targetServiceAccount)
+    requireValidEnvVars(request.envVarsMap, request.secretEnvVarsMap)
     val existing = fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
     if (existing.archived) {
       throw failedPrecondition("profile '${profileId.value}' is archived")
@@ -222,6 +269,8 @@ class FleetServiceImpl(
                 targetServiceAccount = request.targetServiceAccount,
                 createdBy = admin,
                 note = request.note.ifBlank { null },
+                envVars = request.envVarsMap,
+                secretEnvVars = request.secretEnvVarsMap,
             ),
         )
     val revision = verifyAndRecord(profileId, appended)
@@ -313,7 +362,7 @@ class FleetServiceImpl(
       profileId: ProfileId,
       revision: ProfileRevision,
   ): ProfileRevision {
-    val status = impersonationVerifier.verify(revision.targetServiceAccount)
+    val status = impersonationVerifier.verify(revision.targetServiceAccount, revision.secretEnvVars)
     audit(
         AuditLogEntry(
             event = "profile_revision_verification",
