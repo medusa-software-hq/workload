@@ -13,11 +13,11 @@ are added:
 
 ## Worker API path prefix
 
-All worker-facing HTTP endpoints (e.g. the token broker) are mounted under
-`/<uuid>/worker/v1/...` purely to shed bot/scanner noise before it reaches billable
-logic — it is **not** a security boundary. Unlike the worker-mvp bootstrap token, this
-UUID is generated and fully managed by Terraform (`random_uuid.worker_api_path_prefix`
-in `gcp-secret-manager.tf`), since there's no human-approval step and rotating it is
+All worker-facing HTTP endpoints (registration, self-status, the token broker) are
+mounted under `/<uuid>/worker/v1/...` purely to shed bot/scanner noise before it
+reaches billable logic — it is **not** a security boundary. It is generated and
+fully managed by Terraform (`random_uuid.worker_api_path_prefix` in
+`gcp-secret-manager.tf`), since there's no human-approval step and rotating it is
 just a re-apply (which strands any CLI configs pointing at the old value — an accepted,
 crude kill switch).
 

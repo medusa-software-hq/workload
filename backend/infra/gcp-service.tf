@@ -50,21 +50,6 @@ resource "google_cloud_run_v2_service" "primary" {
       }
 
       env {
-        name  = "WORKER_TOKEN_BROKER_ENABLED"
-        value = "true"
-      }
-
-      env {
-        name  = "TARGET_SERVICE_ACCOUNT_EMAIL"
-        value = var.target_service_account_email
-      }
-
-      env {
-        name  = "BOOTSTRAP_TOKEN_SECRET_NAME"
-        value = "projects/${var.gcp_project_id}/secrets/${google_secret_manager_secret.worker_mvp_bootstrap_token.secret_id}/versions/latest"
-      }
-
-      env {
         name  = "TOKEN_LIFETIME_SECONDS"
         value = "900"
       }
