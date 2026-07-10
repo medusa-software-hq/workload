@@ -14,7 +14,12 @@ import kotlinx.serialization.encodeToString
 
 private val pollableStatuses = setOf(WorkerStatus.PENDING, WorkerStatus.ACTIVE)
 
-@Serializable internal data class SelfStatusResponse(val status: String, val name: String)
+@Serializable
+internal data class SelfStatusResponse(
+    val status: String,
+    val name: String,
+    val grantedProfileIds: List<String> = emptyList(),
+)
 
 /**
  * Implements `GET /worker/v1/registrations/self`: a worker polling its own approval status,
@@ -59,9 +64,19 @@ class SelfStatusService(
                     result = "success",
                 )
             )
+            val grantedProfileIds =
+                if (worker.status == WorkerStatus.ACTIVE) {
+                  runBlocking { fleetStore.listGrantedProfileIds(worker.workerId) }.map { it.value }
+                } else {
+                  emptyList()
+                }
             jsonResponse(
                 HttpStatus.OK,
-                SelfStatusResponse(status = worker.status.name.lowercase(), name = worker.name),
+                SelfStatusResponse(
+                    status = worker.status.name.lowercase(),
+                    name = worker.name,
+                    grantedProfileIds = grantedProfileIds,
+                ),
             )
           }
         },
