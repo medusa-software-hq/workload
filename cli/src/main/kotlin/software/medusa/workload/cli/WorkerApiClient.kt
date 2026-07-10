@@ -31,6 +31,17 @@ data class TokenClaimResponse(
     val revision: Int,
 )
 
+@Serializable
+data class WorkerClaimResponse(
+    val accessToken: String,
+    val expiresAt: String,
+    val serviceAccount: String,
+    val profileId: String,
+    val revision: Int,
+    val envVars: Map<String, String> = emptyMap(),
+    val secretEnvVars: Map<String, String> = emptyMap(),
+)
+
 @Serializable private data class RegisterWorkerRequest(val name: String, val hostname: String?)
 
 @Serializable private data class TokenClaimRequest(val profileId: String)
@@ -98,6 +109,31 @@ fun claimToken(
   val request =
       HttpRequest.newBuilder()
           .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v1/token"))
+          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Content-Type", "application/json")
+          .timeout(Duration.ofSeconds(10))
+          .POST(
+              HttpRequest.BodyPublishers.ofString(json.encodeToString(TokenClaimRequest(profileId)))
+          )
+          .build()
+
+  val response = httpClient.send(request, BodyHandlers.ofString())
+  if (response.statusCode() != 200) {
+    throw WorkerApiException(response.statusCode(), errorReason(response.body()))
+  }
+  return json.decodeFromString(response.body())
+}
+
+/** Calls `POST <brokerBaseUrl>/worker/v1/claim`: the token plus the revision's env payload. */
+fun claimWorkload(
+    brokerBaseUrl: String,
+    workerId: String,
+    workerSecret: String,
+    profileId: String,
+): WorkerClaimResponse {
+  val request =
+      HttpRequest.newBuilder()
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v1/claim"))
           .header("Authorization", "Bearer $workerId.$workerSecret")
           .header("Content-Type", "application/json")
           .timeout(Duration.ofSeconds(10))
