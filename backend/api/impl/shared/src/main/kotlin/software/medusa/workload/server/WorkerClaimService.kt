@@ -12,31 +12,34 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 
-@Serializable internal data class TokenClaimRequest(val profileId: String)
-
 @Serializable
-internal data class WorkerTokenResponse(
+internal data class WorkerClaimResponse(
     val accessToken: String,
     val expiresAt: String,
     val serviceAccount: String,
     val profileId: String,
     val revision: Int,
+    val envVars: Map<String, String> = emptyMap(),
+    val secretEnvVars: Map<String, String> = emptyMap(),
 )
 
 /**
- * Implements `POST /worker/v1/token`: a worker (authenticated as `Bearer
- * <workerId>.<workerSecret>`) claims a short-lived GCP access token impersonating the target
- * service account of a profile granted to it. Identity-only — for the token plus the revision's
- * full env/secret payload, see [WorkerClaimService] (`/worker/v1/claim`).
+ * Implements `POST /worker/v1/claim`: like `/worker/v1/token`, but the response also carries the
+ * granted revision's env var payload — the foundation `workload exec` (M2 path A) and later
+ * `workload run` build on. Secret **references only** ever cross the broker; values are resolved
+ * worker-side, directly against Secret Manager, using the minted impersonated token.
  *
- * Never logs the worker secret, the Authorization header, or the minted access token.
+ * Never logs the worker secret, the Authorization header, the minted access token, env values, or
+ * secret_env_vars values (only their keys ride in the audit log via [AuditLogEntry], and even that
+ * only implicitly through the revision reference — never the secret payload itself, which this
+ * broker never touches).
  */
-class WorkerTokenBrokerService(
+class WorkerClaimService(
     private val fleetStore: FleetStore,
     private val tokenMinter: TokenMinter,
     private val tokenLifetimeSeconds: Long = 900L,
 ) : HttpService {
-  private val resolver = WorkerClaimResolver(fleetStore, auditEventPrefix = "worker_gcp_token")
+  private val resolver = WorkerClaimResolver(fleetStore, auditEventPrefix = "worker_gcp_claim")
 
   override fun serve(ctx: ServiceRequestContext, req: HttpRequest): HttpResponse {
     val requestId = UUID.randomUUID().toString()
@@ -72,12 +75,14 @@ class WorkerTokenBrokerService(
       )
       jsonResponse(
           HttpStatus.OK,
-          WorkerTokenResponse(
+          WorkerClaimResponse(
               accessToken = minted.accessToken,
               expiresAt = minted.expiresAt.toString(),
               serviceAccount = revision.targetServiceAccount,
               profileId = profileId.value,
               revision = revision.revision,
+              envVars = revision.envVars,
+              secretEnvVars = revision.secretEnvVars,
           ),
       )
     } catch (e: Exception) {
@@ -95,7 +100,7 @@ class WorkerTokenBrokerService(
     }
   }
 
-  private fun jsonResponse(status: HttpStatus, body: WorkerTokenResponse): HttpResponse =
+  private fun jsonResponse(status: HttpStatus, body: WorkerClaimResponse): HttpResponse =
       HttpResponse.of(status, MediaType.JSON, workerJson.encodeToString(body))
 
   private fun jsonResponse(status: HttpStatus, body: WorkerErrorResponse): HttpResponse =
@@ -114,7 +119,7 @@ class WorkerTokenBrokerService(
   ) {
     audit(
         AuditLogEntry(
-            event = "worker_gcp_token_${if (result == "success") "issued" else "denied"}",
+            event = "worker_gcp_claim_${if (result == "success") "issued" else "denied"}",
             requestId = requestId,
             timestamp = Instant.now().toString(),
             sourceIp = sourceIp,

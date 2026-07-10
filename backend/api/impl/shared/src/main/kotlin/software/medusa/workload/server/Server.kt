@@ -63,6 +63,7 @@ fun buildServer(
     fleetStore: FleetStore,
     impersonationVerifier: ImpersonationVerifier,
     workerTokenBroker: HttpService? = null,
+    workerClaimService: HttpService? = null,
     registrationService: HttpService? = null,
     selfStatusService: HttpService? = null,
 ): Server {
@@ -100,11 +101,18 @@ fun buildServer(
       workerTokenBroker?.decorate(
           ThrottlingService.newDecorator(ThrottlingStrategy.rateLimiting(workerTokenBrokerQps))
       )
+  val throttledWorkerClaimService =
+      workerClaimService?.decorate(
+          ThrottlingService.newDecorator(ThrottlingStrategy.rateLimiting(workerTokenBrokerQps))
+      )
 
   val workerPlaneRoutes =
       buildMap<WorkerPlaneRoute, HttpService> {
         throttledWorkerTokenBroker?.let {
           put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/token"), it)
+        }
+        throttledWorkerClaimService?.let {
+          put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/claim"), it)
         }
         registrationService?.let {
           put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/registrations"), it)
