@@ -52,6 +52,8 @@ function fakeRevision(overrides: Partial<ProfileRevision> = {}): ProfileRevision
     createdBy: 'admin@example.com',
     note: '',
     verificationStatus: VerificationStatus.VERIFIED,
+    envVars: {},
+    secretEnvVars: {},
     ...overrides,
   } as ProfileRevision;
 }
@@ -132,6 +134,8 @@ test('creating a valid profile calls createProfile and refreshes', async () => {
         displayName: '',
         targetServiceAccount: 'sa@project.iam.gserviceaccount.com',
         note: '',
+        envVars: {},
+        secretEnvVars: {},
       },
       { headers: { Authorization: 'Bearer tok' } }
     );
@@ -158,6 +162,8 @@ test('editing a profile appends a revision without asking for a new ID', async (
         profileId: 'my-profile-1',
         targetServiceAccount: 'sa-v2@project.iam.gserviceaccount.com',
         note: '',
+        envVars: {},
+        secretEnvVars: {},
       },
       { headers: { Authorization: 'Bearer tok' } }
     );
@@ -225,4 +231,151 @@ test('profile details show revision history and granted workers', async () => {
   expect(within(dialog).getByText('Revision history')).toBeInTheDocument();
   expect(within(dialog).getByText('Granted workers')).toBeInTheDocument();
   expect(await within(dialog).findByText('jakub-mbp')).toBeInTheDocument();
+});
+
+test('creating a profile with an env var and a secret env var sends both maps', async () => {
+  const user = userEvent.setup();
+  listProfiles
+    .mockResolvedValueOnce({ profiles: [] })
+    .mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+
+  await user.click(within(dialog).getByRole('button', { name: 'Add env vars' }));
+  const [nameInput] = within(dialog).getAllByPlaceholderText('NAME');
+  await user.type(nameInput, 'MODE');
+  const [valueInput] = within(dialog).getAllByLabelText('Value');
+  await user.type(valueInput, 'batch');
+
+  await user.click(within(dialog).getByRole('button', { name: 'Add secret env vars' }));
+  const nameInputs = within(dialog).getAllByPlaceholderText('NAME');
+  await user.type(nameInputs[1], 'API_KEY');
+  const secretInput = within(dialog).getByLabelText('Secret Manager resource name');
+  await user.type(secretInput, 'projects/p/secrets/api-key/versions/latest');
+
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  await waitFor(() => {
+    expect(createProfile).toHaveBeenCalledWith(
+      {
+        profileId: 'my-profile-1',
+        displayName: '',
+        targetServiceAccount: 'sa@project.iam.gserviceaccount.com',
+        note: '',
+        envVars: { MODE: 'batch' },
+        secretEnvVars: { API_KEY: 'projects/p/secrets/api-key/versions/latest' },
+      },
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+});
+
+test('an invalid env var name is rejected client-side without calling createProfile', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.click(within(dialog).getByRole('button', { name: 'Add env vars' }));
+  const [nameInput] = within(dialog).getAllByPlaceholderText('NAME');
+  await user.type(nameInput, 'not-valid');
+
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  expect(await within(dialog).findByText(/uppercase letters/)).toBeInTheDocument();
+  expect(createProfile).not.toHaveBeenCalled();
+});
+
+test('a malformed secret resource name is rejected client-side', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.click(within(dialog).getByRole('button', { name: 'Add secret env vars' }));
+  const [nameInput] = within(dialog).getAllByPlaceholderText('NAME');
+  await user.type(nameInput, 'API_KEY');
+  const secretInput = within(dialog).getByLabelText('Secret Manager resource name');
+  await user.type(secretInput, 'not-a-resource-name');
+
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  expect(await within(dialog).findByText(/projects\/<project>/)).toBeInTheDocument();
+  expect(createProfile).not.toHaveBeenCalled();
+});
+
+test('editing a profile pre-populates its existing env vars', async () => {
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [fakeRevision({ envVars: { MODE: 'batch' } })],
+  });
+  const user = userEvent.setup();
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Edit' }));
+  const dialog = await screen.findByRole('dialog');
+
+  expect(within(dialog).getByDisplayValue('MODE')).toBeInTheDocument();
+  expect(within(dialog).getByDisplayValue('batch')).toBeInTheDocument();
+});
+
+test('a secret_inaccessible profile shows the remediation alert when editing', async () => {
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({
+        verificationStatus: VerificationStatus.SECRET_INACCESSIBLE,
+        secretEnvVars: { API_KEY: 'projects/p/secrets/api-key/versions/latest' },
+      }),
+    ],
+  });
+  const user = userEvent.setup();
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Edit' }));
+  const dialog = await screen.findByRole('dialog');
+
+  expect(await within(dialog).findByText(/secret_ids input/)).toBeInTheDocument();
+});
+
+test('revision history shows an env diff between adjacent revisions', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({ revision: 1, envVars: { MODE: 'batch', OLD_VAR: 'x' } }),
+      fakeRevision({ revision: 2, envVars: { MODE: 'streaming', NEW_VAR: 'y' } }),
+    ],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Details' }));
+  const dialog = await screen.findByRole('dialog');
+
+  expect(within(dialog).getByText('Initial revision')).toBeInTheDocument();
+  expect(within(dialog).getByText('+NEW_VAR')).toBeInTheDocument();
+  expect(within(dialog).getByText('~MODE')).toBeInTheDocument();
+  expect(within(dialog).getByText('-OLD_VAR')).toBeInTheDocument();
 });

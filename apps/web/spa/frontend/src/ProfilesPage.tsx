@@ -1,6 +1,7 @@
 import { createClient } from '@connectrpc/connect';
 import { createGrpcWebTransport } from '@connectrpc/connect-web';
 import {
+  ActionIcon,
   Alert,
   Badge,
   Button,
@@ -17,7 +18,12 @@ import {
 } from '@mantine/core';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { validateProfileId, validateServiceAccount } from './fleetValidation.ts';
+import {
+  validateEnvVarName,
+  validateProfileId,
+  validateSecretResourceName,
+  validateServiceAccount,
+} from './fleetValidation.ts';
 import {
   FleetService,
   VerificationStatus,
@@ -26,6 +32,52 @@ import {
   type Worker,
 } from './gen/medusa/workload/v1/fleet_service_pb.ts';
 import { useAuth } from './useAuth.tsx';
+
+type EnvRow = { name: string; value: string };
+
+function recordToRows(record: Record<string, string>): EnvRow[] {
+  return Object.entries(record).map(([name, value]) => ({ name, value }));
+}
+
+function rowsToRecord(rows: EnvRow[]): Record<string, string> {
+  const record: Record<string, string> = {};
+  for (const row of rows) {
+    if (row.name.trim() !== '') {
+      record[row.name.trim()] = row.value;
+    }
+  }
+  return record;
+}
+
+/** Blank-named rows are ignored (not yet filled in); everything else must be valid and unique. */
+function envVarRowsAreValid(envVars: EnvRow[], secretEnvVars: EnvRow[]): boolean {
+  const namesSeen = new Set<string>();
+  for (const row of envVars) {
+    const name = row.name.trim();
+    if (name === '') {
+      continue;
+    }
+    if (validateEnvVarName(name) !== null || namesSeen.has(name)) {
+      return false;
+    }
+    namesSeen.add(name);
+  }
+  for (const row of secretEnvVars) {
+    const name = row.name.trim();
+    if (name === '') {
+      continue;
+    }
+    if (
+      validateEnvVarName(name) !== null ||
+      validateSecretResourceName(row.value.trim()) !== null ||
+      namesSeen.has(name)
+    ) {
+      return false;
+    }
+    namesSeen.add(name);
+  }
+  return true;
+}
 
 const API_URL = import.meta.env.VITE_API_URL as string;
 const POLL_INTERVAL_MS = 5000;
@@ -81,7 +133,158 @@ function VerificationBadge({ status }: { status: VerificationStatus }) {
   );
 }
 
-type EditState = { profileId: string; currentServiceAccount: string } | null;
+/**
+ * Name/value rows for either env_vars (plain) or secret_env_vars (Secret Manager resource
+ * references — never a value; the console never reads secret values, only resource names).
+ */
+function EnvVarRowsEditor({
+  label,
+  rows,
+  onChange,
+  valueLabel,
+  valuePlaceholder,
+  validateName,
+  validateValue,
+  secretInaccessible,
+}: {
+  label: string;
+  rows: EnvRow[];
+  onChange: (rows: EnvRow[]) => void;
+  valueLabel: string;
+  valuePlaceholder: string;
+  validateName: (name: string) => string | null;
+  validateValue?: (value: string) => string | null;
+  secretInaccessible?: boolean;
+}) {
+  function update(index: number, patch: Partial<EnvRow>) {
+    onChange(rows.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
+
+  function remove(index: number) {
+    onChange(rows.filter((_, i) => i !== index));
+  }
+
+  return (
+    <Stack gap="xs">
+      <Text size="sm" fw={500}>
+        {label}
+      </Text>
+      {rows.length === 0 && (
+        <Text size="sm" c="dimmed">
+          None
+        </Text>
+      )}
+      {rows.map((row, index) => {
+        const nameError = row.name.trim() !== '' ? validateName(row.name.trim()) : null;
+        const valueError =
+          validateValue && row.value.trim() !== '' ? validateValue(row.value.trim()) : null;
+        return (
+          <Group key={index} gap="xs" align="flex-start" wrap="nowrap">
+            <TextInput
+              placeholder="NAME"
+              value={row.name}
+              onChange={(e) => update(index, { name: e.currentTarget.value })}
+              error={nameError}
+              style={{ flex: 1 }}
+            />
+            <TextInput
+              placeholder={valuePlaceholder}
+              aria-label={valueLabel}
+              value={row.value}
+              onChange={(e) => update(index, { value: e.currentTarget.value })}
+              error={valueError}
+              style={{ flex: 2 }}
+            />
+            <ActionIcon
+              variant="subtle"
+              color="red"
+              aria-label={`Remove ${row.name || 'row'}`}
+              onClick={() => remove(index)}
+              mt={4}
+            >
+              ✕
+            </ActionIcon>
+          </Group>
+        );
+      })}
+      {secretInaccessible && rows.length > 0 && (
+        <Alert color="red" variant="light">
+          The target service account can't read one or more of these secrets. Grant it
+          roles/secretmanager.secretAccessor via the workload-impersonation module's secret_ids
+          input, then re-verify.
+        </Alert>
+      )}
+      <Button
+        variant="default"
+        size="xs"
+        onClick={() => onChange([...rows, { name: '', value: '' }])}
+      >
+        Add {label.toLowerCase()}
+      </Button>
+    </Stack>
+  );
+}
+
+/** Added / removed / changed names between two revisions' env maps — never values for secrets. */
+function EnvDiff({ previous, current }: { previous: ProfileRevision; current: ProfileRevision }) {
+  const added: string[] = [];
+  const removed: string[] = [];
+  const changed: string[] = [];
+
+  function diffMaps(prevMap: Record<string, string>, currMap: Record<string, string>) {
+    for (const name of Object.keys(currMap)) {
+      if (!(name in prevMap)) {
+        added.push(name);
+      } else if (prevMap[name] !== currMap[name]) {
+        changed.push(name);
+      }
+    }
+    for (const name of Object.keys(prevMap)) {
+      if (!(name in currMap)) {
+        removed.push(name);
+      }
+    }
+  }
+
+  diffMaps(previous.envVars, current.envVars);
+  diffMaps(previous.secretEnvVars, current.secretEnvVars);
+
+  if (added.length === 0 && removed.length === 0 && changed.length === 0) {
+    return (
+      <Text size="sm" c="dimmed">
+        No env changes
+      </Text>
+    );
+  }
+
+  return (
+    <Group gap={4}>
+      {added.sort().map((name) => (
+        <Badge key={`added-${name}`} color="green" variant="light" size="sm">
+          +{name}
+        </Badge>
+      ))}
+      {changed.sort().map((name) => (
+        <Badge key={`changed-${name}`} color="yellow" variant="light" size="sm">
+          ~{name}
+        </Badge>
+      ))}
+      {removed.sort().map((name) => (
+        <Badge key={`removed-${name}`} color="red" variant="light" size="sm">
+          -{name}
+        </Badge>
+      ))}
+    </Group>
+  );
+}
+
+type EditState = {
+  profileId: string;
+  currentServiceAccount: string;
+  currentEnvVars: Record<string, string>;
+  currentSecretEnvVars: Record<string, string>;
+  currentVerificationStatus: VerificationStatus;
+} | null;
 
 export function ProfilesPage({ token }: { token: string }) {
   const { handleUnauthorized } = useAuth();
@@ -269,6 +472,10 @@ export function ProfilesPage({ token }: { token: string }) {
                             setEditState({
                               profileId: profile.profileId,
                               currentServiceAccount: revision?.targetServiceAccount ?? '',
+                              currentEnvVars: revision?.envVars ?? {},
+                              currentSecretEnvVars: revision?.secretEnvVars ?? {},
+                              currentVerificationStatus:
+                                revision?.verificationStatus ?? VerificationStatus.UNVERIFIED,
                             })
                           }
                         >
@@ -358,32 +565,44 @@ export function ProfilesPage({ token }: { token: string }) {
               {detailsRevisions === null ? (
                 <Loader size="sm" />
               ) : (
-                <Table striped withTableBorder>
-                  <Table.Thead>
-                    <Table.Tr>
-                      <Table.Th>Rev</Table.Th>
-                      <Table.Th>Target service account</Table.Th>
-                      <Table.Th>Created by</Table.Th>
-                      <Table.Th>Note</Table.Th>
-                      <Table.Th>Created at</Table.Th>
-                      <Table.Th>Verification</Table.Th>
-                    </Table.Tr>
-                  </Table.Thead>
-                  <Table.Tbody>
-                    {detailsRevisions.map((revision) => (
-                      <Table.Tr key={revision.revision}>
-                        <Table.Td>{revision.revision}</Table.Td>
-                        <Table.Td>{revision.targetServiceAccount}</Table.Td>
-                        <Table.Td>{revision.createdBy}</Table.Td>
-                        <Table.Td>{revision.note || '—'}</Table.Td>
-                        <Table.Td>{formatDate(revision.createdAt)}</Table.Td>
-                        <Table.Td>
-                          <VerificationBadge status={revision.verificationStatus} />
-                        </Table.Td>
+                <Table.ScrollContainer minWidth={800}>
+                  <Table striped withTableBorder>
+                    <Table.Thead>
+                      <Table.Tr>
+                        <Table.Th>Rev</Table.Th>
+                        <Table.Th>Target service account</Table.Th>
+                        <Table.Th>Created by</Table.Th>
+                        <Table.Th>Note</Table.Th>
+                        <Table.Th>Created at</Table.Th>
+                        <Table.Th>Verification</Table.Th>
+                        <Table.Th>Env changes</Table.Th>
                       </Table.Tr>
-                    ))}
-                  </Table.Tbody>
-                </Table>
+                    </Table.Thead>
+                    <Table.Tbody>
+                      {detailsRevisions.map((revision, index) => (
+                        <Table.Tr key={revision.revision}>
+                          <Table.Td>{revision.revision}</Table.Td>
+                          <Table.Td>{revision.targetServiceAccount}</Table.Td>
+                          <Table.Td>{revision.createdBy}</Table.Td>
+                          <Table.Td>{revision.note || '—'}</Table.Td>
+                          <Table.Td>{formatDate(revision.createdAt)}</Table.Td>
+                          <Table.Td>
+                            <VerificationBadge status={revision.verificationStatus} />
+                          </Table.Td>
+                          <Table.Td>
+                            {index === 0 ? (
+                              <Text size="sm" c="dimmed">
+                                Initial revision
+                              </Text>
+                            ) : (
+                              <EnvDiff previous={detailsRevisions[index - 1]} current={revision} />
+                            )}
+                          </Table.Td>
+                        </Table.Tr>
+                      ))}
+                    </Table.Tbody>
+                  </Table>
+                </Table.ScrollContainer>
               )}
             </Stack>
             <Stack gap="xs">
@@ -426,6 +645,8 @@ function CreateProfileModal({
   const [note, setNote] = useState('');
   const [profileIdError, setProfileIdError] = useState<string | null>(null);
   const [serviceAccountError, setServiceAccountError] = useState<string | null>(null);
+  const [envVars, setEnvVars] = useState<EnvRow[]>([]);
+  const [secretEnvVars, setSecretEnvVars] = useState<EnvRow[]>([]);
 
   function reset() {
     setProfileId('');
@@ -434,6 +655,8 @@ function CreateProfileModal({
     setNote('');
     setProfileIdError(null);
     setServiceAccountError(null);
+    setEnvVars([]);
+    setSecretEnvVars([]);
   }
 
   async function submit() {
@@ -441,12 +664,19 @@ function CreateProfileModal({
     const saError = validateServiceAccount(targetServiceAccount);
     setProfileIdError(idError);
     setServiceAccountError(saError);
-    if (idError || saError) {
+    if (idError || saError || !envVarRowsAreValid(envVars, secretEnvVars)) {
       return;
     }
     try {
       await client.createProfile(
-        { profileId, displayName, targetServiceAccount, note },
+        {
+          profileId,
+          displayName,
+          targetServiceAccount,
+          note,
+          envVars: rowsToRecord(envVars),
+          secretEnvVars: rowsToRecord(secretEnvVars),
+        },
         { headers }
       );
       toast.success(`Created ${profileId}`);
@@ -490,6 +720,23 @@ function CreateProfileModal({
           required
         />
         <Textarea label="Note" value={note} onChange={(e) => setNote(e.currentTarget.value)} />
+        <EnvVarRowsEditor
+          label="Env vars"
+          rows={envVars}
+          onChange={setEnvVars}
+          valueLabel="Value"
+          valuePlaceholder="value"
+          validateName={validateEnvVarName}
+        />
+        <EnvVarRowsEditor
+          label="Secret env vars"
+          rows={secretEnvVars}
+          onChange={setSecretEnvVars}
+          valueLabel="Secret Manager resource name"
+          valuePlaceholder="projects/p/secrets/name/versions/latest"
+          validateName={validateEnvVarName}
+          validateValue={validateSecretResourceName}
+        />
         <Group justify="flex-end">
           <Button variant="default" onClick={onClose}>
             Cancel
@@ -517,12 +764,16 @@ function EditProfileModal({
   const [targetServiceAccount, setTargetServiceAccount] = useState('');
   const [note, setNote] = useState('');
   const [serviceAccountError, setServiceAccountError] = useState<string | null>(null);
+  const [envVars, setEnvVars] = useState<EnvRow[]>([]);
+  const [secretEnvVars, setSecretEnvVars] = useState<EnvRow[]>([]);
 
   useEffect(() => {
     if (state) {
       setTargetServiceAccount(state.currentServiceAccount);
       setNote('');
       setServiceAccountError(null);
+      setEnvVars(recordToRows(state.currentEnvVars));
+      setSecretEnvVars(recordToRows(state.currentSecretEnvVars));
     }
   }, [state]);
 
@@ -532,12 +783,18 @@ function EditProfileModal({
     }
     const saError = validateServiceAccount(targetServiceAccount);
     setServiceAccountError(saError);
-    if (saError) {
+    if (saError || !envVarRowsAreValid(envVars, secretEnvVars)) {
       return;
     }
     try {
       await client.updateProfile(
-        { profileId: state.profileId, targetServiceAccount, note },
+        {
+          profileId: state.profileId,
+          targetServiceAccount,
+          note,
+          envVars: rowsToRecord(envVars),
+          secretEnvVars: rowsToRecord(secretEnvVars),
+        },
         { headers }
       );
       toast.success(`Updated ${state.profileId}`);
@@ -567,6 +824,26 @@ function EditProfileModal({
             placeholder="Why this change?"
             value={note}
             onChange={(e) => setNote(e.currentTarget.value)}
+          />
+          <EnvVarRowsEditor
+            label="Env vars"
+            rows={envVars}
+            onChange={setEnvVars}
+            valueLabel="Value"
+            valuePlaceholder="value"
+            validateName={validateEnvVarName}
+          />
+          <EnvVarRowsEditor
+            label="Secret env vars"
+            rows={secretEnvVars}
+            onChange={setSecretEnvVars}
+            valueLabel="Secret Manager resource name"
+            valuePlaceholder="projects/p/secrets/name/versions/latest"
+            validateName={validateEnvVarName}
+            validateValue={validateSecretResourceName}
+            secretInaccessible={
+              state.currentVerificationStatus === VerificationStatus.SECRET_INACCESSIBLE
+            }
           />
           <Group justify="flex-end">
             <Button variant="default" onClick={onClose}>
