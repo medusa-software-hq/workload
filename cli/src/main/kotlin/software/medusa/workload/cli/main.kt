@@ -9,5 +9,13 @@ class MainCommand : NoOpCliktCommand()
 fun main(
     args: Array<String>,
 ) {
-  MainCommand().subcommands(TokenCommand(), ReadObjectCommand()).main(args)
+  MainCommand()
+      .subcommands(
+          TokenCommand(),
+          ReadObjectCommand(),
+          RegisterCommand(),
+          StatusCommand(),
+          UnregisterCommand(),
+      )
+      .main(args)
 }
