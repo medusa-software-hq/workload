@@ -61,6 +61,19 @@ function VerificationBadge({ status }: { status: VerificationStatus }) {
       </Tooltip>
     );
   }
+  if (status === VerificationStatus.SECRET_INACCESSIBLE) {
+    return (
+      <Tooltip
+        multiline
+        w={280}
+        label="The target service account can't read one or more referenced secrets. Has it been granted secretAccessor on each secret_env_vars reference?"
+      >
+        <Badge color="red" variant="light" miw={90}>
+          Secret inaccessible
+        </Badge>
+      </Tooltip>
+    );
+  }
   return (
     <Badge color="gray" variant="light" miw={90}>
       Unverified
