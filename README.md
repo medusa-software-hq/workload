@@ -43,8 +43,10 @@ scaffolding a real service needs, so a new worker can be dropped in with batteri
 included:
 
 - **`cli/`** (`ms-workload`) — the worker, a standalone Kotlin CLI. `register`,
-  `status`, `unregister`, and `token`/`read-object` to claim and use a brokered
-  token. This is the "plug" end of plug-and-play.
+  `status`, `unregister`; `token`/`read-object` to claim and use a brokered
+  token; `exec` to run any command with a profile's env vars (plain + secrets,
+  resolved worker-side) and GCP credentials injected — no `gcloud auth`
+  needed. This is the "plug" end of plug-and-play.
 - **`backend/`** — a Kotlin/Armeria service on Cloud Run that hosts the worker
   registration/token-broker plane and the admin `FleetService` (workers, profiles,
   grants) the console talks to, plus the reference API it grew out of. Storage and
