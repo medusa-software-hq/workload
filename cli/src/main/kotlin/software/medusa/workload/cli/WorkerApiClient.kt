@@ -22,11 +22,24 @@ data class SelfStatusResponse(
     val grantedProfileIds: List<String> = emptyList(),
 )
 
+@Serializable
+data class TokenClaimResponse(
+    val accessToken: String,
+    val expiresAt: String,
+    val serviceAccount: String,
+    val profileId: String,
+    val revision: Int,
+)
+
 @Serializable private data class RegisterWorkerRequest(val name: String, val hostname: String?)
+
+@Serializable private data class TokenClaimRequest(val profileId: String)
 
 @Serializable private data class WorkerErrorResponse(val error: String)
 
-class WorkerApiException(message: String) : Exception(message)
+/** [errorCode] is the broker's machine-readable `error` field, e.g. `"not_granted"`. */
+class WorkerApiException(val statusCode: Int, val errorCode: String) :
+    Exception("Request failed with status $statusCode: $errorCode")
 
 private val json = Json { ignoreUnknownKeys = true }
 private val httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
@@ -49,9 +62,7 @@ fun registerWorker(brokerBaseUrl: String, name: String): RegisterWorkerResponse 
 
   val response = httpClient.send(request, BodyHandlers.ofString())
   if (response.statusCode() != 200) {
-    throw WorkerApiException(
-        "Registration failed with status ${response.statusCode()}: ${errorReason(response.body())}"
-    )
+    throw WorkerApiException(response.statusCode(), errorReason(response.body()))
   }
   return json.decodeFromString(response.body())
 }
@@ -72,9 +83,32 @@ fun fetchSelfStatus(
 
   val response = httpClient.send(request, BodyHandlers.ofString())
   if (response.statusCode() != 200) {
-    throw WorkerApiException(
-        "Status poll failed with status ${response.statusCode()}: ${errorReason(response.body())}"
-    )
+    throw WorkerApiException(response.statusCode(), errorReason(response.body()))
+  }
+  return json.decodeFromString(response.body())
+}
+
+/** Calls `POST <brokerBaseUrl>/worker/v1/token`. */
+fun claimToken(
+    brokerBaseUrl: String,
+    workerId: String,
+    workerSecret: String,
+    profileId: String,
+): TokenClaimResponse {
+  val request =
+      HttpRequest.newBuilder()
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v1/token"))
+          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Content-Type", "application/json")
+          .timeout(Duration.ofSeconds(10))
+          .POST(
+              HttpRequest.BodyPublishers.ofString(json.encodeToString(TokenClaimRequest(profileId)))
+          )
+          .build()
+
+  val response = httpClient.send(request, BodyHandlers.ofString())
+  if (response.statusCode() != 200) {
+    throw WorkerApiException(response.statusCode(), errorReason(response.body()))
   }
   return json.decodeFromString(response.body())
 }
