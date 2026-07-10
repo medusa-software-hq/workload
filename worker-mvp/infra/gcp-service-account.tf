@@ -1,4 +1,5 @@
-# The target service account that worker CLIs impersonate via the broker endpoint.
+# The target service account that worker CLIs impersonate, via a profile pointing at it in the
+# Workload console.
 resource "google_service_account" "worker_mvp_target" {
   project      = local.test_project_id
   account_id   = "worker-mvp"
@@ -7,16 +8,11 @@ resource "google_service_account" "worker_mvp_target" {
   depends_on = [google_project_service.apis]
 }
 
-locals {
-  # The EXISTING Cloud Run service account in the main project (backend/infra's
-  # primary_service_sa), computed deterministically rather than via cross-root state.
-  broker_service_account_email = "${module.common.gcp_api_run_service_name}-sa@${var.gcp_project_id}.iam.gserviceaccount.com"
-}
+# Opts this SA in to being impersonated by the Workload broker — the first real consumer of the
+# shared module, in place of the old hand-rolled cross-project binding.
+module "workload_impersonation" {
+  source = "../../infra/modules/workload-impersonation"
 
-# Grant the broker (existing Cloud Run) service account permission to impersonate the
-# target SA — scoped to this one SA resource, not project-wide.
-resource "google_service_account_iam_member" "broker_can_impersonate_target" {
-  service_account_id = google_service_account.worker_mvp_target.name
-  role               = "roles/iam.serviceAccountTokenCreator"
-  member             = "serviceAccount:${local.broker_service_account_email}"
+  service_account_id    = google_service_account.worker_mvp_target.name
+  service_account_email = google_service_account.worker_mvp_target.email
 }
