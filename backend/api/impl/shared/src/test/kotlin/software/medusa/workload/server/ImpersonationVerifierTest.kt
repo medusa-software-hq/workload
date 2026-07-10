@@ -1,11 +1,13 @@
 package software.medusa.workload.server
 
+import com.google.api.gax.rpc.StatusCode
 import com.google.auth.oauth2.AccessToken
 import com.google.auth.oauth2.GoogleCredentials
 import java.net.URI
 import java.util.Date
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
@@ -45,5 +47,31 @@ class ImpersonationVerifierTest {
         )
 
     assertFailsWith<IllegalStateException> { shortLived.getRequestMetadata(secretManagerUri) }
+  }
+
+  @Test
+  fun `only permission-denied and not-found count as a denial verdict`() {
+    // These two mean "confirmed: not authorized / doesn't exist" — safe to record as a
+    // BINDING_MISSING / SECRET_INACCESSIBLE verdict.
+    assertTrue(isDenialCode(StatusCode.Code.PERMISSION_DENIED))
+    assertTrue(isDenialCode(StatusCode.Code.NOT_FOUND))
+  }
+
+  @Test
+  fun `transient and unexpected statuses are not treated as a denial verdict`() {
+    // Recording any of these as a denial is the "catch and pray" bug: they mean "couldn't check",
+    // not "the secret is inaccessible", and must leave the revision UNVERIFIED for a retry.
+    for (code in
+        listOf(
+            StatusCode.Code.UNAVAILABLE,
+            StatusCode.Code.DEADLINE_EXCEEDED,
+            StatusCode.Code.INTERNAL,
+            StatusCode.Code.RESOURCE_EXHAUSTED,
+            StatusCode.Code.UNAUTHENTICATED,
+            StatusCode.Code.ABORTED,
+            StatusCode.Code.UNKNOWN,
+        )) {
+      assertFalse(isDenialCode(code), "$code must not be treated as a denial verdict")
+    }
   }
 }

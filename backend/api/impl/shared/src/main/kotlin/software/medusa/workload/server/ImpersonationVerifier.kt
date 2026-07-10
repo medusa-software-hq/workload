@@ -1,6 +1,8 @@
 package software.medusa.workload.server
 
 import com.google.api.gax.core.FixedCredentialsProvider
+import com.google.api.gax.rpc.ApiException
+import com.google.api.gax.rpc.StatusCode
 import com.google.auth.oauth2.AccessToken
 import com.google.auth.oauth2.GoogleCredentials
 import com.google.cloud.iam.credentials.v1.GenerateAccessTokenRequest
@@ -33,8 +35,27 @@ private val logger = LoggerFactory.getLogger(IamImpersonationVerifier::class.jav
  * [detail] is a safe-to-log diagnostic (the underlying exception's class + message — a GCP API
  * error like "PERMISSION_DENIED: ..." or "NOT_FOUND: ..."), never a secret value: this only ever
  * describes *why the IAM/API call failed*, not payload content. Null when [status] is VERIFIED.
+ *
+ * Note the three-way outcome: VERIFIED (confirmed good), a denial verdict
+ * (BINDING_MISSING/SECRET_INACCESSIBLE — only when GCP *explicitly* returned PERMISSION_DENIED or
+ * NOT_FOUND), or UNVERIFIED with a non-null [detail], meaning verification couldn't be completed (a
+ * transient GCP error, transport failure, etc.). We deliberately don't record a denial for that
+ * last case — an unexpected error is "we couldn't check", not "the secret is inaccessible", and
+ * turning it into a permanent denial strands the profile as non-claimable until a manual re-verify.
  */
 data class VerificationResult(val status: VerificationStatus, val detail: String? = null)
+
+/**
+ * Whether a GCP RPC status is a genuine denial verdict — the identity isn't authorized, or the
+ * resource doesn't exist — as opposed to a transient/unexpected error (UNAVAILABLE,
+ * DEADLINE_EXCEEDED, INTERNAL, RESOURCE_EXHAUSTED, ...). Only a denial may be recorded as
+ * BINDING_MISSING/SECRET_INACCESSIBLE; everything else is "couldn't determine" and must not
+ * masquerade as a verdict.
+ */
+internal fun isDenialCode(code: StatusCode.Code): Boolean =
+    code == StatusCode.Code.PERMISSION_DENIED || code == StatusCode.Code.NOT_FOUND
+
+private fun ApiException.isDenial(): Boolean = isDenialCode(statusCode.code)
 
 /**
  * Checks whether a target service account's owning project has granted the broker's runtime SA
@@ -62,12 +83,17 @@ class IamImpersonationVerifier(
         val minted =
             try {
               mintVerificationToken(targetServiceAccount)
+            } catch (e: ApiException) {
+              if (e.isDenial()) {
+                logger.warn("Impersonation denied for {}: {}", targetServiceAccount, e.describe())
+                return@withContext VerificationResult(
+                    VerificationStatus.BINDING_MISSING,
+                    e.describe(),
+                )
+              }
+              return@withContext undetermined("impersonation dry-run", targetServiceAccount, e)
             } catch (e: Exception) {
-              logger.warn("Impersonation dry-run mint failed for {}", targetServiceAccount, e)
-              return@withContext VerificationResult(
-                  VerificationStatus.BINDING_MISSING,
-                  e.describe(),
-              )
+              return@withContext undetermined("impersonation dry-run", targetServiceAccount, e)
             }
 
         if (secretEnvVars.isEmpty()) {
@@ -77,17 +103,42 @@ class IamImpersonationVerifier(
         try {
           checkSecretAccess(minted, secretEnvVars.values)
           VerificationResult(VerificationStatus.VERIFIED)
+        } catch (e: ApiException) {
+          if (e.isDenial()) {
+            logger.warn(
+                "Secret access denied for {} (env vars {}): {}",
+                targetServiceAccount,
+                secretEnvVars.keys,
+                e.describe(),
+            )
+            VerificationResult(VerificationStatus.SECRET_INACCESSIBLE, e.describe())
+          } else {
+            undetermined("secret-access dry-run", targetServiceAccount, e)
+          }
         } catch (e: Exception) {
-          logger.warn(
-              "Secret-access dry-run failed for {} (env vars {}): {}",
-              targetServiceAccount,
-              secretEnvVars.keys,
-              e.toString(),
-              e,
-          )
-          VerificationResult(VerificationStatus.SECRET_INACCESSIBLE, e.describe())
+          undetermined("secret-access dry-run", targetServiceAccount, e)
         }
       }
+
+  /**
+   * Verification couldn't be completed — not a denial. Records UNVERIFIED (the neutral "not
+   * confirmed" state, still non-claimable) rather than a false BINDING_MISSING/SECRET_INACCESSIBLE,
+   * and logs loudly so the real cause is visible. The admin can re-verify once whatever went wrong
+   * clears.
+   */
+  private fun undetermined(
+      step: String,
+      targetServiceAccount: String,
+      e: Exception,
+  ): VerificationResult {
+    logger.error(
+        "{} could not be completed for {} — recording UNVERIFIED (not a denial verdict)",
+        step,
+        targetServiceAccount,
+        e,
+    )
+    return VerificationResult(VerificationStatus.UNVERIFIED, "verification error: ${e.describe()}")
+  }
 
   private fun mintVerificationToken(targetServiceAccount: String) =
       iamCredentialsClient.generateAccessToken(
