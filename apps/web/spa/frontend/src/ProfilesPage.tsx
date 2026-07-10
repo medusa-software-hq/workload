@@ -696,6 +696,7 @@ function CreateProfileModal({
         onClose();
       }}
       title="Create profile"
+      size="lg"
     >
       <Stack gap="md">
         <TextInput
@@ -806,7 +807,12 @@ function EditProfileModal({
   }
 
   return (
-    <Modal opened={state !== null} onClose={onClose} title={state ? `Edit ${state.profileId}` : ''}>
+    <Modal
+      opened={state !== null}
+      onClose={onClose}
+      title={state ? `Edit ${state.profileId}` : ''}
+      size="lg"
+    >
       {state && (
         <Stack gap="md">
           <Text c="dimmed" size="sm">
