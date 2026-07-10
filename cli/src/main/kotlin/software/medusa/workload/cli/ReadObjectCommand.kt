@@ -1,6 +1,7 @@
 package software.medusa.workload.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
+import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
@@ -14,15 +15,25 @@ import java.util.Date
 private const val defaultSampleObjectName = "hello.txt"
 
 class ReadObjectCommand : CliktCommand(name = "read-object") {
-  private val brokerUrl by option("--broker-url", envvar = "WORKER_BROKER_URL").required()
-  private val bootstrapToken by
-      option("--bootstrap-token", envvar = "WORKER_MVP_BOOTSTRAP_TOKEN").required()
+  private val profileId by
+      option("--profile", "-p", help = "The profile to claim a token for").required()
   private val bucket by option("--bucket", envvar = "WORKER_MVP_SAMPLE_BUCKET").required()
   private val objectName by
       option("--object", envvar = "WORKER_MVP_SAMPLE_OBJECT").default(defaultSampleObjectName)
 
   override fun run() {
-    val tokenResponse = fetchBrokerToken(brokerUrl, bootstrapToken)
+    val config = loadConfigOrFail()
+    val tokenResponse =
+        try {
+          claimToken(config.brokerBaseUrl, config.workerId, config.workerSecret, profileId)
+        } catch (e: WorkerApiException) {
+          throw PrintMessage(
+              tokenClaimErrorMessage(e, profileId),
+              statusCode = 1,
+              printError = true,
+          )
+        }
+
     val credentials =
         GoogleCredentials.create(
             AccessToken(
