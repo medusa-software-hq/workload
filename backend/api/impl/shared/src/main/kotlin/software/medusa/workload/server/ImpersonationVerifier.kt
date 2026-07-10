@@ -18,6 +18,13 @@ private const val verificationTokenLifetimeSeconds = 60L
 private const val cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
 
 /**
+ * [detail] is a safe-to-log diagnostic (the underlying exception's class + message — a GCP API
+ * error like "PERMISSION_DENIED: ..." or "NOT_FOUND: ..."), never a secret value: this only ever
+ * describes *why the IAM/API call failed*, not payload content. Null when [status] is VERIFIED.
+ */
+data class VerificationResult(val status: VerificationStatus, val detail: String? = null)
+
+/**
  * Checks whether a target service account's owning project has granted the broker's runtime SA
  * impersonation rights (per the M1 opt-in design, 04-impersonation-opt-in.md), and — if
  * [secretEnvVars] references any — whether that impersonated identity can read each referenced
@@ -28,7 +35,7 @@ interface ImpersonationVerifier {
   suspend fun verify(
       targetServiceAccount: String,
       secretEnvVars: Map<String, String>,
-  ): VerificationStatus
+  ): VerificationResult
 }
 
 /** Performs a real, minimal-lifetime dry-run mint against GCP IAM, then a dry-run secret read. */
@@ -38,24 +45,27 @@ class IamImpersonationVerifier(
   override suspend fun verify(
       targetServiceAccount: String,
       secretEnvVars: Map<String, String>,
-  ): VerificationStatus =
+  ): VerificationResult =
       withContext(Dispatchers.IO) {
         val minted =
             try {
               mintVerificationToken(targetServiceAccount)
             } catch (e: Exception) {
-              return@withContext VerificationStatus.BINDING_MISSING
+              return@withContext VerificationResult(
+                  VerificationStatus.BINDING_MISSING,
+                  e.describe(),
+              )
             }
 
         if (secretEnvVars.isEmpty()) {
-          return@withContext VerificationStatus.VERIFIED
+          return@withContext VerificationResult(VerificationStatus.VERIFIED)
         }
 
         try {
           checkSecretAccess(minted, secretEnvVars.values)
-          VerificationStatus.VERIFIED
+          VerificationResult(VerificationStatus.VERIFIED)
         } catch (e: Exception) {
-          VerificationStatus.SECRET_INACCESSIBLE
+          VerificationResult(VerificationStatus.SECRET_INACCESSIBLE, e.describe())
         }
       }
 
@@ -92,10 +102,12 @@ class IamImpersonationVerifier(
   }
 }
 
+private fun Exception.describe(): String = "${this::class.simpleName}: $message"
+
 /** Always reports success — for local dev, where there's no real GCP IAM to check against. */
 object AlwaysVerifiedImpersonationVerifier : ImpersonationVerifier {
   override suspend fun verify(
       targetServiceAccount: String,
       secretEnvVars: Map<String, String>,
-  ): VerificationStatus = VerificationStatus.VERIFIED
+  ): VerificationResult = VerificationResult(VerificationStatus.VERIFIED)
 }
