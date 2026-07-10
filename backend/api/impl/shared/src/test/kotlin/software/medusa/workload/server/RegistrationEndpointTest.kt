@@ -113,6 +113,33 @@ class RegistrationEndpointTest {
       }
 
   @Test
+  fun `an active worker's self status lists its granted profile ids`() =
+      kotlinx.coroutines.runBlocking {
+        val registered = register()
+        val workerId = WorkerId(java.util.UUID.fromString(registered.workerId))
+        fleetStore.approveWorker(workerId, approvedBy = "admin@example.com")
+        fleetStore.createProfile(
+            ProfileId("profile-a"),
+            displayName = null,
+            revision =
+                NewProfileRevision("sa@example.iam.gserviceaccount.com", "admin@example.com"),
+        )
+        fleetStore.grant(workerId, ProfileId("profile-a"), grantedBy = "admin@example.com")
+
+        val response = pollSelf("${registered.workerId}.${registered.workerSecret}")
+        val status = workerJson.decodeFromString<SelfStatusResponse>(response.contentUtf8())
+        assertEquals(listOf("profile-a"), status.grantedProfileIds)
+      }
+
+  @Test
+  fun `a pending worker's self status has no granted profile ids`() {
+    val registered = register()
+    val response = pollSelf("${registered.workerId}.${registered.workerSecret}")
+    val status = workerJson.decodeFromString<SelfStatusResponse>(response.contentUtf8())
+    assertEquals(emptyList(), status.grantedProfileIds)
+  }
+
+  @Test
   fun `wrong secret is unauthorized with the existing error shape`() {
     val registered = register()
     val response = pollSelf("${registered.workerId}.wrong-secret")
