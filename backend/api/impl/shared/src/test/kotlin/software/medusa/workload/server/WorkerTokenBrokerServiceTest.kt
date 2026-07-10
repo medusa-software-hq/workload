@@ -174,6 +174,21 @@ class WorkerTokenBrokerServiceTest {
   }
 
   @Test
+  fun `the retired bootstrap-token bearer shape gets a plain 401, not special-cased`() {
+    // Shaped like the old single shared bootstrap token (openssl rand -base64 32): opaque,
+    // no "workerId.secret" separator. It must fail exactly like any other malformed bearer
+    // value — no legacy code path recognizes it.
+    val legacyShapedToken = "Zm9vYmFyYmF6cXV1eGNvcmdlZ3JhdWx0Z2FyYnBseXdhbGRvZmxlZWJhdGh6b3Q="
+    val response = claim(legacyShapedToken, "some-profile")
+
+    assertEquals(HttpStatus.UNAUTHORIZED, response.status())
+    assertEquals(
+        WorkerErrorResponse("unauthorized"),
+        workerJson.decodeFromString<WorkerErrorResponse>(response.contentUtf8()),
+    )
+  }
+
+  @Test
   fun `missing profileId in body is a bad request`() {
     val (workerId, secret) = registerActiveWorker()
 
