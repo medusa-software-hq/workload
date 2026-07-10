@@ -19,6 +19,7 @@ fun main() {
           fleetStore = fleetStore,
           impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
           workerTokenBroker = WorkerTokenBrokerService(fleetStore, FakeTokenMinter),
+          workerClaimService = WorkerClaimService(fleetStore, FakeTokenMinter),
           registrationService = RegistrationService(fleetStore),
           selfStatusService = SelfStatusService(fleetStore),
       )

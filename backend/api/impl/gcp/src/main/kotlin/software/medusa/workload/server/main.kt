@@ -48,10 +48,17 @@ fun main() {
   val iamCredentialsClient = IamCredentialsClient.create()
 
   val tokenLifetimeSeconds = System.getenv(tokenLifetimeSecondsEnvVarName)?.toLongOrNull() ?: 900L
+  val tokenMinter = IamTokenMinter(iamCredentialsClient)
   val workerTokenBroker =
       WorkerTokenBrokerService(
           fleetStore = fleetStore,
-          tokenMinter = IamTokenMinter(iamCredentialsClient),
+          tokenMinter = tokenMinter,
+          tokenLifetimeSeconds = tokenLifetimeSeconds,
+      )
+  val workerClaimService =
+      WorkerClaimService(
+          fleetStore = fleetStore,
+          tokenMinter = tokenMinter,
           tokenLifetimeSeconds = tokenLifetimeSeconds,
       )
 
@@ -64,6 +71,7 @@ fun main() {
           fleetStore = fleetStore,
           impersonationVerifier = IamImpersonationVerifier(iamCredentialsClient),
           workerTokenBroker = workerTokenBroker,
+          workerClaimService = workerClaimService,
           registrationService = RegistrationService(fleetStore),
           selfStatusService = SelfStatusService(fleetStore),
       )
