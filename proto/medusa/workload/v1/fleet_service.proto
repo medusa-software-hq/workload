@@ -36,12 +36,14 @@ enum WorkerStatus {
   WORKER_STATUS_REVOKED = 4;
 }
 
-// Whether the target SA's owning project has granted the broker impersonation rights.
+// Whether the target SA's owning project has granted the broker impersonation rights, and (if
+// the revision references any) whether that SA can read the referenced secrets.
 enum VerificationStatus {
   VERIFICATION_STATUS_UNSPECIFIED = 0;
   VERIFICATION_STATUS_UNVERIFIED = 1;
   VERIFICATION_STATUS_VERIFIED = 2;
   VERIFICATION_STATUS_BINDING_MISSING = 3;
+  VERIFICATION_STATUS_SECRET_INACCESSIBLE = 4;
 }
 
 message Worker {
@@ -107,6 +109,11 @@ message ProfileRevision {
   string created_by = 5;
   string note = 6;
   VerificationStatus verification_status = 7;
+  // Plain, non-secret env vars: name -> value.
+  map<string, string> env_vars = 8;
+  // Secret-backed env vars: name -> Secret Manager resource name
+  // (projects/.../secrets/.../versions/latest or a pinned version).
+  map<string, string> secret_env_vars = 9;
 }
 
 message ListProfilesRequest {}
@@ -120,6 +127,8 @@ message CreateProfileRequest {
   string display_name = 2;
   string target_service_account = 3;
   string note = 4;
+  map<string, string> env_vars = 5;
+  map<string, string> secret_env_vars = 6;
 }
 
 message CreateProfileResponse {
@@ -131,6 +140,8 @@ message UpdateProfileRequest {
   string profile_id = 1;
   string target_service_account = 2;
   string note = 3;
+  map<string, string> env_vars = 4;
+  map<string, string> secret_env_vars = 5;
 }
 
 message UpdateProfileResponse {

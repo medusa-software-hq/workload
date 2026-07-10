@@ -6,14 +6,23 @@ import java.time.ZoneOffset
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import software.medusa.workload.db.Profile_revisions
 import software.medusa.workload.db.Profiles
 import software.medusa.workload.db.Worker_profile_grants
 import software.medusa.workload.db.Workers
 import software.medusa.workload.db.WorkloadDatabase
 
+private val envVarsJson = Json { ignoreUnknownKeys = true }
+
 private fun Instant.toOffsetDateTime(): OffsetDateTime =
     OffsetDateTime.ofInstant(this, ZoneOffset.UTC)
+
+private fun Map<String, String>.toJson(): String = envVarsJson.encodeToString(this)
+
+private fun String.toEnvVarMap(): Map<String, String> = envVarsJson.decodeFromString(this)
 
 private fun Workers.toDomain(): Worker =
     Worker(
@@ -49,6 +58,8 @@ private fun Profile_revisions.toDomain(): ProfileRevision =
         createdBy = created_by,
         note = note,
         verificationStatus = VerificationStatus.valueOf(verification_status),
+        envVars = env_vars.toEnvVarMap(),
+        secretEnvVars = secret_env_vars.toEnvVarMap(),
     )
 
 private fun Worker_profile_grants.toDomain(): Grant =
@@ -145,6 +156,8 @@ class PostgresFleetStore(
               created_at = now,
               created_by = revision.createdBy,
               note = revision.note,
+              env_vars = revision.envVars.toJson(),
+              secret_env_vars = revision.secretEnvVars.toJson(),
           )
         }
         database.fleetQueries.selectProfileById(profileId.value).executeAsOne().toDomain()
@@ -166,6 +179,8 @@ class PostgresFleetStore(
               created_at = Instant.now().toOffsetDateTime(),
               created_by = revision.createdBy,
               note = revision.note,
+              env_vars = revision.envVars.toJson(),
+              secret_env_vars = revision.secretEnvVars.toJson(),
           )
           database.fleetQueries.updateProfileLatestRevision(nextRevisionNumber, profileId.value)
         }

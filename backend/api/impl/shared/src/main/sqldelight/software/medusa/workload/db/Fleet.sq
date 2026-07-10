@@ -34,6 +34,9 @@ CREATE TABLE profile_revisions (
     created_by              text NOT NULL,
     note                    text,
     verification_status    text NOT NULL DEFAULT 'UNVERIFIED',
+    -- JSON-encoded Map<String, String>; see V4__add_profile_revision_env_vars.sql.
+    env_vars                text NOT NULL DEFAULT '{}',
+    secret_env_vars         text NOT NULL DEFAULT '{}',
     PRIMARY KEY (profile_id, revision)
 );
 
@@ -80,8 +83,8 @@ INSERT INTO profiles (profile_id, display_name, latest_revision, archived, creat
 VALUES (?, ?, ?, ?, ?);
 
 insertProfileRevision:
-INSERT INTO profile_revisions (profile_id, revision, target_service_account, created_at, created_by, note)
-VALUES (?, ?, ?, ?, ?, ?);
+INSERT INTO profile_revisions (profile_id, revision, target_service_account, created_at, created_by, note, env_vars, secret_env_vars)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 
 updateProfileLatestRevision:
 UPDATE profiles SET latest_revision = ? WHERE profile_id = ?;
