@@ -1,6 +1,8 @@
 package software.medusa.workload.server
 
 import com.google.api.gax.core.FixedCredentialsProvider
+import com.google.api.gax.rpc.ApiException
+import com.google.api.gax.rpc.StatusCode
 import com.google.auth.oauth2.AccessToken
 import com.google.auth.oauth2.GoogleCredentials
 import com.google.cloud.iam.credentials.v1.GenerateAccessTokenRequest
@@ -9,13 +11,51 @@ import com.google.cloud.iam.credentials.v1.ServiceAccountName
 import com.google.cloud.secretmanager.v1.SecretManagerServiceClient
 import com.google.cloud.secretmanager.v1.SecretManagerServiceSettings
 import com.google.protobuf.Duration
-import java.time.Instant
 import java.util.Date
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.slf4j.LoggerFactory
 
 private const val verificationTokenLifetimeSeconds = 60L
 private const val cloudPlatformScope = "https://www.googleapis.com/auth/cloud-platform"
+
+// One-hour nominal expiry we hand the client library for the impersonated token — deliberately NOT
+// its real ~60s GCP lifetime. OAuth2Credentials does a *blocking* refresh once a token is within
+// its expiration margin (3 minutes by default), but GoogleCredentials.create(AccessToken) is a
+// fixed, non-refreshable credential whose refreshAccessToken() throws. A genuinely 60s token is
+// always inside that 3-minute margin, so the very first Secret Manager call would attempt a
+// refresh and throw IllegalStateException — which we'd misreport as SECRET_INACCESSIBLE. We make a
+// single synchronous call and close the client immediately, so the token is used well within its
+// real 60s validity and this fictional expiry is never observed to be wrong.
+private const val credentialNominalLifetimeMillis = 60L * 60L * 1000L
+
+private val logger = LoggerFactory.getLogger(IamImpersonationVerifier::class.java)
+
+/**
+ * [detail] is a safe-to-log diagnostic (the underlying exception's class + message — a GCP API
+ * error like "PERMISSION_DENIED: ..." or "NOT_FOUND: ..."), never a secret value: this only ever
+ * describes *why the IAM/API call failed*, not payload content. Null when [status] is VERIFIED.
+ *
+ * Note the three-way outcome: VERIFIED (confirmed good), a denial verdict
+ * (BINDING_MISSING/SECRET_INACCESSIBLE — only when GCP *explicitly* returned PERMISSION_DENIED or
+ * NOT_FOUND), or UNVERIFIED with a non-null [detail], meaning verification couldn't be completed (a
+ * transient GCP error, transport failure, etc.). We deliberately don't record a denial for that
+ * last case — an unexpected error is "we couldn't check", not "the secret is inaccessible", and
+ * turning it into a permanent denial strands the profile as non-claimable until a manual re-verify.
+ */
+data class VerificationResult(val status: VerificationStatus, val detail: String? = null)
+
+/**
+ * Whether a GCP RPC status is a genuine denial verdict — the identity isn't authorized, or the
+ * resource doesn't exist — as opposed to a transient/unexpected error (UNAVAILABLE,
+ * DEADLINE_EXCEEDED, INTERNAL, RESOURCE_EXHAUSTED, ...). Only a denial may be recorded as
+ * BINDING_MISSING/SECRET_INACCESSIBLE; everything else is "couldn't determine" and must not
+ * masquerade as a verdict.
+ */
+internal fun isDenialCode(code: StatusCode.Code): Boolean =
+    code == StatusCode.Code.PERMISSION_DENIED || code == StatusCode.Code.NOT_FOUND
+
+private fun ApiException.isDenial(): Boolean = isDenialCode(statusCode.code)
 
 /**
  * Checks whether a target service account's owning project has granted the broker's runtime SA
@@ -28,7 +68,7 @@ interface ImpersonationVerifier {
   suspend fun verify(
       targetServiceAccount: String,
       secretEnvVars: Map<String, String>,
-  ): VerificationStatus
+  ): VerificationResult
 }
 
 /** Performs a real, minimal-lifetime dry-run mint against GCP IAM, then a dry-run secret read. */
@@ -38,26 +78,67 @@ class IamImpersonationVerifier(
   override suspend fun verify(
       targetServiceAccount: String,
       secretEnvVars: Map<String, String>,
-  ): VerificationStatus =
+  ): VerificationResult =
       withContext(Dispatchers.IO) {
         val minted =
             try {
               mintVerificationToken(targetServiceAccount)
+            } catch (e: ApiException) {
+              if (e.isDenial()) {
+                logger.warn("Impersonation denied for {}: {}", targetServiceAccount, e.describe())
+                return@withContext VerificationResult(
+                    VerificationStatus.BINDING_MISSING,
+                    e.describe(),
+                )
+              }
+              return@withContext undetermined("impersonation dry-run", targetServiceAccount, e)
             } catch (e: Exception) {
-              return@withContext VerificationStatus.BINDING_MISSING
+              return@withContext undetermined("impersonation dry-run", targetServiceAccount, e)
             }
 
         if (secretEnvVars.isEmpty()) {
-          return@withContext VerificationStatus.VERIFIED
+          return@withContext VerificationResult(VerificationStatus.VERIFIED)
         }
 
         try {
           checkSecretAccess(minted, secretEnvVars.values)
-          VerificationStatus.VERIFIED
+          VerificationResult(VerificationStatus.VERIFIED)
+        } catch (e: ApiException) {
+          if (e.isDenial()) {
+            logger.warn(
+                "Secret access denied for {} (env vars {}): {}",
+                targetServiceAccount,
+                secretEnvVars.keys,
+                e.describe(),
+            )
+            VerificationResult(VerificationStatus.SECRET_INACCESSIBLE, e.describe())
+          } else {
+            undetermined("secret-access dry-run", targetServiceAccount, e)
+          }
         } catch (e: Exception) {
-          VerificationStatus.SECRET_INACCESSIBLE
+          undetermined("secret-access dry-run", targetServiceAccount, e)
         }
       }
+
+  /**
+   * Verification couldn't be completed — not a denial. Records UNVERIFIED (the neutral "not
+   * confirmed" state, still non-claimable) rather than a false BINDING_MISSING/SECRET_INACCESSIBLE,
+   * and logs loudly so the real cause is visible. The admin can re-verify once whatever went wrong
+   * clears.
+   */
+  private fun undetermined(
+      step: String,
+      targetServiceAccount: String,
+      e: Exception,
+  ): VerificationResult {
+    logger.error(
+        "{} could not be completed for {} — recording UNVERIFIED (not a denial verdict)",
+        step,
+        targetServiceAccount,
+        e,
+    )
+    return VerificationResult(VerificationStatus.UNVERIFIED, "verification error: ${e.describe()}")
+  }
 
   private fun mintVerificationToken(targetServiceAccount: String) =
       iamCredentialsClient.generateAccessToken(
@@ -74,17 +155,11 @@ class IamImpersonationVerifier(
       minted: com.google.cloud.iam.credentials.v1.GenerateAccessTokenResponse,
       secretResourceNames: Collection<String>,
   ) {
-    val expireTime = minted.expireTime
-    val credentials =
-        GoogleCredentials.create(
-            AccessToken(
-                minted.accessToken,
-                Date.from(Instant.ofEpochSecond(expireTime.seconds, expireTime.nanos.toLong())),
-            )
-        )
     val settings =
         SecretManagerServiceSettings.newBuilder()
-            .setCredentialsProvider(FixedCredentialsProvider.create(credentials))
+            .setCredentialsProvider(
+                FixedCredentialsProvider.create(impersonatedCredentials(minted.accessToken))
+            )
             .build()
     SecretManagerServiceClient.create(settings).use { client ->
       secretResourceNames.forEach { client.accessSecretVersion(it) }
@@ -92,10 +167,23 @@ class IamImpersonationVerifier(
   }
 }
 
+/**
+ * Wraps a minted, short-lived impersonated [accessToken] in fixed credentials with a far-future
+ * *nominal* expiry — see [credentialNominalLifetimeMillis] for why the reported expiry must not be
+ * the token's real ~60s lifetime. Extracted so a test can assert the credential doesn't trip
+ * OAuth2Credentials' refresh path, which is what this whole dance exists to avoid.
+ */
+internal fun impersonatedCredentials(accessToken: String): GoogleCredentials =
+    GoogleCredentials.create(
+        AccessToken(accessToken, Date(System.currentTimeMillis() + credentialNominalLifetimeMillis))
+    )
+
+private fun Exception.describe(): String = "${this::class.simpleName}: $message"
+
 /** Always reports success — for local dev, where there's no real GCP IAM to check against. */
 object AlwaysVerifiedImpersonationVerifier : ImpersonationVerifier {
   override suspend fun verify(
       targetServiceAccount: String,
       secretEnvVars: Map<String, String>,
-  ): VerificationStatus = VerificationStatus.VERIFIED
+  ): VerificationResult = VerificationResult(VerificationStatus.VERIFIED)
 }

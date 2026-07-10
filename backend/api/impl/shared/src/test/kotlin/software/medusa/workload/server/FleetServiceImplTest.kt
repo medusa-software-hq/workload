@@ -338,10 +338,13 @@ private object SecretInaccessibleVerifier : ImpersonationVerifier {
   override suspend fun verify(
       targetServiceAccount: String,
       secretEnvVars: Map<String, String>,
-  ): software.medusa.workload.server.VerificationStatus =
+  ): VerificationResult =
       if (secretEnvVars.isEmpty()) {
-        software.medusa.workload.server.VerificationStatus.VERIFIED
+        VerificationResult(software.medusa.workload.server.VerificationStatus.VERIFIED)
       } else {
-        software.medusa.workload.server.VerificationStatus.SECRET_INACCESSIBLE
+        VerificationResult(
+            software.medusa.workload.server.VerificationStatus.SECRET_INACCESSIBLE,
+            "fake: secret inaccessible",
+        )
       }
 }

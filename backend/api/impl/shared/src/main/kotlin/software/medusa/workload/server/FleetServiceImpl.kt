@@ -362,7 +362,7 @@ class FleetServiceImpl(
       profileId: ProfileId,
       revision: ProfileRevision,
   ): ProfileRevision {
-    val status = impersonationVerifier.verify(revision.targetServiceAccount, revision.secretEnvVars)
+    val result = impersonationVerifier.verify(revision.targetServiceAccount, revision.secretEnvVars)
     audit(
         AuditLogEntry(
             event = "profile_revision_verification",
@@ -372,11 +372,12 @@ class FleetServiceImpl(
             profileId = profileId.value,
             revision = revision.revision,
             targetServiceAccount = revision.targetServiceAccount,
-            result = status.name.lowercase(),
+            result = result.status.name.lowercase(),
+            reason = result.detail,
         )
     )
-    return fleetStore.recordVerification(profileId, revision.revision, status)
-        ?: revision.copy(verificationStatus = status)
+    return fleetStore.recordVerification(profileId, revision.revision, result.status)
+        ?: revision.copy(verificationStatus = result.status)
   }
 
   private fun auditWorkerChange(event: String, workerId: WorkerId) {

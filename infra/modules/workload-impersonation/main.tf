@@ -45,8 +45,14 @@ resource "google_service_account_iam_member" "workload_broker_can_impersonate" {
 # Grants the service account (once impersonated) permission to read each listed secret — scoped
 # to that one secret, never to the project. The CLI resolves these worker-side, using the
 # impersonated token, so the read is attributable to this service account in Cloud Audit Logs.
+#
+# Keyed by index, not by value: a secret_ids entry is commonly a same-plan resource's .id (e.g.
+# google_secret_manager_secret.foo.id), which is unknown until apply. for_each requires its keys
+# to be known at plan time, so toset(var.secret_ids) fails with "Invalid for_each argument" the
+# first time a secret and its grant are created together; the list's length (and so the set of
+# indices) is always known statically, even when its elements aren't.
 resource "google_secret_manager_secret_iam_member" "service_account_can_access_secret" {
-  for_each  = toset(var.secret_ids)
+  for_each  = { for index, secret_id in var.secret_ids : index => secret_id }
   secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${var.service_account_email}"
