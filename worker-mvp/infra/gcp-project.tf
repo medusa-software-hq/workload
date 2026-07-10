@@ -35,6 +35,7 @@ resource "google_project_service" "apis" {
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "storage.googleapis.com",
+    "secretmanager.googleapis.com",
   ])
 
   project            = google_project.gcp_project.id

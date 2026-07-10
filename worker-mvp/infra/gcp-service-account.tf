@@ -9,10 +9,12 @@ resource "google_service_account" "worker_mvp_target" {
 }
 
 # Opts this SA in to being impersonated by the Workload broker — the first real consumer of the
-# shared module, in place of the old hand-rolled cross-project binding.
+# shared module, in place of the old hand-rolled cross-project binding. Also opts it in to
+# reading the sample secret below, the first real consumer of the module's secret_ids input.
 module "workload_impersonation" {
   source = "../../infra/modules/workload-impersonation"
 
   service_account_id    = google_service_account.worker_mvp_target.name
   service_account_email = google_service_account.worker_mvp_target.email
+  secret_ids            = [google_secret_manager_secret.worker_mvp_sample.id]
 }
