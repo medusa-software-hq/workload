@@ -80,6 +80,8 @@ class InMemoryFleetStore : FleetStore {
             createdAt = Instant.now(),
             createdBy = revision.createdBy,
             note = revision.note,
+            envVars = revision.envVars,
+            secretEnvVars = revision.secretEnvVars,
         )
     revisions[profileId] = mutableListOf(firstRevision)
     profiles[profileId] = profile
@@ -103,6 +105,8 @@ class InMemoryFleetStore : FleetStore {
               createdAt = Instant.now(),
               createdBy = revision.createdBy,
               note = revision.note,
+              envVars = revision.envVars,
+              secretEnvVars = revision.secretEnvVars,
           )
       profileRevisions.add(newRevision)
       profiles.computeIfPresent(profileId) { _, profile ->

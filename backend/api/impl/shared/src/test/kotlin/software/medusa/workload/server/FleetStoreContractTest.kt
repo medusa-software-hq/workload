@@ -135,6 +135,49 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
+  fun `env vars and secret env vars round-trip through createProfile and appendProfileRevision`() =
+      test { store ->
+        val profileId = ProfileId("my-profile-env")
+        store.createProfile(
+            profileId,
+            displayName = null,
+            revision =
+                NewProfileRevision(
+                    "sa@project.iam.gserviceaccount.com",
+                    createdBy = "admin@example.com",
+                    envVars = mapOf("MODE" to "batch"),
+                    secretEnvVars =
+                        mapOf("API_KEY" to "projects/p/secrets/api-key/versions/latest"),
+                ),
+        )
+
+        val firstRevision = store.getLatestProfileRevision(profileId)
+        assertEquals(mapOf("MODE" to "batch"), firstRevision?.envVars)
+        assertEquals(
+            mapOf("API_KEY" to "projects/p/secrets/api-key/versions/latest"),
+            firstRevision?.secretEnvVars,
+        )
+
+        store.appendProfileRevision(
+            profileId,
+            NewProfileRevision(
+                "sa@project.iam.gserviceaccount.com",
+                createdBy = "admin@example.com",
+                envVars = mapOf("MODE" to "streaming", "RETRIES" to "3"),
+                secretEnvVars = emptyMap(),
+            ),
+        )
+
+        val secondRevision = store.getLatestProfileRevision(profileId)
+        assertEquals(mapOf("MODE" to "streaming", "RETRIES" to "3"), secondRevision?.envVars)
+        assertEquals(emptyMap(), secondRevision?.secretEnvVars)
+
+        // The first revision must stay exactly as it was — appends never mutate history.
+        val revisions = store.listProfileRevisions(profileId).associateBy { it.revision }
+        assertEquals(mapOf("MODE" to "batch"), revisions[1]?.envVars)
+      }
+
+  @Test
   fun `recordVerification updates only the targeted revision`() = test { store ->
     val profileId = ProfileId("my-profile-verify")
     store.createProfile(

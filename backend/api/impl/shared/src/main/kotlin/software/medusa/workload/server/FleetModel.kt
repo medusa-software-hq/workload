@@ -78,13 +78,16 @@ data class Profile(
 
 /**
  * Whether the target SA's owning project has granted the broker's runtime SA
- * `roles/iam.serviceAccountTokenCreator` — checked with a dry-run mint on create/update/verify. See
- * design doc 04-impersonation-opt-in.md.
+ * `roles/iam.serviceAccountTokenCreator` (checked with a dry-run mint), and — if the revision
+ * references any — whether that SA can read the referenced secrets. Checked on
+ * create/update/verify. See design docs 04-impersonation-opt-in.md and
+ * m2/stories/path-a/a1-env-in-revisions.md.
  */
 enum class VerificationStatus {
   UNVERIFIED,
   VERIFIED,
   BINDING_MISSING,
+  SECRET_INACCESSIBLE,
 }
 
 data class ProfileRevision(
@@ -95,12 +98,16 @@ data class ProfileRevision(
     val createdBy: String,
     val note: String?,
     val verificationStatus: VerificationStatus = VerificationStatus.UNVERIFIED,
+    val envVars: Map<String, String> = emptyMap(),
+    val secretEnvVars: Map<String, String> = emptyMap(),
 )
 
 data class NewProfileRevision(
     val targetServiceAccount: String,
     val createdBy: String,
     val note: String? = null,
+    val envVars: Map<String, String> = emptyMap(),
+    val secretEnvVars: Map<String, String> = emptyMap(),
 )
 
 data class Grant(
