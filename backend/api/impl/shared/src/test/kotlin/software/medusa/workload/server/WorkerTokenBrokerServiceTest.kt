@@ -97,6 +97,9 @@ class WorkerTokenBrokerServiceTest {
         displayName = null,
         revision = NewProfileRevision(targetServiceAccount, createdBy = "admin@example.com"),
     )
+    // FleetServiceImpl.createProfile always verifies synchronously; do the same here so a
+    // freshly created test profile is claimable, same as it would be in production.
+    fleetStore.recordVerification(profileId, revision = 1, VerificationStatus.VERIFIED)
     fleetStore.grant(workerId, profileId, grantedBy = "admin@example.com")
     profileId
   }
@@ -248,12 +251,65 @@ class WorkerTokenBrokerServiceTest {
             createdBy = "admin@example.com",
         ),
     )
+    fleetStore.recordVerification(profileId, revision = 2, VerificationStatus.VERIFIED)
 
     val response = claim("${workerId.value}.$secret", profileId.value)
     assertEquals(HttpStatus.OK, response.status())
     val body = workerJson.decodeFromString<WorkerTokenResponse>(response.contentUtf8())
     assertEquals(2, body.revision)
     assertEquals("new-sa@example.iam.gserviceaccount.com", body.serviceAccount)
+  }
+
+  @Test
+  fun `an unverified revision is not claimable`() = runBlocking {
+    val (workerId, secret) = registerActiveWorker()
+    val profileId = ProfileId("profile-${UUID.randomUUID()}")
+    fleetStore.createProfile(
+        profileId,
+        displayName = null,
+        revision =
+            NewProfileRevision(
+                "target@example.iam.gserviceaccount.com",
+                createdBy = "admin@example.com",
+            ),
+    )
+    fleetStore.grant(workerId, profileId, grantedBy = "admin@example.com")
+    // Left UNVERIFIED — never went through FleetServiceImpl's synchronous verifyAndRecord.
+
+    val response = claim("${workerId.value}.$secret", profileId.value)
+    assertEquals(HttpStatus.FORBIDDEN, response.status())
+    assertEquals(
+        WorkerErrorResponse("not_verified"),
+        workerJson.decodeFromString<WorkerErrorResponse>(response.contentUtf8()),
+    )
+  }
+
+  @Test
+  fun `a revision flagged binding_missing is not claimable`() = runBlocking {
+    val (workerId, secret) = registerActiveWorker()
+    val profileId = createGrantedProfile(workerId)
+    fleetStore.recordVerification(profileId, revision = 1, VerificationStatus.BINDING_MISSING)
+
+    val response = claim("${workerId.value}.$secret", profileId.value)
+    assertEquals(HttpStatus.FORBIDDEN, response.status())
+    assertEquals(
+        WorkerErrorResponse("not_verified"),
+        workerJson.decodeFromString<WorkerErrorResponse>(response.contentUtf8()),
+    )
+  }
+
+  @Test
+  fun `a revision flagged secret_inaccessible is not claimable`() = runBlocking {
+    val (workerId, secret) = registerActiveWorker()
+    val profileId = createGrantedProfile(workerId)
+    fleetStore.recordVerification(profileId, revision = 1, VerificationStatus.SECRET_INACCESSIBLE)
+
+    val response = claim("${workerId.value}.$secret", profileId.value)
+    assertEquals(HttpStatus.FORBIDDEN, response.status())
+    assertEquals(
+        WorkerErrorResponse("not_verified"),
+        workerJson.decodeFromString<WorkerErrorResponse>(response.contentUtf8()),
+    )
   }
 
   @Test

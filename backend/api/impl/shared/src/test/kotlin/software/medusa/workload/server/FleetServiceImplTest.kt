@@ -227,4 +227,121 @@ class FleetServiceImplTest {
     assertEquals("sa-v1@project.iam.gserviceaccount.com", revisions[0].targetServiceAccount)
     assertEquals("sa-v2@project.iam.gserviceaccount.com", revisions[1].targetServiceAccount)
   }
+
+  @Test
+  fun `createProfile round-trips env_vars and secret_env_vars`() = runBlocking {
+    val created =
+        stub.createProfile(
+            CreateProfileRequest.newBuilder()
+                .setProfileId("my-profile-env")
+                .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                .putEnvVars("MODE", "batch")
+                .putSecretEnvVars("API_KEY", "projects/p/secrets/api-key/versions/latest")
+                .build()
+        )
+
+    assertEquals(mapOf("MODE" to "batch"), created.revision.envVarsMap)
+    assertEquals(
+        mapOf("API_KEY" to "projects/p/secrets/api-key/versions/latest"),
+        created.revision.secretEnvVarsMap,
+    )
+  }
+
+  @Test
+  fun `createProfile rejects an invalid env var name`() = runBlocking {
+    val exception =
+        assertFailsWith<StatusException> {
+          stub.createProfile(
+              CreateProfileRequest.newBuilder()
+                  .setProfileId("my-profile-bad-env")
+                  .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                  .putEnvVars("not-a-valid-name", "value")
+                  .build()
+          )
+        }
+    assertEquals(Status.Code.INVALID_ARGUMENT, exception.status.code)
+  }
+
+  @Test
+  fun `createProfile rejects a name set in both env_vars and secret_env_vars`() = runBlocking {
+    val exception =
+        assertFailsWith<StatusException> {
+          stub.createProfile(
+              CreateProfileRequest.newBuilder()
+                  .setProfileId("my-profile-collision")
+                  .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                  .putEnvVars("API_KEY", "plain-value")
+                  .putSecretEnvVars("API_KEY", "projects/p/secrets/api-key/versions/latest")
+                  .build()
+          )
+        }
+    assertEquals(Status.Code.INVALID_ARGUMENT, exception.status.code)
+  }
+
+  @Test
+  fun `createProfile rejects a malformed secret resource name`() = runBlocking {
+    val exception =
+        assertFailsWith<StatusException> {
+          stub.createProfile(
+              CreateProfileRequest.newBuilder()
+                  .setProfileId("my-profile-bad-secret")
+                  .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                  .putSecretEnvVars("API_KEY", "not-a-secret-manager-resource-name")
+                  .build()
+          )
+        }
+    assertEquals(Status.Code.INVALID_ARGUMENT, exception.status.code)
+  }
+
+  @Test
+  fun `a revision whose secrets the target SA can't read is flagged secret_inaccessible`() =
+      runBlocking {
+        val secretAwareServer =
+            buildServer(
+                originRegex = """http://localhost(:\d+)?""",
+                port = 0,
+                workerApiPathPrefix = prefix,
+                auth = NoOpAuthDecorator,
+                counterStore = InMemoryWorkloadStore(),
+                fleetStore = InMemoryFleetStore(),
+                impersonationVerifier = SecretInaccessibleVerifier,
+            )
+        secretAwareServer.start().join()
+        try {
+          val secretAwareStub =
+              GrpcClients.newClient(
+                  "gproto+http://127.0.0.1:${secretAwareServer.activeLocalPort()}/",
+                  FleetServiceGrpcKt.FleetServiceCoroutineStub::class.java,
+              )
+
+          val created =
+              secretAwareStub.createProfile(
+                  CreateProfileRequest.newBuilder()
+                      .setProfileId("my-profile-secret-check")
+                      .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                      .putSecretEnvVars("API_KEY", "projects/p/secrets/api-key/versions/latest")
+                      .build()
+              )
+
+          assertEquals(
+              VerificationStatus.VERIFICATION_STATUS_SECRET_INACCESSIBLE,
+              created.revision.verificationStatus,
+          )
+        } finally {
+          secretAwareServer.stop().join()
+        }
+      }
+}
+
+/** Reports success unless the revision references any secrets, which it always flags. */
+private object SecretInaccessibleVerifier : ImpersonationVerifier {
+  override suspend fun verify(
+      targetServiceAccount: String,
+      secretEnvVars: Map<String, String>,
+  ): software.medusa.workload.server.VerificationStatus =
+      if (secretEnvVars.isEmpty()) {
+        software.medusa.workload.server.VerificationStatus.VERIFIED
+      } else {
+        software.medusa.workload.server.VerificationStatus.SECRET_INACCESSIBLE
+      }
 }

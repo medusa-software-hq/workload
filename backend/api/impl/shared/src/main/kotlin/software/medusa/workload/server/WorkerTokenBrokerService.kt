@@ -166,6 +166,19 @@ class WorkerTokenBrokerService(
               )
             }
 
+    if (revision.verificationStatus != VerificationStatus.VERIFIED) {
+      audit(
+          requestId,
+          sourceIp,
+          workerId = workerId,
+          profileId = profileId,
+          revision = revision.revision,
+          result = "forbidden",
+          reason = revision.verificationStatus.name.lowercase(),
+      )
+      return jsonResponse(HttpStatus.FORBIDDEN, WorkerErrorResponse("not_verified"))
+    }
+
     return try {
       val minted = tokenMinter.mint(revision.targetServiceAccount, tokenLifetimeSeconds)
       audit(
