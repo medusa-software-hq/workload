@@ -27,6 +27,12 @@ variable "service_account_email" {
   type        = string
 }
 
+variable "secret_ids" {
+  description = "Optional Secret Manager secret IDs (e.g. google_secret_manager_secret.xyz.id) this service account may read via a profile's secret_env_vars. Each gets a roles/secretmanager.secretAccessor binding for the service account — grant only the secrets this profile actually references."
+  type        = list(string)
+  default     = []
+}
+
 # Grants the Workload broker permission to impersonate this one service account — scoped to the
 # SA resource itself, never to the project. Ownership of the grant sits with whoever owns this
 # Terraform: deleting this resource unilaterally revokes Workload's access.
@@ -34,6 +40,16 @@ resource "google_service_account_iam_member" "workload_broker_can_impersonate" {
   service_account_id = var.service_account_id
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${local.workload_broker_sa_email}"
+}
+
+# Grants the service account (once impersonated) permission to read each listed secret — scoped
+# to that one secret, never to the project. The CLI resolves these worker-side, using the
+# impersonated token, so the read is attributable to this service account in Cloud Audit Logs.
+resource "google_secret_manager_secret_iam_member" "service_account_can_access_secret" {
+  for_each  = toset(var.secret_ids)
+  secret_id = each.value
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${var.service_account_email}"
 }
 
 output "service_account_email" {
