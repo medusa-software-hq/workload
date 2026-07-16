@@ -31,6 +31,11 @@ jobs:
 
       - uses: go-task/setup-task@v2
 
+      # Fail loudly if the runner has no daemon, rather than letting the contract tests self-skip
+      # into a false green. Pairs with DOCKER_CONTRACT_REQUIRED on the test step below.
+      - name: Verify Docker daemon is available
+        run: docker version
+
       - name: Check formatting
         run: task checkFormatting
         working-directory: ${{ env.SERVICE_PATH }}
@@ -43,7 +48,10 @@ jobs:
         run: task compile
         working-directory: ${{ env.SERVICE_PATH }}
 
-      # ubuntu-latest has a live daemon, so the contract tests execute here (don't self-skip).
+      # ubuntu-latest has a live daemon; DOCKER_CONTRACT_REQUIRED turns a would-be skip into a
+      # failure so the contract tests are guaranteed to execute here.
       - name: Test (incl. contract tests vs Docker)
         run: task test
         working-directory: ${{ env.SERVICE_PATH }}
+        env:
+          DOCKER_CONTRACT_REQUIRED: "1"

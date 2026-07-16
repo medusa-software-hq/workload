@@ -2,19 +2,25 @@ package software.medusa.workload.docker
 
 import kotlin.test.Test
 import kotlin.test.assertTrue
+import kotlin.test.fail
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.Assumptions.assumeTrue
 
 /**
  * Contract tests against a **real** Docker daemon (the M3-01 acceptance surface). They self-skip
- * when no daemon is reachable, so the suite stays green on machines/CI without Docker. Point them
+ * when no daemon is reachable, so the suite stays green on dev machines without Docker. Point them
  * at a specific daemon with `DOCKER_HOST=unix://<path>` (e.g. a socket forwarded from the Ubuntu
  * VM); default is `/var/run/docker.sock`.
+ *
+ * **CI must not silently skip.** When `DOCKER_CONTRACT_REQUIRED` is set (CI does), an unreachable
+ * daemon is a hard failure instead of a skip — otherwise a runner that lost its Docker daemon would
+ * give a false green, defeating the point of testing our Docker code in CI.
  */
 class SystemEndpointsContractTest {
 
   private fun withDaemon(block: suspend (DockerConnector) -> Unit) {
-    DockerConnector(DockerConnectorConfig.fromEnvironment()).use { connector ->
+    val config = DockerConnectorConfig.fromEnvironment()
+    DockerConnector(config).use { connector ->
       val reachable =
           try {
             runBlocking { connector.ping() }
@@ -22,7 +28,15 @@ class SystemEndpointsContractTest {
           } catch (e: DockerConnectionException) {
             false
           }
-      assumeTrue(reachable, "no reachable Docker daemon; skipping contract test")
+      if (!reachable) {
+        if (!System.getenv("DOCKER_CONTRACT_REQUIRED").isNullOrBlank()) {
+          fail(
+              "DOCKER_CONTRACT_REQUIRED is set but no Docker daemon was reachable at " +
+                  "${config.socketPath}; the Docker contract tests must run here, not skip."
+          )
+        }
+        assumeTrue(false, "no reachable Docker daemon; skipping contract test")
+      }
       runBlocking { block(connector) }
     }
   }
