@@ -43,6 +43,7 @@ jobs:
         run: task compile
         working-directory: ${{ env.SERVICE_PATH }}
 
-      - name: Test (incl. contract tests against the runner's Docker daemon)
+      # ubuntu-latest has a live daemon, so the contract tests execute here (don't self-skip).
+      - name: Test (incl. contract tests vs Docker)
         run: task test
         working-directory: ${{ env.SERVICE_PATH }}
