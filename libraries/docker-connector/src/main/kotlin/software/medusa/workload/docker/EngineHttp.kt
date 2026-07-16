@@ -2,6 +2,7 @@ package software.medusa.workload.docker
 
 import com.linecorp.armeria.common.AggregatedHttpResponse
 import com.linecorp.armeria.common.HttpMethod
+import kotlinx.coroutines.flow.Flow
 import kotlinx.serialization.json.Json
 
 /**
@@ -25,6 +26,15 @@ internal interface DockerEngine {
       pathWithQuery: String,
       jsonBody: String? = null,
   ): AggregatedHttpResponse
+
+  /**
+   * Opens a streaming request and emits the response body as raw byte chunks (chunk boundaries are
+   * whatever the transport delivers — callers must not assume they align to anything). A cold Flow:
+   * each collection opens a fresh request, and cancelling the collector aborts the request and
+   * closes the socket. Connection failures map to [DockerConnectionException]; a non-2xx status
+   * maps to [DockerApiException] (with the daemon's message) before any body byte is emitted.
+   */
+  fun streamBytes(method: HttpMethod, pathWithQuery: String): Flow<ByteArray>
 }
 
 private val successRange = 200..299
