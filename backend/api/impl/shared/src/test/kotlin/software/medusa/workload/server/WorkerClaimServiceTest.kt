@@ -36,6 +36,7 @@ class WorkerClaimServiceTest {
             counterStore = InMemoryWorkloadStore(),
             fleetStore = fleetStore,
             impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
+            imageDigestResolver = AlwaysResolvedImageDigestResolver,
             workerClaimService = WorkerClaimService(fleetStore, FakeTokenMinter),
         )
     server.start().join()
@@ -292,6 +293,68 @@ class WorkerClaimServiceTest {
     assertEquals(2, body.revision)
     assertEquals("new-sa@example.iam.gserviceaccount.com", body.serviceAccount)
     assertEquals(mapOf("MODE" to "streaming"), body.envVars)
+  }
+
+  @Test
+  fun `claim payload carries ref and digest for an image profile`() = runBlocking {
+    val (workerId, secret) = registerActiveWorker()
+    val profileId = ProfileId("profile-image-${UUID.randomUUID()}")
+    fleetStore.createProfile(
+        profileId,
+        displayName = null,
+        revision =
+            NewProfileRevision(
+                "target@example.iam.gserviceaccount.com",
+                createdBy = "admin@example.com",
+                dockerImage = "us-docker.pkg.dev/p/repo/app:v1",
+            ),
+    )
+    fleetStore.recordVerification(profileId, revision = 1, VerificationStatus.VERIFIED)
+    fleetStore.recordImageDigest(profileId, revision = 1, "sha256:abc", ImageStatus.RESOLVED)
+    fleetStore.grant(workerId, profileId, grantedBy = "admin@example.com")
+
+    val response = claim("${workerId.value}.$secret", profileId.value)
+    assertEquals(HttpStatus.OK, response.status())
+    val body = workerJson.decodeFromString<WorkerClaimResponse>(response.contentUtf8())
+    assertEquals(ClaimImage("us-docker.pkg.dev/p/repo/app:v1", "sha256:abc"), body.image)
+  }
+
+  @Test
+  fun `claim payload has null image for a pure exec profile`() {
+    val (workerId, secret) = registerActiveWorker()
+    val profileId = createGrantedProfile(workerId)
+
+    val response = claim("${workerId.value}.$secret", profileId.value)
+    assertEquals(HttpStatus.OK, response.status())
+    val body = workerJson.decodeFromString<WorkerClaimResponse>(response.contentUtf8())
+    kotlin.test.assertNull(body.image)
+  }
+
+  @Test
+  fun `an unresolvable image is not claimable, error names image_unresolvable`() = runBlocking {
+    val (workerId, secret) = registerActiveWorker()
+    val profileId = ProfileId("profile-image-bad-${UUID.randomUUID()}")
+    fleetStore.createProfile(
+        profileId,
+        displayName = null,
+        revision =
+            NewProfileRevision(
+                "target@example.iam.gserviceaccount.com",
+                createdBy = "admin@example.com",
+                dockerImage = "us-docker.pkg.dev/p/repo/missing:v9",
+            ),
+    )
+    // Verified SA, but the image digest never pinned — a distinct gate from verification.
+    fleetStore.recordVerification(profileId, revision = 1, VerificationStatus.VERIFIED)
+    fleetStore.recordImageDigest(profileId, revision = 1, null, ImageStatus.UNRESOLVABLE)
+    fleetStore.grant(workerId, profileId, grantedBy = "admin@example.com")
+
+    val response = claim("${workerId.value}.$secret", profileId.value)
+    assertEquals(HttpStatus.FORBIDDEN, response.status())
+    assertEquals(
+        WorkerErrorResponse("image_unresolvable"),
+        workerJson.decodeFromString<WorkerErrorResponse>(response.contentUtf8()),
+    )
   }
 
   @Test

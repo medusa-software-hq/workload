@@ -37,6 +37,7 @@ class RegistrationEndpointTest {
             counterStore = InMemoryWorkloadStore(),
             fleetStore = fleetStore,
             impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
+            imageDigestResolver = AlwaysResolvedImageDigestResolver,
             registrationService =
                 RegistrationService(
                     fleetStore,
@@ -193,6 +194,7 @@ class RegistrationEndpointTest {
             counterStore = InMemoryWorkloadStore(),
             fleetStore = InMemoryFleetStore(),
             impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
+            imageDigestResolver = AlwaysResolvedImageDigestResolver,
             registrationService =
                 RegistrationService(
                     InMemoryFleetStore(),

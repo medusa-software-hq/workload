@@ -175,6 +175,27 @@ internal class WorkerClaimResolver(
       )
     }
 
+    // An image profile whose digest didn't pin (unresolvable/undetermined) is not claimable — a
+    // distinct reason from verification, so the worker/operator sees which gate failed. A pure
+    // exec/env profile has imageStatus NOT_APPLICABLE and sails through.
+    if (
+        revision.imageStatus != ImageStatus.NOT_APPLICABLE &&
+            revision.imageStatus != ImageStatus.RESOLVED
+    ) {
+      audit(
+          requestId,
+          sourceIp,
+          workerId = workerId,
+          profileId = profileId,
+          revision = revision.revision,
+          result = "forbidden",
+          reason = revision.imageStatus.name.lowercase(),
+      )
+      return ClaimOutcome.Denied(
+          jsonResponse(HttpStatus.FORBIDDEN, WorkerErrorResponse("image_unresolvable"))
+      )
+    }
+
     return ClaimOutcome.Allowed(ResolvedClaim(workerId, profileId, revision))
   }
 

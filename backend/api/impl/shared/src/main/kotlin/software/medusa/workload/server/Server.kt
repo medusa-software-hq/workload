@@ -62,6 +62,7 @@ fun buildServer(
     counterStore: WorkloadStore,
     fleetStore: FleetStore,
     impersonationVerifier: ImpersonationVerifier,
+    imageDigestResolver: ImageDigestResolver,
     workerTokenBroker: HttpService? = null,
     workerClaimService: HttpService? = null,
     registrationService: HttpService? = null,
@@ -92,7 +93,7 @@ fun buildServer(
       GrpcService.builder()
           .apply {
             addService(WorkloadServiceImpl(counterStore))
-            addService(FleetServiceImpl(fleetStore, impersonationVerifier))
+            addService(FleetServiceImpl(fleetStore, impersonationVerifier, imageDigestResolver))
             enableUnframedRequests(true)
           }
           .build()

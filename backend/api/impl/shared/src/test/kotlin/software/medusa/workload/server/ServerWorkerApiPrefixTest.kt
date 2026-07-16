@@ -33,6 +33,7 @@ class ServerWorkerApiPrefixTest {
             counterStore = InMemoryWorkloadStore(),
             fleetStore = InMemoryFleetStore(),
             impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
+            imageDigestResolver = AlwaysResolvedImageDigestResolver,
             workerTokenBroker =
                 HttpService { _, _ ->
                   HttpResponse.of(HttpStatus.OK, MediaType.PLAIN_TEXT_UTF_8, "ok")

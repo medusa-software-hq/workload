@@ -13,6 +13,7 @@ import software.medusa.workload.v1.CreateProfileResponse
 import software.medusa.workload.v1.FleetServiceGrpcKt
 import software.medusa.workload.v1.GrantProfileRequest
 import software.medusa.workload.v1.GrantProfileResponse
+import software.medusa.workload.v1.ImageStatus as ImageStatusProto
 import software.medusa.workload.v1.ListProfileRevisionsRequest
 import software.medusa.workload.v1.ListProfileRevisionsResponse
 import software.medusa.workload.v1.ListProfilesRequest
@@ -53,6 +54,14 @@ private fun VerificationStatus.toProto(): VerificationStatusProto =
           VerificationStatusProto.VERIFICATION_STATUS_SECRET_INACCESSIBLE
     }
 
+private fun ImageStatus.toProto(): ImageStatusProto =
+    when (this) {
+      ImageStatus.NOT_APPLICABLE -> ImageStatusProto.IMAGE_STATUS_NOT_APPLICABLE
+      ImageStatus.RESOLVED -> ImageStatusProto.IMAGE_STATUS_RESOLVED
+      ImageStatus.UNRESOLVABLE -> ImageStatusProto.IMAGE_STATUS_UNRESOLVABLE
+      ImageStatus.UNDETERMINED -> ImageStatusProto.IMAGE_STATUS_UNDETERMINED
+    }
+
 private fun Worker.toProto(grantedProfileIds: List<ProfileId>): WorkerProto =
     WorkerProto.newBuilder()
         .setWorkerId(workerId.value.toString())
@@ -90,6 +99,9 @@ private fun ProfileRevision.toProto(): ProfileRevisionProto =
         .setVerificationStatus(verificationStatus.toProto())
         .putAllEnvVars(envVars)
         .putAllSecretEnvVars(secretEnvVars)
+        .setDockerImage(dockerImage.orEmpty())
+        .setDockerImageDigest(dockerImageDigest.orEmpty())
+        .setImageStatus(imageStatus.toProto())
         .build()
 
 private fun parseWorkerId(raw: String): WorkerId =
@@ -153,6 +165,24 @@ private fun requireValidEnvVars(envVars: Map<String, String>, secretEnvVars: Map
   }
 }
 
+// A container image ref that must live in a registry (a host with a dot/port before the first
+// slash) — bare Docker Hub shorthand like `busybox:latest` is rejected; workload images are in
+// Artifact Registry. Mirrors the console-side `validateImageRef` in fleetValidation.ts.
+private val imageRefPattern = Regex("""[^\s/]+[.:][^\s/]*/\S+""")
+
+/** Validates a non-blank image ref; a blank ref means "no image" and is allowed. */
+private fun requireValidImageRef(dockerImage: String) {
+  if (dockerImage.isBlank()) return
+  if (!imageRefPattern.matches(dockerImage.trim())) {
+    throw StatusException(
+        Status.INVALID_ARGUMENT.withDescription(
+            "docker_image '$dockerImage' must be a fully-qualified registry ref " +
+                "(e.g. LOCATION-docker.pkg.dev/PROJECT/REPO/IMAGE:TAG)"
+        )
+    )
+  }
+}
+
 private fun notFound(kind: String, id: String): StatusException =
     StatusException(Status.NOT_FOUND.withDescription("$kind '$id' not found"))
 
@@ -167,6 +197,7 @@ private fun failedPrecondition(message: String): StatusException =
 class FleetServiceImpl(
     private val fleetStore: FleetStore,
     private val impersonationVerifier: ImpersonationVerifier,
+    private val imageDigestResolver: ImageDigestResolver,
 ) : FleetServiceGrpcKt.FleetServiceCoroutineImplBase() {
 
   override suspend fun listWorkers(request: ListWorkersRequest): ListWorkersResponse =
@@ -225,6 +256,7 @@ class FleetServiceImpl(
     val profileId = parseProfileId(request.profileId)
     requireTargetServiceAccount(request.targetServiceAccount)
     requireValidEnvVars(request.envVarsMap, request.secretEnvVarsMap)
+    requireValidImageRef(request.dockerImage)
     if (fleetStore.getProfile(profileId) != null) {
       throw StatusException(
           Status.ALREADY_EXISTS.withDescription("Profile '${profileId.value}' already exists")
@@ -242,6 +274,7 @@ class FleetServiceImpl(
                 note = request.note.ifBlank { null },
                 envVars = request.envVarsMap,
                 secretEnvVars = request.secretEnvVarsMap,
+                dockerImage = request.dockerImage.ifBlank { null },
             ),
         )
     val revision = verifyAndRecord(profileId, fleetStore.getLatestProfileRevision(profileId)!!)
@@ -256,6 +289,7 @@ class FleetServiceImpl(
     val profileId = parseProfileId(request.profileId)
     requireTargetServiceAccount(request.targetServiceAccount)
     requireValidEnvVars(request.envVarsMap, request.secretEnvVarsMap)
+    requireValidImageRef(request.dockerImage)
     val existing = fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
     if (existing.archived) {
       throw failedPrecondition("profile '${profileId.value}' is archived")
@@ -271,6 +305,7 @@ class FleetServiceImpl(
                 note = request.note.ifBlank { null },
                 envVars = request.envVarsMap,
                 secretEnvVars = request.secretEnvVarsMap,
+                dockerImage = request.dockerImage.ifBlank { null },
             ),
         )
     val revision = verifyAndRecord(profileId, appended)
@@ -357,7 +392,11 @@ class FleetServiceImpl(
     return RevokeProfileGrantResponse.getDefaultInstance()
   }
 
-  /** Dry-run verifies [revision] and persists the result, audit-logging the outcome. */
+  /**
+   * Dry-run verifies [revision] (SA impersonation + secret access) and, if it carries an image,
+   * resolves that image's digest — persisting and audit-logging both outcomes. Returns the revision
+   * reflecting both records.
+   */
   private suspend fun verifyAndRecord(
       profileId: ProfileId,
       revision: ProfileRevision,
@@ -376,8 +415,42 @@ class FleetServiceImpl(
             reason = result.detail,
         )
     )
-    return fleetStore.recordVerification(profileId, revision.revision, result.status)
-        ?: revision.copy(verificationStatus = result.status)
+    val verified =
+        fleetStore.recordVerification(profileId, revision.revision, result.status)
+            ?: revision.copy(verificationStatus = result.status)
+    return resolveImageAndRecord(profileId, verified)
+  }
+
+  /**
+   * Resolves [revision]'s image tag to a digest (impersonating its target SA) and records the
+   * verdict; a no-op that returns the revision unchanged when it has no image. Audit-logs the
+   * outcome without leaking the resolved digest beyond the diagnostic detail.
+   */
+  private suspend fun resolveImageAndRecord(
+      profileId: ProfileId,
+      revision: ProfileRevision,
+  ): ProfileRevision {
+    val imageRef = revision.dockerImage ?: return revision
+    val resolution = imageDigestResolver.resolve(revision.targetServiceAccount, imageRef)
+    audit(
+        AuditLogEntry(
+            event = "profile_revision_image_resolution",
+            requestId = UUID.randomUUID().toString(),
+            timestamp = Instant.now().toString(),
+            sourceIp = currentSourceIp(),
+            profileId = profileId.value,
+            revision = revision.revision,
+            targetServiceAccount = revision.targetServiceAccount,
+            result = resolution.status.name.lowercase(),
+            reason = resolution.detail,
+        )
+    )
+    return fleetStore.recordImageDigest(
+        profileId,
+        revision.revision,
+        resolution.digest,
+        resolution.status,
+    ) ?: revision.copy(dockerImageDigest = resolution.digest, imageStatus = resolution.status)
   }
 
   private fun auditWorkerChange(event: String, workerId: WorkerId) {

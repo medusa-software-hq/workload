@@ -37,6 +37,10 @@ CREATE TABLE profile_revisions (
     -- JSON-encoded Map<String, String>; see V4__add_profile_revision_env_vars.sql.
     env_vars                text NOT NULL DEFAULT '{}',
     secret_env_vars         text NOT NULL DEFAULT '{}',
+    -- Optional image ref + resolved digest; see V5__add_profile_revision_image.sql.
+    docker_image            text,
+    docker_image_digest     text,
+    image_status            text NOT NULL DEFAULT 'NOT_APPLICABLE',
     PRIMARY KEY (profile_id, revision)
 );
 
@@ -83,8 +87,8 @@ INSERT INTO profiles (profile_id, display_name, latest_revision, archived, creat
 VALUES (?, ?, ?, ?, ?);
 
 insertProfileRevision:
-INSERT INTO profile_revisions (profile_id, revision, target_service_account, created_at, created_by, note, env_vars, secret_env_vars)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO profile_revisions (profile_id, revision, target_service_account, created_at, created_by, note, env_vars, secret_env_vars, docker_image, docker_image_digest, image_status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateProfileLatestRevision:
 UPDATE profiles SET latest_revision = ? WHERE profile_id = ?;
@@ -106,6 +110,9 @@ SELECT * FROM profile_revisions WHERE profile_id = ? AND revision = ?;
 
 updateProfileRevisionVerification:
 UPDATE profile_revisions SET verification_status = ? WHERE profile_id = ? AND revision = ?;
+
+updateProfileRevisionImageDigest:
+UPDATE profile_revisions SET docker_image_digest = ?, image_status = ? WHERE profile_id = ? AND revision = ?;
 
 upsertGrant:
 INSERT INTO worker_profile_grants (worker_id, profile_id, granted_at, granted_by)
