@@ -1,0 +1,40 @@
+version: '3'
+
+.kotlinSources: &kotlinSources
+  - '**/*.kt'
+  - '**/*.kts'
+
+tasks:
+  checkFormatting:
+    desc: Check Kotlin formatting
+    sources: *kotlinSources
+    cmds:
+      - ./gradlew ktfmtCheck
+    interactive: true
+
+  fixFormatting:
+    desc: Fix Kotlin formatting
+    sources: *kotlinSources
+    cmds:
+      - ./gradlew ktfmtFormat
+    interactive: true
+
+  lint:
+    desc: Lint the Kotlin sources
+    sources: *kotlinSources
+    cmds:
+      - ./gradlew detekt
+    interactive: true
+
+  compile:
+    desc: Compile the Kotlin sources
+    sources: *kotlinSources
+    cmds:
+      - ./gradlew compileKotlin compileTestKotlin
+
+  test:
+    desc: Run tests, including contract tests against a real dockerd (self-skip if none)
+    sources: *kotlinSources
+    cmds:
+      - ./gradlew test
+    interactive: true

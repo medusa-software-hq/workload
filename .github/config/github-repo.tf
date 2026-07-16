@@ -37,6 +37,7 @@ locals {
   check_backend_infra_job_name      = "backend (infra)"
   check_api_impl_job_name           = "api (implementation)"
   check_cli_job_name                = "cli"
+  check_docker_connector_job_name   = "docker-connector"
 }
 
 # Branch protection ruleset for the default branch
@@ -113,6 +114,11 @@ resource "github_repository_ruleset" "default_branch" {
 
       required_check {
         context        = "${local.check_cli_job_name} / Check CLI"
+        integration_id = local.gh_actions_integration_id
+      }
+
+      required_check {
+        context        = "${local.check_docker_connector_job_name} / Check docker-connector"
         integration_id = local.gh_actions_integration_id
       }
 

@@ -1,0 +1,48 @@
+name: Check docker-connector
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+  NO_COLOR: 1
+
+  SERVICE_PATH: libraries/docker-connector
+
+jobs:
+  check-docker-connector:
+    name: Check docker-connector
+    # ubuntu-latest ships a running Docker daemon at /var/run/docker.sock, so the contract tests
+    # actually execute here (they self-skip only where no daemon is reachable).
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: go-task/setup-task@v2
+
+      - name: Check formatting
+        run: task checkFormatting
+        working-directory: ${{ env.SERVICE_PATH }}
+
+      - name: Lint
+        run: task lint
+        working-directory: ${{ env.SERVICE_PATH }}
+
+      - name: Compile
+        run: task compile
+        working-directory: ${{ env.SERVICE_PATH }}
+
+      - name: Test (incl. contract tests against the runner's Docker daemon)
+        run: task test
+        working-directory: ${{ env.SERVICE_PATH }}
