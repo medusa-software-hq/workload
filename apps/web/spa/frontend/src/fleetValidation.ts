@@ -2,6 +2,9 @@ const PROFILE_ID_PATTERN = /^[a-z0-9-]{3,63}$/;
 const SERVICE_ACCOUNT_PATTERN = /^[a-zA-Z0-9-]+@[a-zA-Z0-9-]+\.iam\.gserviceaccount\.com$/;
 const ENV_VAR_NAME_PATTERN = /^[A-Z_][A-Z0-9_]*$/;
 const SECRET_RESOURCE_NAME_PATTERN = /^projects\/[^/]+\/secrets\/[^/]+\/versions\/(latest|\d+)$/;
+// A fully-qualified registry ref: a host with a dot or port before the first slash, then a path.
+// Mirrors the backend's imageRefPattern (FleetServiceImpl.kt) — bare Docker Hub shorthand is out.
+const IMAGE_REF_PATTERN = /^[^\s/]+[.:][^\s/]*\/\S+$/;
 
 /** Mirrors the backend's ProfileId validation (FleetModel.kt) — kept in sync by hand. */
 export function validateProfileId(id: string): string | null {
@@ -32,4 +35,17 @@ export function validateSecretResourceName(resourceName: string): string | null 
   return SECRET_RESOURCE_NAME_PATTERN.test(resourceName)
     ? null
     : 'Must look like projects/<project>/secrets/<secret>/versions/latest (or a pinned version number).';
+}
+
+/**
+ * Mirrors the backend's docker_image validation (FleetServiceImpl.kt). A blank ref is valid — it
+ * means "no image" (a pure exec/env profile).
+ */
+export function validateImageRef(imageRef: string): string | null {
+  if (imageRef.trim() === '') {
+    return null;
+  }
+  return IMAGE_REF_PATTERN.test(imageRef.trim())
+    ? null
+    : 'Must be a fully-qualified registry ref, e.g. LOCATION-docker.pkg.dev/PROJECT/REPO/IMAGE:TAG.';
 }
