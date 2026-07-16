@@ -60,6 +60,9 @@ private fun Profile_revisions.toDomain(): ProfileRevision =
         verificationStatus = VerificationStatus.valueOf(verification_status),
         envVars = env_vars.toEnvVarMap(),
         secretEnvVars = secret_env_vars.toEnvVarMap(),
+        dockerImage = docker_image,
+        dockerImageDigest = docker_image_digest,
+        imageStatus = ImageStatus.valueOf(image_status),
     )
 
 private fun Worker_profile_grants.toDomain(): Grant =
@@ -158,6 +161,9 @@ class PostgresFleetStore(
               note = revision.note,
               env_vars = revision.envVars.toJson(),
               secret_env_vars = revision.secretEnvVars.toJson(),
+              docker_image = revision.dockerImage,
+              docker_image_digest = null,
+              image_status = initialImageStatus(revision.dockerImage).name,
           )
         }
         database.fleetQueries.selectProfileById(profileId.value).executeAsOne().toDomain()
@@ -181,6 +187,9 @@ class PostgresFleetStore(
               note = revision.note,
               env_vars = revision.envVars.toJson(),
               secret_env_vars = revision.secretEnvVars.toJson(),
+              docker_image = revision.dockerImage,
+              docker_image_digest = null,
+              image_status = initialImageStatus(revision.dockerImage).name,
           )
           database.fleetQueries.updateProfileLatestRevision(nextRevisionNumber, profileId.value)
         }
@@ -233,6 +242,25 @@ class PostgresFleetStore(
   ): ProfileRevision? =
       withContext(Dispatchers.IO) {
         database.fleetQueries.updateProfileRevisionVerification(
+            status.name,
+            profileId.value,
+            revision,
+        )
+        database.fleetQueries
+            .selectProfileRevisionByNumber(profileId.value, revision)
+            .executeAsOneOrNull()
+            ?.toDomain()
+      }
+
+  override suspend fun recordImageDigest(
+      profileId: ProfileId,
+      revision: Int,
+      digest: String?,
+      status: ImageStatus,
+  ): ProfileRevision? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.updateProfileRevisionImageDigest(
+            digest,
             status.name,
             profileId.value,
             revision,

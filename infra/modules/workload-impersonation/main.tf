@@ -33,6 +33,12 @@ variable "secret_ids" {
   default     = []
 }
 
+variable "artifact_repository_id" {
+  description = "Optional Artifact Registry repository ID (e.g. google_artifact_registry_repository.xyz.id) holding the container image an image profile runs. Grants the service account roles/artifactregistry.reader on that one repository so the backend can resolve the image digest (impersonating this SA) and the worker can pull it. Empty means the profile runs no image (a pure exec/env profile)."
+  type        = string
+  default     = ""
+}
+
 # Grants the Workload broker permission to impersonate this one service account — scoped to the
 # SA resource itself, never to the project. Ownership of the grant sits with whoever owns this
 # Terraform: deleting this resource unilaterally revokes Workload's access.
@@ -56,6 +62,19 @@ resource "google_secret_manager_secret_iam_member" "service_account_can_access_s
   secret_id = each.value
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${var.service_account_email}"
+}
+
+# Grants the service account (once impersonated) read access to the one Artifact Registry
+# repository backing an image profile — scoped to that repository, never the project. The backend
+# resolves the image tag to a digest at revision-creation time using this SA's identity, and the
+# worker pulls the image with the same impersonated token, so both reads are attributable to this
+# service account in Cloud Audit Logs. count-gated: a blank artifact_repository_id (a pure
+# exec/env profile) creates no binding.
+resource "google_artifact_registry_repository_iam_member" "service_account_can_read_repository" {
+  count      = var.artifact_repository_id == "" ? 0 : 1
+  repository = var.artifact_repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${var.service_account_email}"
 }
 
 output "service_account_email" {

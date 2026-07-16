@@ -82,6 +82,8 @@ class InMemoryFleetStore : FleetStore {
             note = revision.note,
             envVars = revision.envVars,
             secretEnvVars = revision.secretEnvVars,
+            dockerImage = revision.dockerImage,
+            imageStatus = initialImageStatus(revision.dockerImage),
         )
     revisions[profileId] = mutableListOf(firstRevision)
     profiles[profileId] = profile
@@ -107,6 +109,8 @@ class InMemoryFleetStore : FleetStore {
               note = revision.note,
               envVars = revision.envVars,
               secretEnvVars = revision.secretEnvVars,
+              dockerImage = revision.dockerImage,
+              imageStatus = initialImageStatus(revision.dockerImage),
           )
       profileRevisions.add(newRevision)
       profiles.computeIfPresent(profileId) { _, profile ->
@@ -143,6 +147,22 @@ class InMemoryFleetStore : FleetStore {
       val index = list.indexOfFirst { it.revision == revision }
       if (index < 0) return null
       val updated = list[index].copy(verificationStatus = status)
+      list[index] = updated
+      updated
+    }
+  }
+
+  override suspend fun recordImageDigest(
+      profileId: ProfileId,
+      revision: Int,
+      digest: String?,
+      status: ImageStatus,
+  ): ProfileRevision? {
+    val list = revisions[profileId] ?: return null
+    return synchronized(list) {
+      val index = list.indexOfFirst { it.revision == revision }
+      if (index < 0) return null
+      val updated = list[index].copy(dockerImageDigest = digest, imageStatus = status)
       list[index] = updated
       updated
     }

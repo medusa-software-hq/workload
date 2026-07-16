@@ -36,6 +36,7 @@ class WorkerTokenBrokerServiceTest {
             counterStore = InMemoryWorkloadStore(),
             fleetStore = fleetStore,
             impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
+            imageDigestResolver = AlwaysResolvedImageDigestResolver,
             workerTokenBroker = WorkerTokenBrokerService(fleetStore, FakeTokenMinter),
         )
     server.start().join()

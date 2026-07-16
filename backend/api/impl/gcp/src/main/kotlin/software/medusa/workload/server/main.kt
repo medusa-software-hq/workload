@@ -70,6 +70,7 @@ fun main() {
           counterStore = PostgresWorkloadStore(database),
           fleetStore = fleetStore,
           impersonationVerifier = IamImpersonationVerifier(iamCredentialsClient),
+          imageDigestResolver = GcpImageDigestResolver(iamCredentialsClient),
           workerTokenBroker = workerTokenBroker,
           workerClaimService = workerClaimService,
           registrationService = RegistrationService(fleetStore),

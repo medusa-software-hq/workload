@@ -12,6 +12,16 @@ The worker CLI resolves these itself, using the impersonated token, so the
 read is attributable to this service account in Cloud Audit Logs; the broker
 never sees the value.
 
+For an **image profile**, optionally grant the same service account
+`roles/artifactregistry.reader` on the one repository holding its container
+image (`artifact_repository_id`) — see
+[M3 story 04](../../../plan/m3/stories/04-image-fields-in-revisions.md). The
+backend resolves the image tag to a digest at revision-creation time using
+this SA's identity, and the worker pulls the image with the same impersonated
+token, so both reads are attributable to this service account. Without this
+grant, the console flags the revision `image_unresolvable` and it isn't
+claimable.
+
 See [`plan/m1/design/04-impersonation-opt-in.md`](../../../plan/m1/design/04-impersonation-opt-in.md)
 for the full design.
 
@@ -26,6 +36,9 @@ module "workload_impersonation" {
 
   # Optional: grant secretAccessor on exactly the secrets this profile references.
   secret_ids = [google_secret_manager_secret.api_key.id]
+
+  # Optional: grant artifactregistry.reader on the repository backing an image profile.
+  artifact_repository_id = google_artifact_registry_repository.app.id
 }
 
 output "workload_target_service_account_email" {

@@ -90,6 +90,24 @@ enum class VerificationStatus {
   SECRET_INACCESSIBLE,
 }
 
+/**
+ * Outcome of resolving a revision's [ProfileRevision.dockerImage] tag to an immutable digest at
+ * creation time, via an Artifact Registry manifest request impersonating the revision's target SA.
+ * Parallels [VerificationStatus]:
+ * - [NOT_APPLICABLE] — the revision has no image (a pure exec/env Path A profile).
+ * - [RESOLVED] — a digest was pinned; the revision is image-claimable.
+ * - [UNRESOLVABLE] — a permanent denial (no `artifactregistry.reader` binding, a typo, or a missing
+ *   tag/repo); the revision is flagged and not claimable.
+ * - [UNDETERMINED] — a transient failure (timeout, 5xx); also not claimable, but retried on the
+ *   next create/update/verify rather than treated as a permanent verdict.
+ */
+enum class ImageStatus {
+  NOT_APPLICABLE,
+  RESOLVED,
+  UNRESOLVABLE,
+  UNDETERMINED,
+}
+
 data class ProfileRevision(
     val profileId: ProfileId,
     val revision: Int,
@@ -100,6 +118,9 @@ data class ProfileRevision(
     val verificationStatus: VerificationStatus = VerificationStatus.UNVERIFIED,
     val envVars: Map<String, String> = emptyMap(),
     val secretEnvVars: Map<String, String> = emptyMap(),
+    val dockerImage: String? = null,
+    val dockerImageDigest: String? = null,
+    val imageStatus: ImageStatus = ImageStatus.NOT_APPLICABLE,
 )
 
 data class NewProfileRevision(
@@ -108,7 +129,16 @@ data class NewProfileRevision(
     val note: String? = null,
     val envVars: Map<String, String> = emptyMap(),
     val secretEnvVars: Map<String, String> = emptyMap(),
+    val dockerImage: String? = null,
 )
+
+/**
+ * The [ImageStatus] a freshly-inserted revision carries before digest resolution runs: pending
+ * ([ImageStatus.UNDETERMINED]) when it has an image, [ImageStatus.NOT_APPLICABLE] otherwise. The
+ * service overwrites this via `recordImageDigest` once resolution completes.
+ */
+fun initialImageStatus(dockerImage: String?): ImageStatus =
+    if (dockerImage == null) ImageStatus.NOT_APPLICABLE else ImageStatus.UNDETERMINED
 
 data class Grant(
     val workerId: WorkerId,

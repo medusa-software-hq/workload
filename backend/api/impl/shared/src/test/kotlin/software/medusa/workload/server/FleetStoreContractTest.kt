@@ -217,6 +217,93 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
+  fun `docker image round-trips and starts UNDETERMINED, exec profiles stay NOT_APPLICABLE`() =
+      test { store ->
+        val imageProfile = ProfileId("my-profile-image")
+        store.createProfile(
+            imageProfile,
+            displayName = null,
+            revision =
+                NewProfileRevision(
+                    "sa@project.iam.gserviceaccount.com",
+                    createdBy = "admin@example.com",
+                    dockerImage = "us-docker.pkg.dev/p/repo/app:v1",
+                ),
+        )
+        val withImage = store.getLatestProfileRevision(imageProfile)
+        assertEquals("us-docker.pkg.dev/p/repo/app:v1", withImage?.dockerImage)
+        assertNull(withImage?.dockerImageDigest)
+        // Has an image but not yet resolved → pending, not NOT_APPLICABLE.
+        assertEquals(ImageStatus.UNDETERMINED, withImage?.imageStatus)
+
+        val execProfile = ProfileId("my-profile-exec")
+        store.createProfile(
+            execProfile,
+            displayName = null,
+            revision =
+                NewProfileRevision(
+                    "sa@project.iam.gserviceaccount.com",
+                    createdBy = "admin@example.com",
+                ),
+        )
+        val exec = store.getLatestProfileRevision(execProfile)
+        assertNull(exec?.dockerImage)
+        assertEquals(ImageStatus.NOT_APPLICABLE, exec?.imageStatus)
+      }
+
+  @Test
+  fun `recordImageDigest pins the digest on only the targeted revision`() = test { store ->
+    val profileId = ProfileId("my-profile-digest")
+    store.createProfile(
+        profileId,
+        displayName = null,
+        revision =
+            NewProfileRevision(
+                "sa@project.iam.gserviceaccount.com",
+                createdBy = "admin@example.com",
+                dockerImage = "us-docker.pkg.dev/p/repo/app:v1",
+            ),
+    )
+    store.appendProfileRevision(
+        profileId,
+        NewProfileRevision(
+            "sa@project.iam.gserviceaccount.com",
+            createdBy = "admin@example.com",
+            dockerImage = "us-docker.pkg.dev/p/repo/app:v2",
+        ),
+    )
+
+    val updated =
+        store.recordImageDigest(
+            profileId,
+            revision = 1,
+            digest = "sha256:abc",
+            ImageStatus.RESOLVED,
+        )
+    assertEquals("sha256:abc", updated?.dockerImageDigest)
+    assertEquals(ImageStatus.RESOLVED, updated?.imageStatus)
+
+    val revisions = store.listProfileRevisions(profileId).associateBy { it.revision }
+    assertEquals("sha256:abc", revisions[1]?.dockerImageDigest)
+    assertEquals(ImageStatus.RESOLVED, revisions[1]?.imageStatus)
+    // Revision 2 is untouched — still awaiting its own resolution.
+    assertNull(revisions[2]?.dockerImageDigest)
+    assertEquals(ImageStatus.UNDETERMINED, revisions[2]?.imageStatus)
+  }
+
+  @Test
+  fun `recordImageDigest on an unknown revision returns null`() = test { store ->
+    assertNull(
+        store.recordImageDigest(
+            ProfileId("no-such-profile"),
+            revision = 1,
+            digest = "sha256:abc",
+            ImageStatus.RESOLVED,
+        )
+    )
+  }
+
+  @Test
   fun `appendProfileRevision atomically bumps latestRevision`() = test { store ->
     val profileId = ProfileId("my-profile-2")
     store.createProfile(

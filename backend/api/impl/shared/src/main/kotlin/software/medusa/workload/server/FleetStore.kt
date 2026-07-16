@@ -58,6 +58,18 @@ interface FleetStore {
       status: VerificationStatus,
   ): ProfileRevision?
 
+  /**
+   * Records the outcome of resolving a revision's image tag to a digest: the pinned [digest] (null
+   * when unresolved) and the [status] verdict. Named `record…`, not `update…Revision…`, to stay
+   * within the store's no-mutable-revision contract (see the guard in `FleetStoreContractTest`).
+   */
+  suspend fun recordImageDigest(
+      profileId: ProfileId,
+      revision: Int,
+      digest: String?,
+      status: ImageStatus,
+  ): ProfileRevision?
+
   // Grants
 
   suspend fun grant(workerId: WorkerId, profileId: ProfileId, grantedBy: String): Grant

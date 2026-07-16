@@ -12,6 +12,8 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 
+@Serializable internal data class ClaimImage(val ref: String, val digest: String)
+
 @Serializable
 internal data class WorkerClaimResponse(
     val accessToken: String,
@@ -21,6 +23,8 @@ internal data class WorkerClaimResponse(
     val revision: Int,
     val envVars: Map<String, String> = emptyMap(),
     val secretEnvVars: Map<String, String> = emptyMap(),
+    // Present for image profiles (ref + resolved digest), null for pure exec/env profiles.
+    val image: ClaimImage? = null,
 )
 
 /**
@@ -83,6 +87,10 @@ class WorkerClaimService(
               revision = revision.revision,
               envVars = revision.envVars,
               secretEnvVars = revision.secretEnvVars,
+              image =
+                  revision.dockerImage?.let { ref ->
+                    revision.dockerImageDigest?.let { digest -> ClaimImage(ref, digest) }
+                  },
           ),
       )
     } catch (e: Exception) {

@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from '@test-utils';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, test, vi } from 'vitest';
 import {
+  ImageStatus,
   VerificationStatus,
   type Profile,
   type ProfileRevision,
@@ -54,6 +55,9 @@ function fakeRevision(overrides: Partial<ProfileRevision> = {}): ProfileRevision
     verificationStatus: VerificationStatus.VERIFIED,
     envVars: {},
     secretEnvVars: {},
+    dockerImage: '',
+    dockerImageDigest: '',
+    imageStatus: ImageStatus.NOT_APPLICABLE,
     ...overrides,
   } as ProfileRevision;
 }
@@ -134,6 +138,7 @@ test('creating a valid profile calls createProfile and refreshes', async () => {
         displayName: '',
         targetServiceAccount: 'sa@project.iam.gserviceaccount.com',
         note: '',
+        dockerImage: '',
         envVars: {},
         secretEnvVars: {},
       },
@@ -162,6 +167,7 @@ test('editing a profile appends a revision without asking for a new ID', async (
         profileId: 'my-profile-1',
         targetServiceAccount: 'sa-v2@project.iam.gserviceaccount.com',
         note: '',
+        dockerImage: '',
         envVars: {},
         secretEnvVars: {},
       },
@@ -270,6 +276,7 @@ test('creating a profile with an env var and a secret env var sends both maps', 
         displayName: '',
         targetServiceAccount: 'sa@project.iam.gserviceaccount.com',
         note: '',
+        dockerImage: '',
         envVars: { MODE: 'batch' },
         secretEnvVars: { API_KEY: 'projects/p/secrets/api-key/versions/latest' },
       },
@@ -378,4 +385,106 @@ test('revision history shows an env diff between adjacent revisions', async () =
   expect(within(dialog).getByText('+NEW_VAR')).toBeInTheDocument();
   expect(within(dialog).getByText('~MODE')).toBeInTheDocument();
   expect(within(dialog).getByText('-OLD_VAR')).toBeInTheDocument();
+});
+
+test('creating a profile with an image passes docker_image to createProfile', async () => {
+  const user = userEvent.setup();
+  listProfiles
+    .mockResolvedValueOnce({ profiles: [] })
+    .mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.type(
+    within(dialog).getByLabelText(/Container image/),
+    'us-docker.pkg.dev/p/repo/app:v1'
+  );
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  await waitFor(() => {
+    expect(createProfile).toHaveBeenCalledWith(
+      expect.objectContaining({ dockerImage: 'us-docker.pkg.dev/p/repo/app:v1' }),
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+});
+
+test('a bare Docker Hub image ref is rejected client-side without calling createProfile', async () => {
+  const user = userEvent.setup();
+  listProfiles
+    .mockResolvedValueOnce({ profiles: [] })
+    .mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.type(within(dialog).getByLabelText(/Container image/), 'busybox:latest');
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  expect(await within(dialog).findByText(/fully-qualified registry ref/)).toBeInTheDocument();
+  expect(createProfile).not.toHaveBeenCalled();
+});
+
+test('revision history surfaces a digest change under an identical tag', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({
+        revision: 1,
+        dockerImage: 'us-docker.pkg.dev/p/repo/app:v1',
+        dockerImageDigest: 'sha256:aaaaaaaa11111111',
+        imageStatus: ImageStatus.RESOLVED,
+      }),
+      // Same tag, different digest — a re-push. The diff must call this out.
+      fakeRevision({
+        revision: 2,
+        dockerImage: 'us-docker.pkg.dev/p/repo/app:v1',
+        dockerImageDigest: 'sha256:bbbbbbbb22222222',
+        imageStatus: ImageStatus.RESOLVED,
+      }),
+    ],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Details' }));
+  const dialog = await screen.findByRole('dialog');
+
+  expect(within(dialog).getByText('image digest')).toBeInTheDocument();
+  // Both revisions show the tag; the short digest is rendered too.
+  expect(within(dialog).getByText('sha256:bbbbbbbb')).toBeInTheDocument();
+});
+
+test('an unresolvable image revision shows the flagged badge in history', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({
+        revision: 1,
+        dockerImage: 'us-docker.pkg.dev/p/repo/missing:v9',
+        dockerImageDigest: '',
+        imageStatus: ImageStatus.UNRESOLVABLE,
+      }),
+    ],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Details' }));
+  const dialog = await screen.findByRole('dialog');
+
+  expect(within(dialog).getByText('Unresolvable')).toBeInTheDocument();
 });

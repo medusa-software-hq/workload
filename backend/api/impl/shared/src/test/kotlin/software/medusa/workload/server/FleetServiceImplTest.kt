@@ -42,6 +42,7 @@ class FleetServiceImplTest {
             counterStore = InMemoryWorkloadStore(),
             fleetStore = fleetStore,
             impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
+            imageDigestResolver = AlwaysResolvedImageDigestResolver,
         )
     server.start().join()
     stub =
@@ -305,6 +306,7 @@ class FleetServiceImplTest {
                 counterStore = InMemoryWorkloadStore(),
                 fleetStore = InMemoryFleetStore(),
                 impersonationVerifier = SecretInaccessibleVerifier,
+                imageDigestResolver = AlwaysResolvedImageDigestResolver,
             )
         secretAwareServer.start().join()
         try {
@@ -331,6 +333,111 @@ class FleetServiceImplTest {
           secretAwareServer.stop().join()
         }
       }
+
+  @Test
+  fun `createProfile rejects a malformed docker image ref`() = runBlocking {
+    val exception =
+        assertFailsWith<StatusException> {
+          stub.createProfile(
+              CreateProfileRequest.newBuilder()
+                  .setProfileId("my-profile-bad-image")
+                  .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                  // Bare Docker Hub shorthand — not a fully-qualified registry ref.
+                  .setDockerImage("busybox:latest")
+                  .build()
+          )
+        }
+    assertEquals(Status.Code.INVALID_ARGUMENT, exception.status.code)
+  }
+
+  @Test
+  fun `an image revision resolves a digest at creation and a moved tag yields a new digest`() =
+      runBlocking {
+        val resolver = ScriptedImageDigestResolver()
+        val imageServer = imageResolvingServer(resolver)
+        imageServer.start().join()
+        try {
+          val imageStub =
+              GrpcClients.newClient(
+                  "gproto+http://127.0.0.1:${imageServer.activeLocalPort()}/",
+                  FleetServiceGrpcKt.FleetServiceCoroutineStub::class.java,
+              )
+
+          resolver.next = ImageResolution(ImageStatus.RESOLVED, digest = "sha256:aaa")
+          val created =
+              imageStub.createProfile(
+                  CreateProfileRequest.newBuilder()
+                      .setProfileId("my-profile-image-svc")
+                      .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                      .setDockerImage("us-docker.pkg.dev/p/repo/app:v1")
+                      .build()
+              )
+          assertEquals("us-docker.pkg.dev/p/repo/app:v1", created.revision.dockerImage)
+          assertEquals("sha256:aaa", created.revision.dockerImageDigest)
+          assertEquals(
+              software.medusa.workload.v1.ImageStatus.IMAGE_STATUS_RESOLVED,
+              created.revision.imageStatus,
+          )
+
+          // Re-pushing the same tag → the resolver now returns a different digest; the new revision
+          // records it (the console diff surfaces this as a digest change under an identical tag).
+          resolver.next = ImageResolution(ImageStatus.RESOLVED, digest = "sha256:bbb")
+          val updated =
+              imageStub.updateProfile(
+                  software.medusa.workload.v1.UpdateProfileRequest.newBuilder()
+                      .setProfileId("my-profile-image-svc")
+                      .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                      .setDockerImage("us-docker.pkg.dev/p/repo/app:v1")
+                      .build()
+              )
+          assertEquals("us-docker.pkg.dev/p/repo/app:v1", updated.revision.dockerImage)
+          assertEquals("sha256:bbb", updated.revision.dockerImageDigest)
+        } finally {
+          imageServer.stop().join()
+        }
+      }
+
+  @Test
+  fun `an unresolvable image flags the revision UNRESOLVABLE`() = runBlocking {
+    val resolver = ScriptedImageDigestResolver()
+    val imageServer = imageResolvingServer(resolver)
+    imageServer.start().join()
+    try {
+      val imageStub =
+          GrpcClients.newClient(
+              "gproto+http://127.0.0.1:${imageServer.activeLocalPort()}/",
+              FleetServiceGrpcKt.FleetServiceCoroutineStub::class.java,
+          )
+      resolver.next = ImageResolution(ImageStatus.UNRESOLVABLE, detail = "fake: registry 404")
+      val created =
+          imageStub.createProfile(
+              CreateProfileRequest.newBuilder()
+                  .setProfileId("my-profile-image-bad")
+                  .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                  .setDockerImage("us-docker.pkg.dev/p/repo/missing:v9")
+                  .build()
+          )
+      assertEquals(
+          software.medusa.workload.v1.ImageStatus.IMAGE_STATUS_UNRESOLVABLE,
+          created.revision.imageStatus,
+      )
+      assertEquals("", created.revision.dockerImageDigest)
+    } finally {
+      imageServer.stop().join()
+    }
+  }
+
+  private fun imageResolvingServer(resolver: ImageDigestResolver): Server =
+      buildServer(
+          originRegex = """http://localhost(:\d+)?""",
+          port = 0,
+          workerApiPathPrefix = prefix,
+          auth = NoOpAuthDecorator,
+          counterStore = InMemoryWorkloadStore(),
+          fleetStore = InMemoryFleetStore(),
+          impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
+          imageDigestResolver = resolver,
+      )
 }
 
 /** Reports success unless the revision references any secrets, which it always flags. */
@@ -347,4 +454,12 @@ private object SecretInaccessibleVerifier : ImpersonationVerifier {
             "fake: secret inaccessible",
         )
       }
+}
+
+/** Returns whatever [next] is set to on each call — lets a test script the resolution outcome. */
+private class ScriptedImageDigestResolver : ImageDigestResolver {
+  var next: ImageResolution = ImageResolution(ImageStatus.RESOLVED, digest = "sha256:default")
+
+  override suspend fun resolve(targetServiceAccount: String, imageRef: String): ImageResolution =
+      next
 }

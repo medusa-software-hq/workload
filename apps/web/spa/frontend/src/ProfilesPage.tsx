@@ -20,12 +20,14 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
   validateEnvVarName,
+  validateImageRef,
   validateProfileId,
   validateSecretResourceName,
   validateServiceAccount,
 } from './fleetValidation.ts';
 import {
   FleetService,
+  ImageStatus,
   VerificationStatus,
   type Profile,
   type ProfileRevision,
@@ -130,6 +132,68 @@ function VerificationBadge({ status }: { status: VerificationStatus }) {
     <Badge color="gray" variant="light" miw={90}>
       Unverified
     </Badge>
+  );
+}
+
+/** Abbreviates a `sha256:<64 hex>` digest to `sha256:abcdef12` for compact display. */
+function shortDigest(digest: string): string {
+  const [algo, hex] = digest.split(':');
+  if (!hex) {
+    return digest;
+  }
+  return `${algo}:${hex.slice(0, 8)}`;
+}
+
+/** Renders a revision's image tag + resolved digest, with a status badge for unresolved images. */
+function ImageCell({ revision }: { revision: ProfileRevision }) {
+  if (revision.imageStatus === ImageStatus.NOT_APPLICABLE || revision.dockerImage === '') {
+    return (
+      <Text size="sm" c="dimmed">
+        —
+      </Text>
+    );
+  }
+  return (
+    <Stack gap={2}>
+      <Text size="sm" style={{ wordBreak: 'break-all' }}>
+        {revision.dockerImage}
+      </Text>
+      {revision.imageStatus === ImageStatus.RESOLVED ? (
+        <Text size="xs" c="dimmed" style={{ fontFamily: 'monospace' }}>
+          {shortDigest(revision.dockerImageDigest)}
+        </Text>
+      ) : (
+        <ImageBadge status={revision.imageStatus} />
+      )}
+    </Stack>
+  );
+}
+
+/** Status badge for an image whose digest didn't pin — mirrors [VerificationBadge]. */
+function ImageBadge({ status }: { status: ImageStatus }) {
+  if (status === ImageStatus.UNRESOLVABLE) {
+    return (
+      <Tooltip
+        multiline
+        w={280}
+        label="The image tag couldn't be resolved to a digest — the tag/repo is missing, or the target service account lacks read access. Grant artifactregistry.reader via the workload-impersonation module's artifact_repository_id input, then re-verify."
+      >
+        <Badge color="red" variant="light">
+          Unresolvable
+        </Badge>
+      </Tooltip>
+    );
+  }
+  return (
+    <Tooltip
+      multiline
+      w={280}
+      label="The image digest couldn't be resolved yet (a transient error). Re-verify the profile to retry."
+    >
+      <Badge color="yellow" variant="light">
+        Pending
+      </Badge>
+    </Tooltip>
   );
 }
 
@@ -249,16 +313,33 @@ function EnvDiff({ previous, current }: { previous: ProfileRevision; current: Pr
   diffMaps(previous.envVars, current.envVars);
   diffMaps(previous.secretEnvVars, current.secretEnvVars);
 
-  if (added.length === 0 && removed.length === 0 && changed.length === 0) {
+  // Image change: a different tag, or — the case that would otherwise hide — the *same* tag pinned
+  // to a different digest (someone re-pushed the tag), which shows up as a digest change here.
+  let imageChange: string | null = null;
+  if (previous.dockerImage !== current.dockerImage) {
+    imageChange = current.dockerImage === '' ? 'image removed' : 'image tag';
+  } else if (
+    current.dockerImage !== '' &&
+    previous.dockerImageDigest !== current.dockerImageDigest
+  ) {
+    imageChange = 'image digest';
+  }
+
+  if (added.length === 0 && removed.length === 0 && changed.length === 0 && imageChange === null) {
     return (
       <Text size="sm" c="dimmed">
-        No env changes
+        No changes
       </Text>
     );
   }
 
   return (
     <Group gap={4}>
+      {imageChange !== null && (
+        <Badge color="blue" variant="light" size="sm">
+          {imageChange}
+        </Badge>
+      )}
       {added.sort().map((name) => (
         <Badge key={`added-${name}`} color="green" variant="light" size="sm">
           +{name}
@@ -283,7 +364,9 @@ type EditState = {
   currentServiceAccount: string;
   currentEnvVars: Record<string, string>;
   currentSecretEnvVars: Record<string, string>;
+  currentDockerImage: string;
   currentVerificationStatus: VerificationStatus;
+  currentImageStatus: ImageStatus;
 } | null;
 
 export function ProfilesPage({ token }: { token: string }) {
@@ -474,8 +557,11 @@ export function ProfilesPage({ token }: { token: string }) {
                               currentServiceAccount: revision?.targetServiceAccount ?? '',
                               currentEnvVars: revision?.envVars ?? {},
                               currentSecretEnvVars: revision?.secretEnvVars ?? {},
+                              currentDockerImage: revision?.dockerImage ?? '',
                               currentVerificationStatus:
                                 revision?.verificationStatus ?? VerificationStatus.UNVERIFIED,
+                              currentImageStatus:
+                                revision?.imageStatus ?? ImageStatus.NOT_APPLICABLE,
                             })
                           }
                         >
@@ -575,7 +661,8 @@ export function ProfilesPage({ token }: { token: string }) {
                         <Table.Th>Note</Table.Th>
                         <Table.Th>Created at</Table.Th>
                         <Table.Th>Verification</Table.Th>
-                        <Table.Th>Env changes</Table.Th>
+                        <Table.Th>Image</Table.Th>
+                        <Table.Th>Changes</Table.Th>
                       </Table.Tr>
                     </Table.Thead>
                     <Table.Tbody>
@@ -588,6 +675,9 @@ export function ProfilesPage({ token }: { token: string }) {
                           <Table.Td>{formatDate(revision.createdAt)}</Table.Td>
                           <Table.Td>
                             <VerificationBadge status={revision.verificationStatus} />
+                          </Table.Td>
+                          <Table.Td>
+                            <ImageCell revision={revision} />
                           </Table.Td>
                           <Table.Td>
                             {index === 0 ? (
@@ -643,8 +733,10 @@ function CreateProfileModal({
   const [displayName, setDisplayName] = useState('');
   const [targetServiceAccount, setTargetServiceAccount] = useState('');
   const [note, setNote] = useState('');
+  const [dockerImage, setDockerImage] = useState('');
   const [profileIdError, setProfileIdError] = useState<string | null>(null);
   const [serviceAccountError, setServiceAccountError] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
   const [envVars, setEnvVars] = useState<EnvRow[]>([]);
   const [secretEnvVars, setSecretEnvVars] = useState<EnvRow[]>([]);
 
@@ -653,8 +745,10 @@ function CreateProfileModal({
     setDisplayName('');
     setTargetServiceAccount('');
     setNote('');
+    setDockerImage('');
     setProfileIdError(null);
     setServiceAccountError(null);
+    setImageError(null);
     setEnvVars([]);
     setSecretEnvVars([]);
   }
@@ -662,9 +756,11 @@ function CreateProfileModal({
   async function submit() {
     const idError = validateProfileId(profileId);
     const saError = validateServiceAccount(targetServiceAccount);
+    const imgError = validateImageRef(dockerImage);
     setProfileIdError(idError);
     setServiceAccountError(saError);
-    if (idError || saError || !envVarRowsAreValid(envVars, secretEnvVars)) {
+    setImageError(imgError);
+    if (idError || saError || imgError || !envVarRowsAreValid(envVars, secretEnvVars)) {
       return;
     }
     try {
@@ -674,6 +770,7 @@ function CreateProfileModal({
           displayName,
           targetServiceAccount,
           note,
+          dockerImage: dockerImage.trim(),
           envVars: rowsToRecord(envVars),
           secretEnvVars: rowsToRecord(secretEnvVars),
         },
@@ -721,6 +818,14 @@ function CreateProfileModal({
           required
         />
         <Textarea label="Note" value={note} onChange={(e) => setNote(e.currentTarget.value)} />
+        <TextInput
+          label="Container image"
+          description="Optional. Fully-qualified Artifact Registry ref; leave blank for a pure exec/env profile."
+          placeholder="us-docker.pkg.dev/project/repo/image:tag"
+          value={dockerImage}
+          onChange={(e) => setDockerImage(e.currentTarget.value)}
+          error={imageError}
+        />
         <EnvVarRowsEditor
           label="Env vars"
           rows={envVars}
@@ -764,7 +869,9 @@ function EditProfileModal({
 }) {
   const [targetServiceAccount, setTargetServiceAccount] = useState('');
   const [note, setNote] = useState('');
+  const [dockerImage, setDockerImage] = useState('');
   const [serviceAccountError, setServiceAccountError] = useState<string | null>(null);
+  const [imageError, setImageError] = useState<string | null>(null);
   const [envVars, setEnvVars] = useState<EnvRow[]>([]);
   const [secretEnvVars, setSecretEnvVars] = useState<EnvRow[]>([]);
 
@@ -772,7 +879,9 @@ function EditProfileModal({
     if (state) {
       setTargetServiceAccount(state.currentServiceAccount);
       setNote('');
+      setDockerImage(state.currentDockerImage);
       setServiceAccountError(null);
+      setImageError(null);
       setEnvVars(recordToRows(state.currentEnvVars));
       setSecretEnvVars(recordToRows(state.currentSecretEnvVars));
     }
@@ -783,8 +892,10 @@ function EditProfileModal({
       return;
     }
     const saError = validateServiceAccount(targetServiceAccount);
+    const imgError = validateImageRef(dockerImage);
     setServiceAccountError(saError);
-    if (saError || !envVarRowsAreValid(envVars, secretEnvVars)) {
+    setImageError(imgError);
+    if (saError || imgError || !envVarRowsAreValid(envVars, secretEnvVars)) {
       return;
     }
     try {
@@ -793,6 +904,7 @@ function EditProfileModal({
           profileId: state.profileId,
           targetServiceAccount,
           note,
+          dockerImage: dockerImage.trim(),
           envVars: rowsToRecord(envVars),
           secretEnvVars: rowsToRecord(secretEnvVars),
         },
@@ -831,6 +943,22 @@ function EditProfileModal({
             value={note}
             onChange={(e) => setNote(e.currentTarget.value)}
           />
+          <TextInput
+            label="Container image"
+            description="Optional. Fully-qualified Artifact Registry ref; leave blank for a pure exec/env profile."
+            placeholder="us-docker.pkg.dev/project/repo/image:tag"
+            value={dockerImage}
+            onChange={(e) => setDockerImage(e.currentTarget.value)}
+            error={imageError}
+          />
+          {(state.currentImageStatus === ImageStatus.UNRESOLVABLE ||
+            state.currentImageStatus === ImageStatus.UNDETERMINED) && (
+            <Alert color={state.currentImageStatus === ImageStatus.UNRESOLVABLE ? 'red' : 'yellow'}>
+              This profile's image digest isn't resolved, so it isn't claimable. Grant the target
+              service account roles/artifactregistry.reader on the image's repository via the
+              workload-impersonation module's artifact_repository_id input, then save to re-resolve.
+            </Alert>
+          )}
           <EnvVarRowsEditor
             label="Env vars"
             rows={envVars}

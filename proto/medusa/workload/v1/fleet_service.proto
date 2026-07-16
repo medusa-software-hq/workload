@@ -46,6 +46,20 @@ enum VerificationStatus {
   VERIFICATION_STATUS_SECRET_INACCESSIBLE = 4;
 }
 
+// Outcome of resolving a revision's docker_image tag to an immutable digest at creation time
+// (via an Artifact Registry manifest request impersonating the target SA).
+enum ImageStatus {
+  IMAGE_STATUS_UNSPECIFIED = 0;
+  // The revision has no image (a pure exec/env profile).
+  IMAGE_STATUS_NOT_APPLICABLE = 1;
+  // A digest was pinned; the revision is image-claimable.
+  IMAGE_STATUS_RESOLVED = 2;
+  // Permanent denial (missing artifactregistry.reader binding, a typo, or a missing tag/repo).
+  IMAGE_STATUS_UNRESOLVABLE = 3;
+  // Transient failure; retried on the next create/update/verify.
+  IMAGE_STATUS_UNDETERMINED = 4;
+}
+
 message Worker {
   string worker_id = 1;
   string name = 2;
@@ -114,6 +128,14 @@ message ProfileRevision {
   // Secret-backed env vars: name -> Secret Manager resource name
   // (projects/.../secrets/.../versions/latest or a pinned version).
   map<string, string> secret_env_vars = 9;
+  // Optional container image tag ref (e.g. LOCATION-docker.pkg.dev/PROJECT/REPO/IMAGE:TAG). Empty
+  // for a pure exec/env profile.
+  string docker_image = 10;
+  // The digest docker_image resolved to at revision creation (sha256:...). Empty until/unless
+  // resolution succeeds; a moved tag yields a different digest between revisions.
+  string docker_image_digest = 11;
+  // Resolution verdict for docker_image.
+  ImageStatus image_status = 12;
 }
 
 message ListProfilesRequest {}
@@ -129,6 +151,8 @@ message CreateProfileRequest {
   string note = 4;
   map<string, string> env_vars = 5;
   map<string, string> secret_env_vars = 6;
+  // Optional container image tag ref; the digest is resolved server-side.
+  string docker_image = 7;
 }
 
 message CreateProfileResponse {
@@ -142,6 +166,8 @@ message UpdateProfileRequest {
   string note = 3;
   map<string, string> env_vars = 4;
   map<string, string> secret_env_vars = 5;
+  // Optional container image tag ref; the digest is resolved server-side.
+  string docker_image = 6;
 }
 
 message UpdateProfileResponse {
