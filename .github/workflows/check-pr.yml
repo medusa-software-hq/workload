@@ -50,3 +50,7 @@ jobs:
   check-cli:
     name: cli
     uses: ./.github/workflows/check-cli.yml
+
+  check-docker-connector:
+    name: docker-connector
+    uses: ./.github/workflows/check-docker-connector.yml
