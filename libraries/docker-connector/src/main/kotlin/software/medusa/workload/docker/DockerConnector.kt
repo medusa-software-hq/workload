@@ -10,7 +10,12 @@ import com.linecorp.armeria.common.MediaType
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.common.util.DomainSocketAddress
 import java.nio.file.Path
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.future.await
+import kotlinx.coroutines.reactive.asFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.Json
@@ -36,6 +41,9 @@ class DockerConnector(
 
   /** Container lifecycle endpoints (create/start/wait/stop/remove/list/inspect). */
   val containers: ContainerApi = ContainerApi(this)
+
+  /** Container log streaming (stdout/stderr demux, follow mode). */
+  val logs: LogApi = LogApi(this, containers)
 
   // Lazily created on first use so construction is free. `lazy` is synchronized, so the
   // ClientFactory/WebClient are built exactly once even under concurrent first calls; and
@@ -96,6 +104,52 @@ class DockerConnector(
       } catch (e: Exception) {
         throw connectionException(e)
       }
+
+  override fun streamBytes(method: HttpMethod, pathWithQuery: String): Flow<ByteArray> = flow {
+    val response =
+        try {
+          val request = HttpRequest.of(RequestHeaders.of(method, pathWithQuery))
+          transportLazy.value.webClient.execute(request)
+        } catch (e: Exception) {
+          throw connectionException(e)
+        }
+
+    // abort() on the underlying response in a finally guarantees the connection is released whether
+    // the collector completes, throws, or cancels mid-follow — no dangling socket. It's idempotent,
+    // so aborting an already-drained response is harmless.
+    try {
+      val split = response.split()
+      val headers =
+          try {
+            split.headers().await()
+          } catch (e: Exception) {
+            throw connectionException(e)
+          }
+
+      val code = headers.status().code()
+      if (code !in SUCCESS_RANGE) {
+        // Drain the (small) error body so we can surface the daemon's own message, then stop.
+        val body =
+            try {
+              split.body().collect().await().joinToString(separator = "") { it.toStringUtf8() }
+            } catch (e: Exception) {
+              throw connectionException(e)
+            }
+        val message =
+            runCatching { json.decodeFromString<DaemonErrorBody>(body).message }
+                .getOrNull()
+                ?.takeIf { it.isNotBlank() } ?: headers.status().reasonPhrase()
+        throw DockerApiException(code, message)
+      }
+
+      // Emit body chunks as they arrive. asFlow() (kotlinx-coroutines-reactive) honors backpressure
+      // and, on collector cancellation, cancels the subscription; the finally below then aborts the
+      // response so the socket is closed and a cancelled follow leaks nothing.
+      emitAll(split.body().asFlow().map { it.array() })
+    } finally {
+      response.abort()
+    }
+  }
 
   /** The negotiated `/v<major.minor>` path prefix, computed once from a `/version` probe. */
   private suspend fun versionPrefix(): String {
@@ -168,5 +222,9 @@ class DockerConnector(
         return Transport(webClient, factory)
       }
     }
+  }
+
+  private companion object {
+    val SUCCESS_RANGE = 200..299
   }
 }

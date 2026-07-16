@@ -16,6 +16,9 @@ dependencies {
   api(libs.armeria.kotlin)
   api(libs.kotlinx.coroutines.core)
 
+  // Bridges Armeria's reactive-streams response body (StreamMessage<HttpData>) to a Kotlin Flow
+  // with proper backpressure and cancel-closes-the-socket semantics — the basis of log streaming.
+  implementation(libs.kotlinx.coroutines.reactive)
   implementation(libs.kotlinx.serialization.json)
   implementation(libs.slf4j.api)
 

@@ -69,6 +69,7 @@ internal data class ContainerCreateRequest(
     @SerialName("Cmd") val cmd: List<String>? = null,
     @SerialName("Env") val env: List<String>,
     @SerialName("Labels") val labels: Map<String, String>,
+    @SerialName("Tty") val tty: Boolean,
     @SerialName("HostConfig") val hostConfig: HostConfig,
 )
 
@@ -120,5 +121,6 @@ data class ContainerInspect(
   data class Config(
       @SerialName("Image") val image: String? = null,
       @SerialName("Labels") val labels: Map<String, String> = emptyMap(),
+      @SerialName("Tty") val tty: Boolean = false,
   )
 }

@@ -34,6 +34,7 @@ class ContainerApi internal constructor(private val engine: DockerEngine) {
       env: List<String> = emptyList(),
       labels: Map<String, String> = emptyMap(),
       autoRemove: Boolean = true,
+      tty: Boolean = false,
       name: String? = null,
   ): ContainerCreateResponse {
     val body =
@@ -43,6 +44,7 @@ class ContainerApi internal constructor(private val engine: DockerEngine) {
                 cmd = cmd,
                 env = env,
                 labels = labels,
+                tty = tty,
                 hostConfig = HostConfig(autoRemove = autoRemove),
             )
         )
