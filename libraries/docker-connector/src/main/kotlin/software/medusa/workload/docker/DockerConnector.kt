@@ -3,6 +3,11 @@ package software.medusa.workload.docker
 import com.linecorp.armeria.client.ClientFactory
 import com.linecorp.armeria.client.WebClient
 import com.linecorp.armeria.common.AggregatedHttpResponse
+import com.linecorp.armeria.common.HttpData
+import com.linecorp.armeria.common.HttpMethod
+import com.linecorp.armeria.common.HttpRequest
+import com.linecorp.armeria.common.MediaType
+import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.common.util.DomainSocketAddress
 import java.nio.file.Path
 import kotlinx.coroutines.future.await
@@ -12,22 +17,25 @@ import kotlinx.serialization.json.Json
 
 /**
  * A minimal, in-house Docker Engine API client over a Unix domain socket — the M3
- * `docker-connector`. Story 01 scope: system endpoints (`ping`/`version`/`info`) plus the
- * transport, version negotiation, error model, and lazy initialization every later story builds on.
+ * `docker-connector`. Endpoint groups hang off it: [containers] (M3-02); system endpoints
+ * (`ping`/`version`/`info`) are here directly.
  *
  * **Lazy by construction.** Building a `DockerConnector` does no I/O and starts no Netty/Armeria
  * machinery; the first endpoint call spins the transport up. So a CLI command that never touches
- * Docker (`--help`, `status`, `token`) pays nothing for holding a connector.
+ * Docker pays nothing for holding a connector.
  *
  * **One failure type, no stray output.** Every failure surfaces as a [DockerConnectorException]
  * subclass with a CLI-ready message; the library prints nothing on any thread, including
- * Netty/Armeria event loops (an explicit M3-01 requirement).
+ * Netty/Armeria event loops.
  */
 class DockerConnector(
     private val config: DockerConnectorConfig = DockerConnectorConfig(),
-) : AutoCloseable {
+) : DockerEngine, AutoCloseable {
 
-  private val json = Json { ignoreUnknownKeys = true }
+  override val json: Json = Json { ignoreUnknownKeys = true }
+
+  /** Container lifecycle endpoints (create/start/wait/stop/remove/list/inspect). */
+  val containers: ContainerApi = ContainerApi(this)
 
   // Lazily created on first use so construction is free. `lazy` is synchronized, so the
   // ClientFactory/WebClient are built exactly once even under concurrent first calls; and
@@ -42,10 +50,8 @@ class DockerConnector(
    * [DockerConnectionException] if the daemon can't be reached.
    */
   suspend fun ping(): PingResult {
-    val response = request("/_ping")
-    if (response.status().code() != 200) {
-      throw apiException(response)
-    }
+    val response = exchange(HttpMethod.GET, "/_ping")
+    response.ensureSuccess(json)
     val headers = response.headers()
     return PingResult(
         apiVersion = headers.get("Api-Version").orEmpty(),
@@ -56,21 +62,40 @@ class DockerConnector(
 
   /** `GET /version`. Also the API-version negotiation probe (queried unversioned). */
   suspend fun version(): VersionInfo {
-    val response = request("/version")
-    if (response.status().code() != 200) {
-      throw apiException(response)
-    }
-    return decode(response, "version")
+    val response = exchange(HttpMethod.GET, "/version")
+    response.ensureSuccess(json)
+    return response.decodeBody(json, "version")
   }
 
   /** `GET /info`, addressed at the negotiated API version. */
   suspend fun info(): SystemInfo {
-    val response = request("${versionPrefix()}/info")
-    if (response.status().code() != 200) {
-      throw apiException(response)
-    }
-    return decode(response, "info")
+    val response = exchange(HttpMethod.GET, versionedPath("/info"))
+    response.ensureSuccess(json)
+    return response.decodeBody(json, "info")
   }
+
+  override suspend fun versionedPath(path: String): String = "${versionPrefix()}$path"
+
+  override suspend fun exchange(
+      method: HttpMethod,
+      pathWithQuery: String,
+      jsonBody: String?,
+  ): AggregatedHttpResponse =
+      try {
+        val headersBuilder = RequestHeaders.builder(method, pathWithQuery)
+        val request =
+            if (jsonBody != null) {
+              HttpRequest.of(
+                  headersBuilder.contentType(MediaType.JSON).build(),
+                  HttpData.ofUtf8(jsonBody),
+              )
+            } else {
+              HttpRequest.of(headersBuilder.build())
+            }
+        transportLazy.value.webClient.execute(request).aggregate().await()
+      } catch (e: Exception) {
+        throw connectionException(e)
+      }
 
   /** The negotiated `/v<major.minor>` path prefix, computed once from a `/version` probe. */
   private suspend fun versionPrefix(): String {
@@ -85,28 +110,6 @@ class DockerConnector(
       negotiatedVersion = negotiated
       "/v$negotiated"
     }
-  }
-
-  private suspend fun request(path: String): AggregatedHttpResponse =
-      try {
-        transportLazy.value.webClient.get(path).aggregate().await()
-      } catch (e: Exception) {
-        throw connectionException(e)
-      }
-
-  private inline fun <reified T> decode(response: AggregatedHttpResponse, what: String): T =
-      try {
-        json.decodeFromString<T>(response.contentUtf8())
-      } catch (e: Exception) {
-        throw DockerProtocolException("Malformed Docker daemon response for $what", e)
-      }
-
-  private fun apiException(response: AggregatedHttpResponse): DockerApiException {
-    val message =
-        runCatching { json.decodeFromString<DaemonErrorBody>(response.contentUtf8()).message }
-            .getOrNull()
-            ?.takeIf { it.isNotBlank() } ?: response.status().reasonPhrase()
-    return DockerApiException(response.status().code(), message)
   }
 
   /** Maps an Armeria/transport failure into an actionable [DockerConnectionException]. */

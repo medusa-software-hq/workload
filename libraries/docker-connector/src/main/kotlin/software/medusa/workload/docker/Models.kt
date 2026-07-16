@@ -47,3 +47,78 @@ data class SystemInfo(
 
 /** The shape of a Docker daemon error body: `{"message": "..."}`. */
 @Serializable internal data class DaemonErrorBody(val message: String? = null)
+
+// --- Containers (M3-02) ---
+
+/**
+ * `HostConfig` subset we set on create. [autoRemove] maps to `--rm`: the daemon reaps the
+ * container's filesystem the moment it exits, so short-lived workload runs leave nothing behind.
+ */
+@Serializable
+internal data class HostConfig(
+    @SerialName("AutoRemove") val autoRemove: Boolean,
+)
+
+/**
+ * Request body for `POST /containers/create`. Env is passed **only here**, in the JSON body — never
+ * on a command line — so secrets in the environment never reach `argv` or a process listing.
+ */
+@Serializable
+internal data class ContainerCreateRequest(
+    @SerialName("Image") val image: String,
+    @SerialName("Cmd") val cmd: List<String>? = null,
+    @SerialName("Env") val env: List<String>,
+    @SerialName("Labels") val labels: Map<String, String>,
+    @SerialName("HostConfig") val hostConfig: HostConfig,
+)
+
+/** Response of `POST /containers/create`. */
+@Serializable
+data class ContainerCreateResponse(
+    @SerialName("Id") val id: String,
+    @SerialName("Warnings") val warnings: List<String> = emptyList(),
+)
+
+/** Response of `POST /containers/{id}/wait`: the container's exit code, plus any wait error. */
+@Serializable
+data class ContainerWaitResult(
+    @SerialName("StatusCode") val statusCode: Int,
+    @SerialName("Error") val error: WaitError? = null,
+) {
+  @Serializable data class WaitError(@SerialName("Message") val message: String? = null)
+}
+
+/** One entry from `GET /containers/json` — the minimal projection we consume. */
+@Serializable
+data class ContainerSummary(
+    @SerialName("Id") val id: String,
+    @SerialName("Names") val names: List<String> = emptyList(),
+    @SerialName("Image") val image: String? = null,
+    @SerialName("State") val state: String? = null,
+    @SerialName("Status") val status: String? = null,
+    @SerialName("Labels") val labels: Map<String, String> = emptyMap(),
+)
+
+/** Minimal typed projection of `GET /containers/{id}/json`. */
+@Serializable
+data class ContainerInspect(
+    @SerialName("Id") val id: String,
+    @SerialName("Name") val name: String? = null,
+    @SerialName("State") val state: State = State(),
+    @SerialName("Config") val config: Config = Config(),
+) {
+  @Serializable
+  data class State(
+      @SerialName("Status") val status: String? = null,
+      @SerialName("Running") val running: Boolean = false,
+      @SerialName("ExitCode") val exitCode: Int = 0,
+      @SerialName("OOMKilled") val oomKilled: Boolean = false,
+      @SerialName("Error") val error: String? = null,
+  )
+
+  @Serializable
+  data class Config(
+      @SerialName("Image") val image: String? = null,
+      @SerialName("Labels") val labels: Map<String, String> = emptyMap(),
+  )
+}
