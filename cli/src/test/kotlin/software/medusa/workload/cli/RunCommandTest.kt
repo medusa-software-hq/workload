@@ -4,6 +4,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import software.medusa.workload.docker.ProgressDetail
+import software.medusa.workload.docker.PullProgress
 
 /** Pure unit tests for `workload run`'s ref/env/error logic — no daemon needed. */
 class RunCommandTest {
@@ -89,8 +91,7 @@ class RunCommandTest {
     val message =
         pullFailureMessage(
             pinnedRef = "europe-docker.pkg.dev/p/repo/app@sha256:abc",
-            exitCode = 1,
-            output = "Error response from daemon: unauthorized: authentication required",
+            reason = "unauthorized: authentication required",
         )
     assertTrue("gcloud auth configure-docker europe-docker.pkg.dev" in message, message)
   }
@@ -100,10 +101,48 @@ class RunCommandTest {
     val message =
         pullFailureMessage(
             pinnedRef = "us-docker.pkg.dev/p/repo/app@sha256:abc",
-            exitCode = 1,
-            output = "manifest unknown",
+            reason = "manifest unknown",
         )
     assertFalse("configure-docker" in message, message)
+  }
+
+  @Test
+  fun `pull progress renders one line per layer state change`() {
+    val seen = mutableSetOf<String>()
+    val lines =
+        listOf(
+                PullProgress(status = "Pulling from library/app", id = "latest"),
+                PullProgress(
+                    status = "Downloading",
+                    id = "abc123",
+                    progressDetail = ProgressDetail(current = 10, total = 100),
+                ),
+                // Same layer, same status, more bytes — must not produce a second line.
+                PullProgress(
+                    status = "Downloading",
+                    id = "abc123",
+                    progressDetail = ProgressDetail(current = 90, total = 100),
+                ),
+                PullProgress(status = "Pull complete", id = "abc123"),
+                PullProgress(status = "Status: Downloaded newer image for app:latest"),
+            )
+            .mapNotNull { renderPullProgress(it, seen) }
+
+    assertEquals(
+        listOf(
+            "latest: Pulling from library/app",
+            "abc123: Downloading",
+            "abc123: Pull complete",
+            "Status: Downloaded newer image for app:latest",
+        ),
+        lines,
+    )
+  }
+
+  @Test
+  fun `pull progress skips records with no status`() {
+    val seen = mutableSetOf<String>()
+    assertEquals(null, renderPullProgress(PullProgress(id = "abc123"), seen))
   }
 
   @Test

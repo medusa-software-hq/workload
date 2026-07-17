@@ -35,6 +35,7 @@ import kotlinx.serialization.json.Json
  */
 class DockerConnector(
     private val config: DockerConnectorConfig = DockerConnectorConfig(),
+    authResolver: DockerAuthResolver = DockerAuthResolver(),
 ) : DockerEngine, AutoCloseable {
 
   override val json: Json = Json { ignoreUnknownKeys = true }
@@ -44,6 +45,9 @@ class DockerConnector(
 
   /** Container log streaming (stdout/stderr demux, follow mode). */
   val logs: LogApi = LogApi(this, containers)
+
+  /** Image endpoints (pull with credential-helper auth, inspect). */
+  val images: ImageApi = ImageApi(this, authResolver)
 
   // Lazily created on first use so construction is free. `lazy` is synchronized, so the
   // ClientFactory/WebClient are built exactly once even under concurrent first calls; and
@@ -105,11 +109,16 @@ class DockerConnector(
         throw connectionException(e)
       }
 
-  override fun streamBytes(method: HttpMethod, pathWithQuery: String): Flow<ByteArray> = flow {
+  override fun streamBytes(
+      method: HttpMethod,
+      pathWithQuery: String,
+      headers: Map<String, String>,
+  ): Flow<ByteArray> = flow {
     val response =
         try {
-          val request = HttpRequest.of(RequestHeaders.of(method, pathWithQuery))
-          transportLazy.value.webClient.execute(request)
+          val builder = RequestHeaders.builder(method, pathWithQuery)
+          headers.forEach { (name, value) -> builder.add(name, value) }
+          transportLazy.value.webClient.execute(HttpRequest.of(builder.build()))
         } catch (e: Exception) {
           throw connectionException(e)
         }
