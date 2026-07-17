@@ -13,10 +13,13 @@ This one reports what actually arrived:
 ==============================================
 arch:  aarch64
 
-identity: the brokered token is live and belongs to
-  it-handtest@ms-workload-test-78f9932a.iam.gserviceaccount.com
-  (expires in 3417s)
-  -> the same token pulled this image and can act as this SA from in here.
+identity: the brokered token is LIVE — Google accepted it.
+  service account id: 104567890123456789012
+  (no email claim — the token carries cloud-platform scope only; the pull above already
+   proves it acts as the profile's target SA)
+  scope: https://www.googleapis.com/auth/cloud-platform
+  expires in: 3417s
+  -> the same token pulled this image and can call GCP as this SA from in here.
 
 environment (values are never printed — compare the fingerprint):
   NAME                                LEN  SHA256
@@ -30,8 +33,14 @@ exiting with 0
 
 That single run demonstrates the whole chain: the profile's plain env arrived,
 a **secret was resolved** worker-side out of Secret Manager, and the brokered
-token is not merely present but **live** — Google itself confirms which service
-account it speaks for, and it's the profile's target SA, not your machine.
+token is not merely present but **live** — Google's `tokeninfo` accepts it.
+
+The broker mints the token with `cloud-platform` scope only, and `tokeninfo`
+returns an `email` claim only for tokens that *also* carry the `userinfo.email`
+scope — so this reports the service account's numeric id rather than its email.
+That's not a downgrade: the successful private-registry pull above already proves
+the token acts as the profile's target SA, since nothing else on the host is
+signed in to that registry.
 
 ## Why fingerprints instead of values
 
