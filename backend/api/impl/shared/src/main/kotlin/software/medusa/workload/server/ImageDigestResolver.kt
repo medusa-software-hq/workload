@@ -67,6 +67,25 @@ internal data class ParsedImageRef(
 }
 
 /**
+ * Whether [host] is a Google-operated container registry — Artifact Registry (`*.pkg.dev`) or the
+ * legacy Container Registry (`gcr.io`, `*.gcr.io`).
+ *
+ * **A security boundary, not a convenience check.** Resolving a digest sends an access token
+ * impersonating the revision's target SA to this host, and the host comes from the profile's image
+ * ref. Without this, anyone who can set a profile's image could point it at a host they control and
+ * be handed a live token for that service account — turning "can edit a profile" into "can act as
+ * any SA that opted into impersonation", which is precisely the trust boundary the impersonation
+ * opt-in exists to protect. The worker applies the same rule before sending its brokered token.
+ *
+ * Deliberately strict: the port is *not* stripped (`us-docker.pkg.dev:8080` isn't Google's), and
+ * only a true dot-suffix matches, so `evil-pkg.dev` and `us-docker.pkg.dev.evil.com` are rejected.
+ */
+internal fun isGoogleRegistryHost(host: String): Boolean {
+  val normalized = host.lowercase()
+  return normalized == "gcr.io" || normalized.endsWith(".gcr.io") || normalized.endsWith(".pkg.dev")
+}
+
+/**
  * Splits a Docker image reference into host/repository/reference. Requires a registry host (a first
  * segment containing a `.` or `:` — Artifact Registry is always `*.pkg.dev`), so a bare
  * `busybox:latest` (implicit Docker Hub) is rejected: workload images live in Artifact Registry.
@@ -103,11 +122,39 @@ internal fun parseImageRef(imageRef: String): ParsedImageRef? {
   }
 }
 
+/**
+ * Mints a short-lived access token impersonating a target SA. Injectable so the host-guard tests can
+ * prove no token is ever minted for a non-Google registry.
+ */
+internal fun interface ImpersonatedTokenMinter {
+  fun mint(targetServiceAccount: String): String
+}
+
 /** Mints a token for [targetServiceAccount] and asks the registry for the manifest digest. */
-class GcpImageDigestResolver(
-    private val iamCredentialsClient: IamCredentialsClient,
-    private val httpClient: HttpClient = HttpClient.newHttpClient(),
+class GcpImageDigestResolver
+internal constructor(
+    private val minter: ImpersonatedTokenMinter,
+    private val httpClient: HttpClient,
 ) : ImageDigestResolver {
+  constructor(
+      iamCredentialsClient: IamCredentialsClient,
+      httpClient: HttpClient = HttpClient.newHttpClient(),
+  ) : this(
+      ImpersonatedTokenMinter { targetServiceAccount ->
+        iamCredentialsClient
+            .generateAccessToken(
+                GenerateAccessTokenRequest.newBuilder()
+                    .setName(ServiceAccountName.of("-", targetServiceAccount).toString())
+                    .addScope(resolverCloudPlatformScope)
+                    .setLifetime(
+                        Duration.newBuilder().setSeconds(resolverTokenLifetimeSeconds).build()
+                    )
+                    .build()
+            )
+            .accessToken
+      },
+      httpClient,
+  )
 
   override suspend fun resolve(
       targetServiceAccount: String,
@@ -121,9 +168,26 @@ class GcpImageDigestResolver(
                     detail = "malformed image reference: '$imageRef'",
                 )
 
+        // Refuse *before* minting: we will not hand an impersonated token to a host that isn't
+        // Google's. `requireValidImageRef` rejects these at create/update, so reaching here means a
+        // row predating that check (or a bypass) — either way, resolution fails rather than leaks.
+        if (!isGoogleRegistryHost(parsed.host)) {
+          resolverLogger.error(
+              "refusing to resolve {} — {} is not a Google container registry; no token was minted",
+              imageRef,
+              parsed.host,
+          )
+          return@withContext ImageResolution(
+              ImageStatus.UNRESOLVABLE,
+              detail =
+                  "'${parsed.host}' is not a Google container registry (Artifact Registry or GCR). " +
+                      "Workload only resolves — and only ever sends credentials to — Google registries.",
+          )
+        }
+
         val token =
             try {
-              mintToken(targetServiceAccount)
+              minter.mint(targetServiceAccount)
             } catch (e: ApiException) {
               // Denial to *mint* means the broker can't impersonate this SA at all — a binding
               // problem, surfaced as verification elsewhere; here it just blocks resolution.
@@ -194,18 +258,6 @@ class GcpImageDigestResolver(
     return httpClient.send(request, HttpResponse.BodyHandlers.discarding())
   }
 
-  private fun mintToken(targetServiceAccount: String): String =
-      iamCredentialsClient
-          .generateAccessToken(
-              GenerateAccessTokenRequest.newBuilder()
-                  .setName(ServiceAccountName.of("-", targetServiceAccount).toString())
-                  .addScope(resolverCloudPlatformScope)
-                  .setLifetime(
-                      Duration.newBuilder().setSeconds(resolverTokenLifetimeSeconds).build()
-                  )
-                  .build()
-          )
-          .accessToken
 
   private fun undetermined(
       targetServiceAccount: String,
