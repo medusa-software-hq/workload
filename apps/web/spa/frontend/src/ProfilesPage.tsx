@@ -16,7 +16,7 @@ import {
   Title,
   Tooltip,
 } from '@mantine/core';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
   validateEnvVarName,
@@ -132,40 +132,6 @@ function VerificationBadge({ status }: { status: VerificationStatus }) {
     <Badge color="gray" variant="light" miw={90}>
       Unverified
     </Badge>
-  );
-}
-
-/** Abbreviates a `sha256:<64 hex>` digest to `sha256:abcdef12` for compact display. */
-function shortDigest(digest: string): string {
-  const [algo, hex] = digest.split(':');
-  if (!hex) {
-    return digest;
-  }
-  return `${algo}:${hex.slice(0, 8)}`;
-}
-
-/** Renders a revision's image tag + resolved digest, with a status badge for unresolved images. */
-function ImageCell({ revision }: { revision: ProfileRevision }) {
-  if (revision.imageStatus === ImageStatus.NOT_APPLICABLE || revision.dockerImage === '') {
-    return (
-      <Text size="sm" c="dimmed">
-        —
-      </Text>
-    );
-  }
-  return (
-    <Stack gap={2}>
-      <Text size="sm" style={{ wordBreak: 'break-all' }}>
-        {revision.dockerImage}
-      </Text>
-      {revision.imageStatus === ImageStatus.RESOLVED ? (
-        <Text size="xs" c="dimmed" style={{ fontFamily: 'monospace' }}>
-          {shortDigest(revision.dockerImageDigest)}
-        </Text>
-      ) : (
-        <ImageBadge status={revision.imageStatus} />
-      )}
-    </Stack>
   );
 }
 
@@ -477,6 +443,190 @@ function EnvDiff({ previous, current }: { previous: ProfileRevision; current: Pr
   );
 }
 
+/** A labelled read-only field for the detail view — the display counterpart to a form input. */
+function DetailField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Stack gap={2}>
+      <Text size="xs" c="dimmed" fw={500} tt="uppercase">
+        {label}
+      </Text>
+      {typeof children === 'string' ? <Text size="sm">{children}</Text> : children}
+    </Stack>
+  );
+}
+
+/** A read-only name→value list (env vars) / name→resource list (secret env vars). */
+function ReadOnlyVars({
+  vars,
+  emptyLabel,
+  mono,
+}: {
+  vars: Record<string, string>;
+  emptyLabel: string;
+  mono?: boolean;
+}) {
+  const entries = Object.entries(vars).sort(([a], [b]) => a.localeCompare(b));
+  if (entries.length === 0) {
+    return (
+      <Text size="sm" c="dimmed">
+        {emptyLabel}
+      </Text>
+    );
+  }
+  return (
+    <Table withRowBorders={false} verticalSpacing={2} horizontalSpacing="md">
+      <Table.Tbody>
+        {entries.map(([name, value]) => (
+          <Table.Tr key={name}>
+            <Table.Td style={{ width: '1%', whiteSpace: 'nowrap', verticalAlign: 'top' }}>
+              <Text size="sm" fw={500}>
+                {name}
+              </Text>
+            </Table.Td>
+            <Table.Td>
+              <Text
+                size="sm"
+                style={{ fontFamily: mono ? 'monospace' : undefined, wordBreak: 'break-all' }}
+              >
+                {value}
+              </Text>
+            </Table.Td>
+          </Table.Tr>
+        ))}
+      </Table.Tbody>
+    </Table>
+  );
+}
+
+/** `‹ 3 › of 5` — steps through a profile's revisions, latest by default. */
+function RevisionPager({
+  revisions,
+  index,
+  onIndex,
+}: {
+  revisions: ProfileRevision[];
+  index: number;
+  onIndex: (i: number) => void;
+}) {
+  const current = revisions[index];
+  const isLatest = index === revisions.length - 1;
+  return (
+    <Group gap="xs" align="center">
+      <ActionIcon
+        variant="default"
+        aria-label="Previous revision"
+        disabled={index === 0}
+        onClick={() => onIndex(index - 1)}
+      >
+        ‹
+      </ActionIcon>
+      <Group gap={6} align="baseline">
+        <Text size="xs" c="dimmed">
+          Revision
+        </Text>
+        <Text
+          fw={600}
+          style={{ minWidth: 24, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}
+        >
+          {current.revision}
+        </Text>
+        <Text size="xs" c="dimmed">
+          of {revisions.length}
+        </Text>
+      </Group>
+      <ActionIcon
+        variant="default"
+        aria-label="Next revision"
+        disabled={isLatest}
+        onClick={() => onIndex(index + 1)}
+      >
+        ›
+      </ActionIcon>
+      {isLatest && (
+        <Badge size="sm" variant="light" color="blue">
+          Latest
+        </Badge>
+      )}
+    </Group>
+  );
+}
+
+/** Read-only rendering of one revision — the big layout that replaces the history table. */
+function RevisionView({
+  revision,
+  previous,
+}: {
+  revision: ProfileRevision;
+  previous: ProfileRevision | null;
+}) {
+  const hasImage =
+    revision.imageStatus !== ImageStatus.NOT_APPLICABLE && revision.dockerImage !== '';
+  return (
+    <Stack gap="lg">
+      <Group grow align="flex-start">
+        <DetailField label="Target service account">
+          <Text size="sm" style={{ wordBreak: 'break-all' }}>
+            {revision.targetServiceAccount}
+          </Text>
+        </DetailField>
+        <DetailField label="Verification">
+          <Group gap={0}>
+            <VerificationBadge status={revision.verificationStatus} />
+          </Group>
+        </DetailField>
+      </Group>
+
+      <Group grow align="flex-start">
+        <DetailField label="Created">{formatDate(revision.createdAt)}</DetailField>
+        <DetailField label="Created by">{revision.createdBy}</DetailField>
+      </Group>
+
+      <DetailField label="Note">{revision.note || '—'}</DetailField>
+
+      <DetailField label="Container image">
+        {hasImage ? (
+          <Stack gap={4}>
+            <Text size="sm" style={{ wordBreak: 'break-all' }}>
+              {revision.dockerImage}
+            </Text>
+            {revision.imageStatus === ImageStatus.RESOLVED ? (
+              <Text
+                size="xs"
+                c="dimmed"
+                style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}
+              >
+                pinned to {revision.dockerImageDigest}
+              </Text>
+            ) : (
+              <Group gap={0}>
+                <ImageBadge status={revision.imageStatus} />
+              </Group>
+            )}
+          </Stack>
+        ) : (
+          <Text size="sm" c="dimmed">
+            None — a pure exec/env profile.
+          </Text>
+        )}
+      </DetailField>
+
+      <DetailField label="Env vars">
+        <ReadOnlyVars vars={revision.envVars} emptyLabel="None" />
+      </DetailField>
+
+      <DetailField label="Secret env vars">
+        <ReadOnlyVars vars={revision.secretEnvVars} emptyLabel="None" mono />
+      </DetailField>
+
+      {previous !== null && (
+        <DetailField label="Changes from the previous revision">
+          <EnvDiff previous={previous} current={revision} />
+        </DetailField>
+      )}
+    </Stack>
+  );
+}
+
 type EditState = {
   profileId: string;
   currentServiceAccount: string;
@@ -552,6 +702,7 @@ export function ProfilesPage({ token }: { token: string }) {
   const [archiveTarget, setArchiveTarget] = useState<Profile | null>(null);
   const [detailsTarget, setDetailsTarget] = useState<Profile | null>(null);
   const [detailsRevisions, setDetailsRevisions] = useState<ProfileRevision[] | null>(null);
+  const [selectedRevisionIndex, setSelectedRevisionIndex] = useState(0);
 
   async function openDetails(profile: Profile) {
     setDetailsTarget(profile);
@@ -562,9 +713,25 @@ export function ProfilesPage({ token }: { token: string }) {
         { headers }
       );
       setDetailsRevisions(response.revisions);
+      // Land on the latest revision — that's what "the current state of this profile" means.
+      setSelectedRevisionIndex(Math.max(0, response.revisions.length - 1));
     } catch (err: unknown) {
       handleError(err);
     }
+  }
+
+  /** Seed the Edit form from a specific revision as a template (saving still appends N+1). */
+  function editFromRevision(profileId: string, revision: ProfileRevision) {
+    setDetailsTarget(null);
+    setEditState({
+      profileId,
+      currentServiceAccount: revision.targetServiceAccount,
+      currentEnvVars: revision.envVars,
+      currentSecretEnvVars: revision.secretEnvVars,
+      currentDockerImage: revision.dockerImage,
+      currentVerificationStatus: revision.verificationStatus,
+      currentImageStatus: revision.imageStatus,
+    });
   }
 
   async function verifyProfile(profileId: string) {
@@ -620,13 +787,13 @@ export function ProfilesPage({ token }: { token: string }) {
       {(profiles ?? []).length === 0 ? (
         <Text c="dimmed">No profiles yet.</Text>
       ) : (
-        <Table.ScrollContainer minWidth={1100}>
-          <Table striped withTableBorder>
+        <Table.ScrollContainer minWidth={720}>
+          <Table striped highlightOnHover withTableBorder>
             <Table.Thead>
               <Table.Tr>
                 <Table.Th>Profile ID</Table.Th>
                 <Table.Th>Target service account</Table.Th>
-                <Table.Th>Latest revision</Table.Th>
+                <Table.Th>Rev</Table.Th>
                 <Table.Th>Verification</Table.Th>
                 <Table.Th>Status</Table.Th>
                 <Table.Th />
@@ -635,10 +802,33 @@ export function ProfilesPage({ token }: { token: string }) {
             <Table.Tbody>
               {(profiles ?? []).map((profile) => {
                 const revision = latestRevisions.get(profile.profileId);
+                const open = () => void openDetails(profile);
                 return (
-                  <Table.Tr key={profile.profileId}>
-                    <Table.Td>{profile.profileId}</Table.Td>
-                    <Table.Td>{revision?.targetServiceAccount ?? '—'}</Table.Td>
+                  <Table.Tr
+                    key={profile.profileId}
+                    style={{ cursor: 'pointer' }}
+                    // A whole-row click target can't be a <button> (it's a <tr>); role+tabindex+
+                    // keydown is the standard accessible pattern for it.
+                    // eslint-disable-next-line jsx-a11y/prefer-tag-over-role
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Open ${profile.profileId}`}
+                    onClick={open}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        open();
+                      }
+                    }}
+                  >
+                    <Table.Td>
+                      <Text fw={500}>{profile.profileId}</Text>
+                    </Table.Td>
+                    <Table.Td>
+                      <Text size="sm" c="dimmed" style={{ wordBreak: 'break-all' }}>
+                        {revision?.targetServiceAccount ?? '—'}
+                      </Text>
+                    </Table.Td>
                     <Table.Td>{profile.latestRevision}</Table.Td>
                     <Table.Td>
                       <VerificationBadge
@@ -656,52 +846,8 @@ export function ProfilesPage({ token }: { token: string }) {
                         </Badge>
                       )}
                     </Table.Td>
-                    <Table.Td>
-                      <Group gap="xs" wrap="nowrap">
-                        <Button
-                          size="xs"
-                          variant="default"
-                          onClick={() => void openDetails(profile)}
-                        >
-                          Details
-                        </Button>
-                        <Button
-                          size="xs"
-                          variant="default"
-                          disabled={profile.archived}
-                          onClick={() =>
-                            setEditState({
-                              profileId: profile.profileId,
-                              currentServiceAccount: revision?.targetServiceAccount ?? '',
-                              currentEnvVars: revision?.envVars ?? {},
-                              currentSecretEnvVars: revision?.secretEnvVars ?? {},
-                              currentDockerImage: revision?.dockerImage ?? '',
-                              currentVerificationStatus:
-                                revision?.verificationStatus ?? VerificationStatus.UNVERIFIED,
-                              currentImageStatus:
-                                revision?.imageStatus ?? ImageStatus.NOT_APPLICABLE,
-                            })
-                          }
-                        >
-                          Edit
-                        </Button>
-                        <Button
-                          size="xs"
-                          variant="default"
-                          onClick={() => void verifyProfile(profile.profileId)}
-                        >
-                          Re-verify
-                        </Button>
-                        <Button
-                          size="xs"
-                          variant="outline"
-                          color="red"
-                          disabled={profile.archived}
-                          onClick={() => setArchiveTarget(profile)}
-                        >
-                          Archive
-                        </Button>
-                      </Group>
+                    <Table.Td style={{ textAlign: 'right', color: 'var(--mantine-color-dimmed)' }}>
+                      ›
                     </Table.Td>
                   </Table.Tr>
                 );
@@ -759,76 +905,102 @@ export function ProfilesPage({ token }: { token: string }) {
       <Modal
         opened={detailsTarget !== null}
         onClose={() => setDetailsTarget(null)}
-        title={detailsTarget ? `Profile: ${detailsTarget.profileId}` : ''}
+        title={
+          detailsTarget && (
+            <Group gap="sm">
+              <Title order={4}>{detailsTarget.profileId}</Title>
+              {detailsTarget.archived ? (
+                <Badge color="gray" variant="outline">
+                  Archived
+                </Badge>
+              ) : (
+                <Badge color="blue" variant="outline">
+                  Active
+                </Badge>
+              )}
+            </Group>
+          )
+        }
         size="lg"
       >
-        {detailsTarget && (
-          <Stack gap="lg">
-            <Stack gap="xs">
-              <Title order={4}>Revision history</Title>
-              {detailsRevisions === null ? (
-                <Loader size="sm" />
-              ) : (
-                <Table.ScrollContainer minWidth={800}>
-                  <Table striped withTableBorder>
-                    <Table.Thead>
-                      <Table.Tr>
-                        <Table.Th>Rev</Table.Th>
-                        <Table.Th>Target service account</Table.Th>
-                        <Table.Th>Created by</Table.Th>
-                        <Table.Th>Note</Table.Th>
-                        <Table.Th>Created at</Table.Th>
-                        <Table.Th>Verification</Table.Th>
-                        <Table.Th>Image</Table.Th>
-                        <Table.Th>Changes</Table.Th>
-                      </Table.Tr>
-                    </Table.Thead>
-                    <Table.Tbody>
-                      {detailsRevisions.map((revision, index) => (
-                        <Table.Tr key={revision.revision}>
-                          <Table.Td>{revision.revision}</Table.Td>
-                          <Table.Td>{revision.targetServiceAccount}</Table.Td>
-                          <Table.Td>{revision.createdBy}</Table.Td>
-                          <Table.Td>{revision.note || '—'}</Table.Td>
-                          <Table.Td>{formatDate(revision.createdAt)}</Table.Td>
-                          <Table.Td>
-                            <VerificationBadge status={revision.verificationStatus} />
-                          </Table.Td>
-                          <Table.Td>
-                            <ImageCell revision={revision} />
-                          </Table.Td>
-                          <Table.Td>
-                            {index === 0 ? (
-                              <Text size="sm" c="dimmed">
-                                Initial revision
-                              </Text>
-                            ) : (
-                              <EnvDiff previous={detailsRevisions[index - 1]} current={revision} />
-                            )}
-                          </Table.Td>
-                        </Table.Tr>
-                      ))}
-                    </Table.Tbody>
-                  </Table>
-                </Table.ScrollContainer>
-              )}
-            </Stack>
-            <Stack gap="xs">
-              <Title order={4}>Granted workers</Title>
-              {grantedWorkerNames(detailsTarget.profileId).length === 0 ? (
-                <Text c="dimmed">None</Text>
-              ) : (
-                <Group gap={4}>
-                  {grantedWorkerNames(detailsTarget.profileId).map((name) => (
-                    <Badge key={name} variant="light">
-                      {name}
-                    </Badge>
-                  ))}
-                </Group>
-              )}
-            </Stack>
-          </Stack>
-        )}
+        {detailsTarget &&
+          (detailsRevisions === null ? (
+            <Group justify="center" p="xl">
+              <Loader size="sm" />
+            </Group>
+          ) : (
+            (() => {
+              const index = Math.min(selectedRevisionIndex, detailsRevisions.length - 1);
+              const revision = detailsRevisions[index];
+              const grantedNames = grantedWorkerNames(detailsTarget.profileId);
+              return (
+                <Stack gap="lg">
+                  <Group justify="space-between">
+                    <RevisionPager
+                      revisions={detailsRevisions}
+                      index={index}
+                      onIndex={setSelectedRevisionIndex}
+                    />
+                    <Text size="xs" c="dimmed">
+                      revisions are immutable
+                    </Text>
+                  </Group>
+
+                  <RevisionView
+                    revision={revision}
+                    previous={index > 0 ? detailsRevisions[index - 1] : null}
+                  />
+
+                  <DetailField label="Granted workers">
+                    {grantedNames.length === 0 ? (
+                      <Text size="sm" c="dimmed">
+                        None
+                      </Text>
+                    ) : (
+                      <Group gap={4}>
+                        {grantedNames.map((name) => (
+                          <Badge key={name} variant="light">
+                            {name}
+                          </Badge>
+                        ))}
+                      </Group>
+                    )}
+                  </DetailField>
+
+                  <Group justify="space-between" mt="sm">
+                    <Button
+                      variant="default"
+                      color="red"
+                      disabled={detailsTarget.archived}
+                      onClick={() => {
+                        setArchiveTarget(detailsTarget);
+                        setDetailsTarget(null);
+                      }}
+                    >
+                      Archive
+                    </Button>
+                    <Group gap="xs">
+                      <Button
+                        variant="default"
+                        onClick={() => {
+                          void verifyProfile(detailsTarget.profileId);
+                          setDetailsTarget(null);
+                        }}
+                      >
+                        Re-verify
+                      </Button>
+                      <Button
+                        disabled={detailsTarget.archived}
+                        onClick={() => editFromRevision(detailsTarget.profileId, revision)}
+                      >
+                        Edit (define new revision)
+                      </Button>
+                    </Group>
+                  </Group>
+                </Stack>
+              );
+            })()
+          ))}
       </Modal>
     </Stack>
   );
