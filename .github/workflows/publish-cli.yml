@@ -32,8 +32,16 @@ jobs:
 
       - name: Build fat jar
         working-directory: cli
+        # Bake the admin OAuth client secret + API base URL into the jar (see AdminConfig). The
+        # secret is non-confidential for a Desktop OAuth client, but kept out of source so GitHub's
+        # push protection doesn't fight us; API_URL is the same variable the SPA builds against.
+        env:
+          ADMIN_OAUTH_CLIENT_SECRET: ${{ secrets.WORKLOAD_ADMIN_OAUTH_CLIENT_SECRET }}
+          ADMIN_API_BASE_URL: ${{ vars.API_URL }}
         run: |
-          ../gradlew shadowJar
+          ../gradlew shadowJar \
+            -PadminOauthClientSecret="$ADMIN_OAUTH_CLIENT_SECRET" \
+            -PadminApiBaseUrl="$ADMIN_API_BASE_URL"
           echo "JAR=$GITHUB_WORKSPACE/cli/build/libs/workload-cli.jar" >> $GITHUB_ENV
           echo "VERSION=0.0.${{ github.run_number }}" >> $GITHUB_ENV
 
