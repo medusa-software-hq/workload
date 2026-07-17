@@ -7,7 +7,9 @@ import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
+import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.int
+import java.io.File
 
 // ---------------------------------------------------------------------------
 // Shared plumbing
@@ -27,6 +29,53 @@ private inline fun <T> runAdmin(block: () -> T): T =
     } catch (e: AdminApiException) {
       throw PrintMessage(e.message ?: "Admin API error.", statusCode = 1, printError = true)
     }
+
+/** Reads a [ProfileRevisionSpec] from a file path, or stdin when [source] is `-`. */
+internal fun readSpec(source: String, stdin: () -> String): ProfileRevisionSpec {
+  val text =
+      if (source == "-") {
+        stdin()
+      } else {
+        runCatching { File(source).readText() }
+            .getOrElse {
+              throw PrintMessage(
+                  "Can't read $source: ${it.message}",
+                  statusCode = 1,
+                  printError = true,
+              )
+            }
+      }
+  val spec =
+      try {
+        specDecodeJson.decodeFromString<ProfileRevisionSpec>(text)
+      } catch (e: Exception) {
+        throw PrintMessage("Invalid spec JSON: ${e.message}", statusCode = 1, printError = true)
+      }
+  if (spec.targetServiceAccount.isBlank()) {
+    throw PrintMessage(
+        "Spec is missing targetServiceAccount (see 'workload admin profiles show <id> --json').",
+        statusCode = 1,
+        printError = true,
+    )
+  }
+  return spec
+}
+
+/** Reports what a create/update produced — including the digest the backend actually pinned. */
+private fun CliktCommand.echoRevisionResult(
+    verb: String,
+    profileId: String,
+    revision: AdminProfileRevision,
+) {
+  val lines = mutableListOf("$verb $profileId (revision ${revision.revision})")
+  lines.add("  verification: ${shortEnum(revision.verificationStatus)}")
+  if (revision.dockerImage.isNotBlank()) {
+    lines.add("  image: ${shortEnum(revision.imageStatus)}")
+    if (revision.dockerImageDigest.isNotBlank())
+        lines.add("  pinned: ${revision.dockerImageDigest}")
+  }
+  echo(lines.joinToString("\n"))
+}
 
 // ---------------------------------------------------------------------------
 // admin (root group) + session
@@ -148,6 +197,39 @@ class AdminProfilesShowCommand : CliktCommand(name = "show") {
           )
       )
     }
+  }
+}
+
+class AdminProfilesCreateCommand : CliktCommand(name = "create") {
+  private val profileId by argument(name = "profile-id")
+  private val displayName by
+      option("--display-name", help = "Human-friendly name (defaults to the profile id).")
+  private val file by
+      option("-f", "--file", help = "Revision spec JSON file, or - for stdin.").required()
+
+  override fun help(context: Context) =
+      "Create a profile from a JSON revision spec (the shape 'profiles show --json' emits)."
+
+  override fun run() {
+    val spec = readSpec(file) { System.`in`.readBytes().toString(Charsets.UTF_8) }
+    val revision = runAdmin {
+      adminClient().createProfile(profileId, displayName ?: profileId, spec)
+    }
+    echoRevisionResult("Created", profileId, revision)
+  }
+}
+
+class AdminProfilesUpdateCommand : CliktCommand(name = "update") {
+  private val profileId by argument(name = "profile-id")
+  private val file by
+      option("-f", "--file", help = "Revision spec JSON file, or - for stdin.").required()
+
+  override fun help(context: Context) = "Add a new revision to a profile from a JSON revision spec."
+
+  override fun run() {
+    val spec = readSpec(file) { System.`in`.readBytes().toString(Charsets.UTF_8) }
+    val revision = runAdmin { adminClient().updateProfile(profileId, spec) }
+    echoRevisionResult("Updated", profileId, revision)
   }
 }
 

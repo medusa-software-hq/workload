@@ -75,6 +75,36 @@ internal data class RevisionResponse(val revision: AdminProfileRevision = AdminP
 
 @Serializable internal data class ProfileResponse(val profile: AdminProfile = AdminProfile())
 
+@Serializable
+internal data class MutateProfileResponse(
+    val profile: AdminProfile = AdminProfile(),
+    val revision: AdminProfileRevision = AdminProfileRevision(),
+)
+
+// The CLI never sends expected_docker_image_digest (the CAS token) — that's the console's
+// preview-then-pin path. Omitting it means "resolve the tag fresh and pin it, no check", which the
+// proto documents as the non-console-client behaviour.
+@Serializable
+private data class CreateProfileRequest(
+    val profileId: String,
+    val displayName: String,
+    val targetServiceAccount: String,
+    val note: String,
+    val envVars: Map<String, String>,
+    val secretEnvVars: Map<String, String>,
+    val dockerImage: String,
+)
+
+@Serializable
+private data class UpdateProfileRequest(
+    val profileId: String,
+    val targetServiceAccount: String,
+    val note: String,
+    val envVars: Map<String, String>,
+    val secretEnvVars: Map<String, String>,
+    val dockerImage: String,
+)
+
 @Serializable private data class WorkerIdRequest(val workerId: String)
 
 @Serializable private data class ProfileIdRequest(val profileId: String)
@@ -116,6 +146,49 @@ class AdminApiClient(
               post("ArchiveProfile", apiJson.encodeToString(ProfileIdRequest(profileId)))
           )
           .profile
+
+  fun createProfile(
+      profileId: String,
+      displayName: String,
+      spec: ProfileRevisionSpec,
+  ): AdminProfileRevision =
+      apiJson
+          .decodeFromString<MutateProfileResponse>(
+              post(
+                  "CreateProfile",
+                  apiJson.encodeToString(
+                      CreateProfileRequest(
+                          profileId = profileId,
+                          displayName = displayName,
+                          targetServiceAccount = spec.targetServiceAccount,
+                          note = spec.note,
+                          envVars = spec.envVars,
+                          secretEnvVars = spec.secretEnvVars,
+                          dockerImage = spec.dockerImage,
+                      )
+                  ),
+              )
+          )
+          .revision
+
+  fun updateProfile(profileId: String, spec: ProfileRevisionSpec): AdminProfileRevision =
+      apiJson
+          .decodeFromString<MutateProfileResponse>(
+              post(
+                  "UpdateProfile",
+                  apiJson.encodeToString(
+                      UpdateProfileRequest(
+                          profileId = profileId,
+                          targetServiceAccount = spec.targetServiceAccount,
+                          note = spec.note,
+                          envVars = spec.envVars,
+                          secretEnvVars = spec.secretEnvVars,
+                          dockerImage = spec.dockerImage,
+                      )
+                  ),
+              )
+          )
+          .revision
 
   fun listWorkers(): List<AdminWorker> =
       apiJson.decodeFromString<ListWorkersResponse>(post("ListWorkers", "{}")).workers

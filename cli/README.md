@@ -29,6 +29,8 @@ management API — the same one the console SPA drives.
 | `workload admin logout` | Forgets the cached session on this machine. |
 | `workload admin profiles list` | Lists all profiles. |
 | `workload admin profiles show <id>` | Shows a profile's latest revision (`--revision N` for one; `--json` emits the create/update spec). |
+| `workload admin profiles create <id> -f <spec.json\|->` | Creates a profile from a JSON revision spec (`--display-name` optional; `-` reads stdin). |
+| `workload admin profiles update <id> -f <spec.json\|->` | Adds a new revision to a profile from a JSON spec. |
 | `workload admin profiles verify <id>` | Re-verifies a profile's latest revision against live GCP. |
 | `workload admin profiles archive <id>` | Archives a profile (no longer grantable). |
 | `workload admin profiles grant <profile> <worker>` | Grants a profile to a worker. |
@@ -36,9 +38,20 @@ management API — the same one the console SPA drives.
 | `workload admin workers list` | Lists all workers. |
 | `workload admin workers approve\|reject\|revoke <id>` | Moves a worker through its registration lifecycle. |
 
-`profiles show --json` emits the same spec shape that `create` / `update` will
-accept (coming next), so `show <id> --json > p.json`, edit, and feed it back will
-round-trip.
+`profiles show --json` emits the same spec shape `create` / `update` accept, so
+the natural round-trip works:
+
+```bash
+workload admin profiles show hand-test-1 --json > p.json   # dump the latest revision's spec
+$EDITOR p.json                                              # tweak SA / image / env / secrets
+workload admin profiles update hand-test-1 -f p.json        # ...as a new revision
+# or pipe it straight through:
+workload admin profiles show hand-test-1 --json | workload admin profiles create clone-1 -f -
+```
+
+The spec is just the mutable fields — `targetServiceAccount` (required), `note`,
+`dockerImage`, `envVars`, `secretEnvVars`. The image tag's digest is resolved and
+pinned server-side; `create`/`update` print the digest they pinned.
 
 `admin login` uses the standard installed-app OAuth flow: it opens your browser,
 you sign in as yourself, and it captures the result on a one-shot `127.0.0.1`
