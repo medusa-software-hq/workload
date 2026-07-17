@@ -1,4 +1,4 @@
-import { createClient } from '@connectrpc/connect';
+import { Code, ConnectError, createClient } from '@connectrpc/connect';
 import { createGrpcWebTransport } from '@connectrpc/connect-web';
 import {
   ActionIcon,
@@ -195,6 +195,124 @@ function ImageBadge({ status }: { status: ImageStatus }) {
       </Badge>
     </Tooltip>
   );
+}
+
+type ImagePreview =
+  | { state: 'idle' }
+  | { state: 'loading' }
+  | { state: 'resolved'; digest: string }
+  | { state: 'unresolved'; status: ImageStatus; detail: string };
+
+/**
+ * Live preview of what an image tag resolves to, for a given target SA — the read-only ResolveImage
+ * call. The admin sees the exact digest *before* pinning it (and any unresolvable reason surfaces in
+ * the form, not as a flag on an already-created revision). The resolved digest is fed back as
+ * CreateProfile/UpdateProfile's expectedDockerImageDigest, so the backend pins exactly what was
+ * shown here.
+ */
+function useImagePreview(
+  dockerImage: string,
+  targetServiceAccount: string,
+  headers: Record<string, string>,
+  // Bump to force a re-resolve without changing the ref — used after a CAS mismatch, when the tag
+  // moved server-side but the inputs here didn't.
+  refreshNonce: number
+): ImagePreview {
+  const [preview, setPreview] = useState<ImagePreview>({ state: 'idle' });
+
+  useEffect(() => {
+    const image = dockerImage.trim();
+    const sa = targetServiceAccount.trim();
+    // Only resolve once we have a plausible ref and SA — no point pinging the backend on every
+    // keystroke of a half-typed value. Local validation is the same rule the backend enforces.
+    if (image === '' || validateImageRef(image) !== null || validateServiceAccount(sa) !== null) {
+      setPreview({ state: 'idle' });
+      return;
+    }
+
+    let cancelled = false;
+    setPreview({ state: 'loading' });
+    // Debounce so a fast typist doesn't fire a resolve per character.
+    const timer = setTimeout(() => {
+      client
+        .resolveImage({ dockerImage: image, targetServiceAccount: sa }, { headers })
+        .then((res) => {
+          if (cancelled) {
+            return;
+          }
+          if (res.imageStatus === ImageStatus.RESOLVED && res.dockerImageDigest !== '') {
+            setPreview({ state: 'resolved', digest: res.dockerImageDigest });
+          } else {
+            setPreview({ state: 'unresolved', status: res.imageStatus, detail: res.detail });
+          }
+        })
+        .catch((err: unknown) => {
+          if (cancelled) {
+            return;
+          }
+          setPreview({
+            state: 'unresolved',
+            status: ImageStatus.UNDETERMINED,
+            detail: err instanceof Error ? err.message : String(err),
+          });
+        });
+    }, 400);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [dockerImage, targetServiceAccount, headers, refreshNonce]);
+
+  return preview;
+}
+
+/** True when an error is the backend's CAS rejection (the tag moved since the preview). */
+function isTagMovedError(err: unknown): boolean {
+  return ConnectError.from(err).code === Code.FailedPrecondition;
+}
+
+/** Shows the resolved digest (or why it couldn't resolve) beneath the image input. */
+function ImagePreviewLine({ preview }: { preview: ImagePreview }) {
+  if (preview.state === 'idle') {
+    return null;
+  }
+  if (preview.state === 'loading') {
+    return (
+      <Group gap={6}>
+        <Loader size="xs" />
+        <Text size="sm" c="dimmed">
+          Resolving digest…
+        </Text>
+      </Group>
+    );
+  }
+  if (preview.state === 'resolved') {
+    return (
+      <Text size="sm" c="dimmed" style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+        Resolves to {preview.digest}
+      </Text>
+    );
+  }
+  return (
+    <Alert color={preview.status === ImageStatus.UNRESOLVABLE ? 'red' : 'yellow'} p="xs">
+      <Text size="sm">
+        Can't resolve this image
+        {preview.detail !== '' ? `: ${preview.detail}` : '.'}
+      </Text>
+      {preview.status === ImageStatus.UNRESOLVABLE && (
+        <Text size="xs" mt={4}>
+          The target service account likely lacks roles/artifactregistry.reader on this repository —
+          grant it via the workload-impersonation module's artifact_repository_id input.
+        </Text>
+      )}
+    </Alert>
+  );
+}
+
+/** The digest to send as the CAS token, or '' when nothing resolved. */
+function previewDigest(preview: ImagePreview): string {
+  return preview.state === 'resolved' ? preview.digest : '';
 }
 
 /**
@@ -739,6 +857,8 @@ function CreateProfileModal({
   const [imageError, setImageError] = useState<string | null>(null);
   const [envVars, setEnvVars] = useState<EnvRow[]>([]);
   const [secretEnvVars, setSecretEnvVars] = useState<EnvRow[]>([]);
+  const [previewNonce, setPreviewNonce] = useState(0);
+  const imagePreview = useImagePreview(dockerImage, targetServiceAccount, headers, previewNonce);
 
   function reset() {
     setProfileId('');
@@ -771,6 +891,8 @@ function CreateProfileModal({
           targetServiceAccount,
           note,
           dockerImage: dockerImage.trim(),
+          // Pin exactly the digest the preview showed; the backend rejects if the tag moved since.
+          expectedDockerImageDigest: previewDigest(imagePreview),
           envVars: rowsToRecord(envVars),
           secretEnvVars: rowsToRecord(secretEnvVars),
         },
@@ -780,6 +902,15 @@ function CreateProfileModal({
       reset();
       await onCreated();
     } catch (err: unknown) {
+      if (isTagMovedError(err)) {
+        // The tag moved between preview and submit — re-resolve so the admin sees the new digest,
+        // then re-confirm. They can only ever pin something they've looked at.
+        setPreviewNonce((n) => n + 1);
+        toast.error(
+          'The image tag moved since you previewed it — the digest has been refreshed. Review and create again.'
+        );
+        return;
+      }
       onError(err);
       toast.error(err instanceof Error ? err.message : String(err));
     }
@@ -818,14 +949,17 @@ function CreateProfileModal({
           required
         />
         <Textarea label="Note" value={note} onChange={(e) => setNote(e.currentTarget.value)} />
-        <TextInput
-          label="Container image"
-          description="Optional. Fully-qualified Artifact Registry ref; leave blank for a pure exec/env profile."
-          placeholder="us-docker.pkg.dev/project/repo/image:tag"
-          value={dockerImage}
-          onChange={(e) => setDockerImage(e.currentTarget.value)}
-          error={imageError}
-        />
+        <Stack gap={4}>
+          <TextInput
+            label="Container image"
+            description="Optional. Fully-qualified Artifact Registry ref; leave blank for a pure exec/env profile."
+            placeholder="us-docker.pkg.dev/project/repo/image:tag"
+            value={dockerImage}
+            onChange={(e) => setDockerImage(e.currentTarget.value)}
+            error={imageError}
+          />
+          <ImagePreviewLine preview={imagePreview} />
+        </Stack>
         <EnvVarRowsEditor
           label="Env vars"
           rows={envVars}
@@ -874,6 +1008,8 @@ function EditProfileModal({
   const [imageError, setImageError] = useState<string | null>(null);
   const [envVars, setEnvVars] = useState<EnvRow[]>([]);
   const [secretEnvVars, setSecretEnvVars] = useState<EnvRow[]>([]);
+  const [previewNonce, setPreviewNonce] = useState(0);
+  const imagePreview = useImagePreview(dockerImage, targetServiceAccount, headers, previewNonce);
 
   useEffect(() => {
     if (state) {
@@ -905,6 +1041,7 @@ function EditProfileModal({
           targetServiceAccount,
           note,
           dockerImage: dockerImage.trim(),
+          expectedDockerImageDigest: previewDigest(imagePreview),
           envVars: rowsToRecord(envVars),
           secretEnvVars: rowsToRecord(secretEnvVars),
         },
@@ -913,6 +1050,13 @@ function EditProfileModal({
       toast.success(`Updated ${state.profileId}`);
       await onUpdated();
     } catch (err: unknown) {
+      if (isTagMovedError(err)) {
+        setPreviewNonce((n) => n + 1);
+        toast.error(
+          'The image tag moved since you previewed it — the digest has been refreshed. Review and save again.'
+        );
+        return;
+      }
       onError(err);
       toast.error(err instanceof Error ? err.message : String(err));
     }
@@ -943,22 +1087,17 @@ function EditProfileModal({
             value={note}
             onChange={(e) => setNote(e.currentTarget.value)}
           />
-          <TextInput
-            label="Container image"
-            description="Optional. Fully-qualified Artifact Registry ref; leave blank for a pure exec/env profile."
-            placeholder="us-docker.pkg.dev/project/repo/image:tag"
-            value={dockerImage}
-            onChange={(e) => setDockerImage(e.currentTarget.value)}
-            error={imageError}
-          />
-          {(state.currentImageStatus === ImageStatus.UNRESOLVABLE ||
-            state.currentImageStatus === ImageStatus.UNDETERMINED) && (
-            <Alert color={state.currentImageStatus === ImageStatus.UNRESOLVABLE ? 'red' : 'yellow'}>
-              This profile's image digest isn't resolved, so it isn't claimable. Grant the target
-              service account roles/artifactregistry.reader on the image's repository via the
-              workload-impersonation module's artifact_repository_id input, then save to re-resolve.
-            </Alert>
-          )}
+          <Stack gap={4}>
+            <TextInput
+              label="Container image"
+              description="Optional. Fully-qualified Artifact Registry ref; leave blank for a pure exec/env profile."
+              placeholder="us-docker.pkg.dev/project/repo/image:tag"
+              value={dockerImage}
+              onChange={(e) => setDockerImage(e.currentTarget.value)}
+              error={imageError}
+            />
+            <ImagePreviewLine preview={imagePreview} />
+          </Stack>
           <EnvVarRowsEditor
             label="Env vars"
             rows={envVars}

@@ -24,6 +24,13 @@ service FleetService {
   // token. CreateProfile/UpdateProfile run this implicitly against the revision they create.
   rpc VerifyProfile(VerifyProfileRequest) returns (VerifyProfileResponse);
 
+  // Read-only preview: resolve a docker_image tag to a digest as a given target service account,
+  // without creating anything. The console calls this so an admin sees the exact digest a tag
+  // resolves to *before* pinning it, and so a missing artifactregistry.reader grant surfaces in the
+  // form rather than as a flag on an already-created revision. The digest it returns is then passed
+  // back as CreateProfile/UpdateProfile's expected_docker_image_digest (see there).
+  rpc ResolveImage(ResolveImageRequest) returns (ResolveImageResponse);
+
   rpc GrantProfile(GrantProfileRequest) returns (GrantProfileResponse);
   rpc RevokeProfileGrant(RevokeProfileGrantRequest) returns (RevokeProfileGrantResponse);
 }
@@ -153,6 +160,11 @@ message CreateProfileRequest {
   map<string, string> secret_env_vars = 6;
   // Optional container image tag ref; the digest is resolved server-side.
   string docker_image = 7;
+  // Optional compare-and-swap token: the digest a prior ResolveImage returned for this
+  // docker_image. If set, the backend re-resolves the tag and rejects the create (FAILED_PRECONDITION)
+  // when it no longer resolves to this digest — so the admin can only ever pin the exact digest they
+  // previewed. Empty means "resolve fresh, no check" (e.g. non-console clients).
+  string expected_docker_image_digest = 8;
 }
 
 message CreateProfileResponse {
@@ -168,6 +180,21 @@ message UpdateProfileRequest {
   map<string, string> secret_env_vars = 5;
   // Optional container image tag ref; the digest is resolved server-side.
   string docker_image = 6;
+  // Compare-and-swap token; see CreateProfileRequest.expected_docker_image_digest.
+  string expected_docker_image_digest = 7;
+}
+
+message ResolveImageRequest {
+  string target_service_account = 1;
+  string docker_image = 2;
+}
+
+message ResolveImageResponse {
+  // The digest the tag resolved to (sha256:...), or empty when it couldn't be resolved.
+  string docker_image_digest = 1;
+  ImageStatus image_status = 2;
+  // Safe-to-show diagnostic when the status isn't RESOLVED (e.g. why it's unresolvable).
+  string detail = 3;
 }
 
 message UpdateProfileResponse {

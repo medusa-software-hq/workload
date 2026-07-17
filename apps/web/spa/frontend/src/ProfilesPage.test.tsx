@@ -1,3 +1,4 @@
+import { Code, ConnectError } from '@connectrpc/connect';
 import { render, screen, waitFor, within } from '@test-utils';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, test, vi } from 'vitest';
@@ -15,8 +16,12 @@ const createProfile = vi.fn();
 const updateProfile = vi.fn();
 const archiveProfile = vi.fn();
 const verifyProfile = vi.fn();
+const resolveImage = vi.fn();
 
-vi.mock('@connectrpc/connect', () => ({
+vi.mock('@connectrpc/connect', async (importOriginal) => ({
+  // Keep the real Code/ConnectError (the app uses them to detect the CAS mismatch); only the client
+  // factory is stubbed.
+  ...(await importOriginal<typeof import('@connectrpc/connect')>()),
   createClient: () => ({
     listProfiles,
     listWorkers,
@@ -25,6 +30,7 @@ vi.mock('@connectrpc/connect', () => ({
     updateProfile,
     archiveProfile,
     verifyProfile,
+    resolveImage,
   }),
 }));
 vi.mock('@connectrpc/connect-web', () => ({ createGrpcWebTransport: () => ({}) }));
@@ -70,12 +76,19 @@ beforeEach(() => {
   updateProfile.mockReset();
   archiveProfile.mockReset();
   verifyProfile.mockReset();
+  resolveImage.mockReset();
   listWorkers.mockResolvedValue({ workers: [] });
   listProfileRevisions.mockResolvedValue({ revisions: [fakeRevision()] });
   createProfile.mockResolvedValue({});
   updateProfile.mockResolvedValue({});
   archiveProfile.mockResolvedValue({});
   verifyProfile.mockResolvedValue({});
+  // Default: a tag resolves to a digest. Tests that care override this.
+  resolveImage.mockResolvedValue({
+    dockerImageDigest: 'sha256:previewed',
+    imageStatus: ImageStatus.RESOLVED,
+    detail: '',
+  });
 });
 
 test('lists a profile with its target service account and verification status', async () => {
@@ -139,6 +152,7 @@ test('creating a valid profile calls createProfile and refreshes', async () => {
         targetServiceAccount: 'sa@project.iam.gserviceaccount.com',
         note: '',
         dockerImage: '',
+        expectedDockerImageDigest: '',
         envVars: {},
         secretEnvVars: {},
       },
@@ -168,6 +182,7 @@ test('editing a profile appends a revision without asking for a new ID', async (
         targetServiceAccount: 'sa-v2@project.iam.gserviceaccount.com',
         note: '',
         dockerImage: '',
+        expectedDockerImageDigest: '',
         envVars: {},
         secretEnvVars: {},
       },
@@ -277,6 +292,7 @@ test('creating a profile with an env var and a secret env var sends both maps', 
         targetServiceAccount: 'sa@project.iam.gserviceaccount.com',
         note: '',
         dockerImage: '',
+        expectedDockerImageDigest: '',
         envVars: { MODE: 'batch' },
         secretEnvVars: { API_KEY: 'projects/p/secrets/api-key/versions/latest' },
       },
@@ -387,11 +403,16 @@ test('revision history shows an env diff between adjacent revisions', async () =
   expect(within(dialog).getByText('-OLD_VAR')).toBeInTheDocument();
 });
 
-test('creating a profile with an image passes docker_image to createProfile', async () => {
+test('creating a profile with an image previews the digest and pins it as the CAS token', async () => {
   const user = userEvent.setup();
   listProfiles
     .mockResolvedValueOnce({ profiles: [] })
     .mockResolvedValue({ profiles: [fakeProfile()] });
+  resolveImage.mockResolvedValue({
+    dockerImageDigest: 'sha256:abc123',
+    imageStatus: ImageStatus.RESOLVED,
+    detail: '',
+  });
   render(<ProfilesPage token="tok" />);
 
   await user.click(await screen.findByRole('button', { name: 'Create profile' }));
@@ -406,14 +427,96 @@ test('creating a profile with an image passes docker_image to createProfile', as
     within(dialog).getByLabelText(/Container image/),
     'us-docker.pkg.dev/p/repo/app:v1'
   );
+
+  // The preview resolves and is shown to the admin *before* they commit.
+  expect(await within(dialog).findByText(/Resolves to sha256:abc123/)).toBeInTheDocument();
+  expect(resolveImage).toHaveBeenCalledWith(
+    {
+      dockerImage: 'us-docker.pkg.dev/p/repo/app:v1',
+      targetServiceAccount: 'sa@project.iam.gserviceaccount.com',
+    },
+    { headers: { Authorization: 'Bearer tok' } }
+  );
+
   await user.click(within(dialog).getByRole('button', { name: 'Create' }));
 
   await waitFor(() => {
     expect(createProfile).toHaveBeenCalledWith(
-      expect.objectContaining({ dockerImage: 'us-docker.pkg.dev/p/repo/app:v1' }),
+      expect.objectContaining({
+        dockerImage: 'us-docker.pkg.dev/p/repo/app:v1',
+        // The pinned digest is exactly the one previewed — the CAS token.
+        expectedDockerImageDigest: 'sha256:abc123',
+      }),
       { headers: { Authorization: 'Bearer tok' } }
     );
   });
+});
+
+test('a CAS mismatch (tag moved) re-previews the new digest instead of dead-ending', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [] });
+  // Preview first shows :aaa, then (after the tag moves) :bbb.
+  resolveImage
+    .mockResolvedValueOnce({
+      dockerImageDigest: 'sha256:aaa',
+      imageStatus: ImageStatus.RESOLVED,
+      detail: '',
+    })
+    .mockResolvedValue({
+      dockerImageDigest: 'sha256:bbb',
+      imageStatus: ImageStatus.RESOLVED,
+      detail: '',
+    });
+  // The backend rejects the create because the tag moved since the admin confirmed :aaa.
+  createProfile.mockRejectedValueOnce(new ConnectError('tag moved', Code.FailedPrecondition));
+
+  render(<ProfilesPage token="tok" />);
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.type(
+    within(dialog).getByLabelText(/Container image/),
+    'us-docker.pkg.dev/p/repo/app:v1'
+  );
+
+  expect(await within(dialog).findByText(/Resolves to sha256:aaa/)).toBeInTheDocument();
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  // The create was rejected, but the form recovers: it re-resolves and shows the new digest, so the
+  // admin can confirm the current one rather than being stuck.
+  expect(await within(dialog).findByText(/Resolves to sha256:bbb/)).toBeInTheDocument();
+});
+
+test('an unresolvable image surfaces the reason in the form before creating', async () => {
+  const user = userEvent.setup();
+  listProfiles
+    .mockResolvedValueOnce({ profiles: [] })
+    .mockResolvedValue({ profiles: [fakeProfile()] });
+  resolveImage.mockResolvedValue({
+    dockerImageDigest: '',
+    imageStatus: ImageStatus.UNRESOLVABLE,
+    detail: 'registry returned 403',
+  });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.type(
+    within(dialog).getByLabelText(/Container image/),
+    'us-docker.pkg.dev/p/repo/nope:v1'
+  );
+
+  expect(await within(dialog).findByText(/Can't resolve this image/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/artifactregistry.reader/)).toBeInTheDocument();
 });
 
 test('a non-Google registry image ref is rejected client-side without calling createProfile', async () => {

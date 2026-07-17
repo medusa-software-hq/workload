@@ -15,10 +15,12 @@ import software.medusa.workload.v1.ApproveWorkerRequest
 import software.medusa.workload.v1.CreateProfileRequest
 import software.medusa.workload.v1.FleetServiceGrpcKt
 import software.medusa.workload.v1.GrantProfileRequest
+import software.medusa.workload.v1.ListProfilesRequest
 import software.medusa.workload.v1.ListWorkersRequest
 import software.medusa.workload.v1.RevokeProfileGrantRequest
 import software.medusa.workload.v1.RevokeWorkerRequest
 import software.medusa.workload.v1.VerificationStatus
+import software.medusa.workload.v1.VerifyProfileRequest
 import software.medusa.workload.v1.WorkerStatus
 
 private const val prefix = "test-prefix"
@@ -424,6 +426,196 @@ class FleetServiceImplTest {
       assertEquals("", created.revision.dockerImageDigest)
     } finally {
       imageServer.stop().join()
+    }
+  }
+
+  @Test
+  fun `ResolveImage previews the digest without creating a profile`() = runBlocking {
+    val resolver = ScriptedImageDigestResolver()
+    val server = imageResolvingServer(resolver)
+    server.start().join()
+    try {
+      val stub =
+          GrpcClients.newClient(
+              "gproto+http://127.0.0.1:${server.activeLocalPort()}/",
+              FleetServiceGrpcKt.FleetServiceCoroutineStub::class.java,
+          )
+      resolver.next = ImageResolution(ImageStatus.RESOLVED, digest = "sha256:previewed")
+
+      val preview =
+          stub.resolveImage(
+              software.medusa.workload.v1.ResolveImageRequest.newBuilder()
+                  .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                  .setDockerImage("us-docker.pkg.dev/p/repo/app:v1")
+                  .build()
+          )
+      assertEquals("sha256:previewed", preview.dockerImageDigest)
+      assertEquals(
+          software.medusa.workload.v1.ImageStatus.IMAGE_STATUS_RESOLVED,
+          preview.imageStatus,
+      )
+      // Read-only: no profile was created.
+      assertTrue(stub.listProfiles(ListProfilesRequest.getDefaultInstance()).profilesList.isEmpty())
+    } finally {
+      server.stop().join()
+    }
+  }
+
+  @Test
+  fun `ResolveImage rejects a non-Google registry, minting nothing`() = runBlocking {
+    val server = imageResolvingServer(ScriptedImageDigestResolver())
+    server.start().join()
+    try {
+      val stub =
+          GrpcClients.newClient(
+              "gproto+http://127.0.0.1:${server.activeLocalPort()}/",
+              FleetServiceGrpcKt.FleetServiceCoroutineStub::class.java,
+          )
+      val e =
+          assertFailsWith<StatusException> {
+            stub.resolveImage(
+                software.medusa.workload.v1.ResolveImageRequest.newBuilder()
+                    .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                    .setDockerImage("ghcr.io/someone/app:v1")
+                    .build()
+            )
+          }
+      assertEquals(Status.Code.INVALID_ARGUMENT, e.status.code)
+    } finally {
+      server.stop().join()
+    }
+  }
+
+  @Test
+  fun `create with a matching CAS token pins exactly the previewed digest`() = runBlocking {
+    val resolver = ScriptedImageDigestResolver()
+    val server = imageResolvingServer(resolver)
+    server.start().join()
+    try {
+      val stub =
+          GrpcClients.newClient(
+              "gproto+http://127.0.0.1:${server.activeLocalPort()}/",
+              FleetServiceGrpcKt.FleetServiceCoroutineStub::class.java,
+          )
+      resolver.next = ImageResolution(ImageStatus.RESOLVED, digest = "sha256:confirmed")
+      val created =
+          stub.createProfile(
+              CreateProfileRequest.newBuilder()
+                  .setProfileId("cas-match")
+                  .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                  .setDockerImage("us-docker.pkg.dev/p/repo/app:v1")
+                  .setExpectedDockerImageDigest("sha256:confirmed")
+                  .build()
+          )
+      assertEquals("sha256:confirmed", created.revision.dockerImageDigest)
+    } finally {
+      server.stop().join()
+    }
+  }
+
+  @Test
+  fun `create with a stale CAS token is rejected and creates nothing`() = runBlocking {
+    val resolver = ScriptedImageDigestResolver()
+    val server = imageResolvingServer(resolver)
+    server.start().join()
+    try {
+      val stub =
+          GrpcClients.newClient(
+              "gproto+http://127.0.0.1:${server.activeLocalPort()}/",
+              FleetServiceGrpcKt.FleetServiceCoroutineStub::class.java,
+          )
+      // The admin confirmed :aaa, but the tag has since moved to :bbb.
+      resolver.next = ImageResolution(ImageStatus.RESOLVED, digest = "sha256:bbb")
+      val e =
+          assertFailsWith<StatusException> {
+            stub.createProfile(
+                CreateProfileRequest.newBuilder()
+                    .setProfileId("cas-stale")
+                    .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                    .setDockerImage("us-docker.pkg.dev/p/repo/app:v1")
+                    .setExpectedDockerImageDigest("sha256:aaa")
+                    .build()
+            )
+          }
+      assertEquals(Status.Code.FAILED_PRECONDITION, e.status.code)
+      assertTrue("moved" in e.status.description!!, e.status.description!!)
+      // The rejected CAS must leave no profile behind.
+      assertTrue(stub.listProfiles(ListProfilesRequest.getDefaultInstance()).profilesList.isEmpty())
+    } finally {
+      server.stop().join()
+    }
+  }
+
+  @Test
+  fun `Re-verify never re-pins an already-resolved digest`() = runBlocking {
+    val resolver = ScriptedImageDigestResolver()
+    val server = imageResolvingServer(resolver)
+    server.start().join()
+    try {
+      val stub =
+          GrpcClients.newClient(
+              "gproto+http://127.0.0.1:${server.activeLocalPort()}/",
+              FleetServiceGrpcKt.FleetServiceCoroutineStub::class.java,
+          )
+      resolver.next = ImageResolution(ImageStatus.RESOLVED, digest = "sha256:pinned")
+      stub.createProfile(
+          CreateProfileRequest.newBuilder()
+              .setProfileId("immutable-pin")
+              .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+              .setDockerImage("us-docker.pkg.dev/p/repo/app:v1")
+              .build()
+      )
+
+      // The tag moves — but Re-verify must NOT change what this revision pinned.
+      resolver.next = ImageResolution(ImageStatus.RESOLVED, digest = "sha256:moved")
+      val verified =
+          stub.verifyProfile(
+              VerifyProfileRequest.newBuilder().setProfileId("immutable-pin").build()
+          )
+      assertEquals(
+          "sha256:pinned",
+          verified.revision.dockerImageDigest,
+          "a resolved digest is immutable; Re-verify must not re-pin it",
+      )
+    } finally {
+      server.stop().join()
+    }
+  }
+
+  @Test
+  fun `Re-verify fills in an unresolved image once the grant is fixed`() = runBlocking {
+    val resolver = ScriptedImageDigestResolver()
+    val server = imageResolvingServer(resolver)
+    server.start().join()
+    try {
+      val stub =
+          GrpcClients.newClient(
+              "gproto+http://127.0.0.1:${server.activeLocalPort()}/",
+              FleetServiceGrpcKt.FleetServiceCoroutineStub::class.java,
+          )
+      // Created while the reader grant was missing → nothing pinned.
+      resolver.next = ImageResolution(ImageStatus.UNRESOLVABLE, detail = "fake: 403")
+      val created =
+          stub.createProfile(
+              CreateProfileRequest.newBuilder()
+                  .setProfileId("fixable")
+                  .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                  .setDockerImage("us-docker.pkg.dev/p/repo/app:v1")
+                  .build()
+          )
+      assertEquals("", created.revision.dockerImageDigest)
+
+      // Grant fixed; Re-verify now resolves it in place (nothing was pinned to protect).
+      resolver.next = ImageResolution(ImageStatus.RESOLVED, digest = "sha256:nowreadable")
+      val verified =
+          stub.verifyProfile(VerifyProfileRequest.newBuilder().setProfileId("fixable").build())
+      assertEquals(
+          software.medusa.workload.v1.ImageStatus.IMAGE_STATUS_RESOLVED,
+          verified.revision.imageStatus,
+      )
+      assertEquals("sha256:nowreadable", verified.revision.dockerImageDigest)
+    } finally {
+      server.stop().join()
     }
   }
 
