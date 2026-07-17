@@ -29,6 +29,8 @@ fun main(
                       .subcommands(
                           AdminProfilesListCommand(),
                           AdminProfilesShowCommand(),
+                          AdminProfilesCreateCommand(),
+                          AdminProfilesUpdateCommand(),
                           AdminProfilesVerifyCommand(),
                           AdminProfilesArchiveCommand(),
                           AdminProfilesGrantCommand(),

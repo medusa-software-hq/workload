@@ -109,6 +109,48 @@ class AdminApiClientTest {
   }
 
   @Test
+  fun `createProfile posts the full spec (no CAS) and parses the pinned revision`() {
+    val api =
+        StubApi(
+            200,
+            """{"profile":{"profileId":"p"},"revision":{"revision":1,"imageStatus":"IMAGE_STATUS_RESOLVED","dockerImageDigest":"sha256:abc"}}""",
+        )
+    stub = api
+    val spec =
+        ProfileRevisionSpec(
+            targetServiceAccount = "sa@x",
+            note = "n",
+            dockerImage = "r/i:t",
+            envVars = mapOf("K" to "V"),
+        )
+    val revision =
+        AdminApiClient(api.baseUrl, idTokenProvider = { "t" }).createProfile("p", "Disp", spec)
+
+    assertEquals("/medusa.workload.v1.FleetService/CreateProfile", api.lastPath)
+    val body = api.lastBody!!
+    assertTrue(""""profileId":"p"""" in body)
+    assertTrue(""""displayName":"Disp"""" in body)
+    assertTrue(""""targetServiceAccount":"sa@x"""" in body)
+    assertTrue(""""dockerImage":"r/i:t"""" in body)
+    assertTrue("expectedDockerImageDigest" !in body, "the CLI must never send the CAS token")
+    assertEquals("sha256:abc", revision.dockerImageDigest)
+  }
+
+  @Test
+  fun `updateProfile omits displayName and the CAS token`() {
+    val api = StubApi(200, """{"revision":{"revision":7}}""")
+    stub = api
+    AdminApiClient(api.baseUrl, idTokenProvider = { "t" })
+        .updateProfile("p", ProfileRevisionSpec(targetServiceAccount = "sa@x"))
+
+    assertEquals("/medusa.workload.v1.FleetService/UpdateProfile", api.lastPath)
+    val body = api.lastBody!!
+    assertTrue(""""profileId":"p"""" in body)
+    assertTrue("displayName" !in body)
+    assertTrue("expectedDockerImageDigest" !in body)
+  }
+
+  @Test
   fun `listProfileRevisions parses revisions`() {
     val api =
         StubApi(

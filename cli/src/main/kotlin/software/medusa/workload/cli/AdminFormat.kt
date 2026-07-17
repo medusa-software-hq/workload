@@ -26,6 +26,11 @@ val specJson = Json {
   encodeDefaults = true
 }
 
+/**
+ * Lenient reader for a spec supplied by the user: unknown keys are tolerated, all fields optional.
+ */
+val specDecodeJson = Json { ignoreUnknownKeys = true }
+
 fun specFromRevision(revision: AdminProfileRevision): ProfileRevisionSpec =
     ProfileRevisionSpec(
         targetServiceAccount = revision.targetServiceAccount,
