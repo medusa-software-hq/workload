@@ -30,6 +30,11 @@ resource "google_cloud_run_v2_service" "primary" {
       }
 
       env {
+        name  = "GOOGLE_CLI_CLIENT_ID"
+        value = module.common.cli_client_id
+      }
+
+      env {
         name  = "GOOGLE_ALLOWED_DOMAIN"
         value = module.common.organization_domain
       }
