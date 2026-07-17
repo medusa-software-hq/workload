@@ -20,9 +20,14 @@ locals {
   project_base_name = "workload"
   project_variant   = "baseline"
 
-  # Google OAuth 2.0 client ID
+  # Google OAuth 2.0 client ID — the console SPA's Web client.
   # https://console.cloud.google.com/auth/clients/852264381191-gi3hrcfbkn6mm43qh26b6hl1hmjvlo7a.apps.googleusercontent.com?project=ms-auth-284371d2
   google_client_id = "852264381191-gi3hrcfbkn6mm43qh26b6hl1hmjvlo7a.apps.googleusercontent.com"
+
+  # Google OAuth 2.0 client ID — the `workload admin` CLI's Desktop client. Human sign-ins through
+  # the CLI mint ID tokens with this as their audience; the API accepts it alongside the SPA client.
+  # https://console.cloud.google.com/auth/clients/852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com?project=ms-auth-284371d2
+  cli_client_id = "852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com"
 }
 
 output "organization_domain" {
@@ -75,4 +80,8 @@ output "project_variant" {
 
 output "google_client_id" {
   value = local.google_client_id
+}
+
+output "cli_client_id" {
+  value = local.cli_client_id
 }
