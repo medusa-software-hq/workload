@@ -41,7 +41,7 @@ internal fun buildChildEnv(
 class ExecCommand : CliktCommand(name = "exec") {
   override fun help(context: Context) =
       "Run a command with the profile's environment injected. Put -- before the command if it " +
-          "takes its own flags, e.g. workload exec -p my-profile-1 -- gsutil ls gs://bucket"
+          "takes its own flags, e.g. workload worker exec -p my-profile-1 -- gsutil ls gs://bucket"
 
   private val profileId by option("--profile", "-p", help = "The profile to run under").required()
   private val command by argument(name = "command").multiple(required = true)

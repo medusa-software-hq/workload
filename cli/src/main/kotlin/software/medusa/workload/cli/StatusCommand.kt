@@ -8,7 +8,7 @@ class StatusCommand : CliktCommand(name = "status") {
     val config =
         loadConfig()
             ?: throw PrintMessage(
-                "No config found at ${configFile()}. Run 'workload register' first.",
+                "No config found at ${configFile()}. Run 'workload worker register' first.",
                 statusCode = 1,
                 printError = true,
             )

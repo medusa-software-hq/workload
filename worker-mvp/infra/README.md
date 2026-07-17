@@ -26,11 +26,11 @@ directory) without touching the real backend infrastructure.
    root's `sample_secret_resource_name` output, to prove secret resolution
    (M2 story A3) too. The console verifies both the impersonation binding and
    secret access are live before the profile is claimable.
-4. On a worker machine: `ms-workload register`, get approved in the console,
-   then `ms-workload read-object --profile <profile-id> --bucket
-   <sample_bucket_name output> --object hello.txt` to read the sample object
-   through the brokered token, or `ms-workload exec --profile <profile-id> --
-   env` to see the resolved secret injected as an env var.
+4. On a worker machine: `ms-workload worker register`, get approved in the
+   console, then `ms-workload worker exec --profile <profile-id> -- env` to see
+   the resolved secret injected as an env var, or `ms-workload worker run
+   --profile <profile-id>` to pull and run the profile's image through the
+   brokered token.
 
 ## Tearing down
 

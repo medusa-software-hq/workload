@@ -11,14 +11,16 @@ fun main(
 ) {
   MainCommand()
       .subcommands(
-          TokenCommand(),
-          ExecCommand(),
-          RunCommand(),
-          PsCommand(),
-          ReadObjectCommand(),
-          RegisterCommand(),
-          StatusCommand(),
-          UnregisterCommand(),
+          WorkerCommand()
+              .subcommands(
+                  TokenCommand(),
+                  ExecCommand(),
+                  RunCommand(),
+                  PsCommand(),
+                  RegisterCommand(),
+                  StatusCommand(),
+                  UnregisterCommand(),
+              ),
       )
       .main(args)
 }

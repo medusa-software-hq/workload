@@ -23,7 +23,7 @@ class TokenCommand : CliktCommand(name = "token") {
         }
 
     // Only the token itself goes to stdout, so callers can pipe it directly, e.g.
-    // `gcloud ... --access-token-file <(workload token -p my-profile-1)`. Everything else is
+    // `gcloud ... --access-token-file <(workload worker token -p my-profile-1)`. Everything else is
     // context for a human, on stderr.
     echo(token.accessToken)
     echo("Profile:      ${token.profileId} (revision ${token.revision})", err = true)
@@ -35,7 +35,7 @@ class TokenCommand : CliktCommand(name = "token") {
 internal fun loadConfigOrFail(): WorkloadConfig =
     loadConfig()
         ?: throw PrintMessage(
-            "No config found at ${configFile()}. Run 'workload register' first.",
+            "No config found at ${configFile()}. Run 'workload worker register' first.",
             statusCode = 1,
             printError = true,
         )
@@ -43,7 +43,7 @@ internal fun loadConfigOrFail(): WorkloadConfig =
 internal fun tokenClaimErrorMessage(e: WorkerApiException, profileId: String): String =
     when (e.errorCode) {
       "unauthorized" ->
-          "Worker is not approved (pending, rejected, or revoked). Run 'workload status' to check."
+          "Worker is not approved (pending, rejected, or revoked). Run 'workload worker status' to check."
       "profile_not_found" ->
           "No such profile '$profileId'. Check the profile ID, or ask an admin to grant it to you."
       "profile_archived" -> "Profile '$profileId' has been archived and can no longer be claimed."

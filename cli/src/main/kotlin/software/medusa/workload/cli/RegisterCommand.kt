@@ -62,13 +62,13 @@ class RegisterCommand : CliktCommand(name = "register") {
       PollOutcome.APPROVED -> echo("Approved.")
       PollOutcome.REJECTED ->
           throw PrintMessage(
-              "Registration was rejected. Ask an admin for details, then run 'workload register --force' to try again.",
+              "Registration was rejected. Ask an admin for details, then run 'workload worker register --force' to try again.",
               statusCode = 1,
               printError = true,
           )
       PollOutcome.TIMED_OUT ->
           throw PrintMessage(
-              "Timed out waiting for approval. Run 'workload status' later to check, or 'workload register --force' to start over.",
+              "Timed out waiting for approval. Run 'workload worker status' later to check, or 'workload worker register --force' to start over.",
               statusCode = 1,
               printError = true,
           )
