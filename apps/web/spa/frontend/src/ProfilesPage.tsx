@@ -5,9 +5,11 @@ import {
   Alert,
   Badge,
   Button,
+  Divider,
   Group,
   Loader,
   Modal,
+  Paper,
   Stack,
   Table,
   Text,
@@ -254,10 +256,18 @@ function ImagePreviewLine({ preview }: { preview: ImagePreview }) {
     );
   }
   if (preview.state === 'resolved') {
+    // Prominent, labelled box (not a dim one-liner) — this is the exact digest that will be
+    // pinned into the revision, so the admin should see it clearly before committing. Mirrors
+    // the "pinned to …" line in the read-only revision view.
     return (
-      <Text size="sm" c="dimmed" style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-        Resolves to {preview.digest}
-      </Text>
+      <Paper withBorder p="xs" radius="sm" bg="var(--mantine-color-green-light)">
+        <Text size="xs" c="dimmed" tt="uppercase" fw={600} mb={2}>
+          Will be pinned to this exact image
+        </Text>
+        <Text size="sm" style={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+          {preview.digest}
+        </Text>
+      </Paper>
     );
   }
   return (
@@ -935,6 +945,42 @@ export function ProfilesPage({ token }: { token: string }) {
               const grantedNames = grantedWorkerNames(detailsTarget.profileId);
               return (
                 <Stack gap="lg">
+                  {/*
+                   * Profile-scoped actions live in a strip directly under the title — they act on
+                   * the whole profile, NOT the revision paged to below. Re-verify in particular
+                   * re-checks the profile's *latest* revision, so keeping it out of the revision
+                   * body (which can be showing an older revision) avoids implying it targets that.
+                   */}
+                  <Group gap="xs" align="center">
+                    <Text size="xs" c="dimmed" tt="uppercase" fw={600}>
+                      Profile
+                    </Text>
+                    <Button
+                      size="xs"
+                      variant="default"
+                      onClick={() => {
+                        void verifyProfile(detailsTarget.profileId);
+                        setDetailsTarget(null);
+                      }}
+                    >
+                      Re-verify
+                    </Button>
+                    <Button
+                      size="xs"
+                      variant="default"
+                      color="red"
+                      disabled={detailsTarget.archived}
+                      onClick={() => {
+                        setArchiveTarget(detailsTarget);
+                        setDetailsTarget(null);
+                      }}
+                    >
+                      Archive
+                    </Button>
+                  </Group>
+
+                  <Divider />
+
                   <Group justify="space-between">
                     <RevisionPager
                       revisions={detailsRevisions}
@@ -967,35 +1013,18 @@ export function ProfilesPage({ token }: { token: string }) {
                     )}
                   </DetailField>
 
-                  <Group justify="space-between" mt="sm">
+                  {/*
+                   * Revision-scoped action — templates a new revision from the one being viewed
+                   * (which may not be the latest). Named by revision number so the scope is
+                   * unambiguous.
+                   */}
+                  <Group justify="flex-end" mt="sm">
                     <Button
-                      variant="default"
-                      color="red"
                       disabled={detailsTarget.archived}
-                      onClick={() => {
-                        setArchiveTarget(detailsTarget);
-                        setDetailsTarget(null);
-                      }}
+                      onClick={() => editFromRevision(detailsTarget.profileId, revision)}
                     >
-                      Archive
+                      New revision from Revision {revision.revision}
                     </Button>
-                    <Group gap="xs">
-                      <Button
-                        variant="default"
-                        onClick={() => {
-                          void verifyProfile(detailsTarget.profileId);
-                          setDetailsTarget(null);
-                        }}
-                      >
-                        Re-verify
-                      </Button>
-                      <Button
-                        disabled={detailsTarget.archived}
-                        onClick={() => editFromRevision(detailsTarget.profileId, revision)}
-                      >
-                        Edit (define new revision)
-                      </Button>
-                    </Group>
                   </Group>
                 </Stack>
               );
