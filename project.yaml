@@ -1,7 +1,4 @@
 modules:
-  - path: /backend/api/impl
-    name: Gradle API implementation root
-    kind: gradle
-  - path: /cli
-    name: Gradle CLI root
+  - path: /
+    name: Gradle root
     kind: gradle

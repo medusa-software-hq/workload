@@ -4,6 +4,6 @@ plugins {
   application
 }
 
-dependencies { implementation(project(":shared")) }
+dependencies { implementation(project(":backend:api:impl:shared")) }
 
 application { mainClass = "software.medusa.workload.server.MainKt" }

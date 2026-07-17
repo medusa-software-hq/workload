@@ -9,28 +9,28 @@ tasks:
     desc: Check Kotlin formatting
     sources: *kotlinSources
     cmds:
-      - ./gradlew ktfmtCheck
+      - ../gradlew ktfmtCheck
     interactive: true
 
   fixFormatting:
     desc: Fix Kotlin formatting
     sources: *kotlinSources
     cmds:
-      - ./gradlew ktfmtFormat
+      - ../gradlew ktfmtFormat
     interactive: true
 
   lint:
     desc: Lint the Kotlin sources
     sources: *kotlinSources
     cmds:
-      - ./gradlew detekt
+      - ../gradlew detekt
     interactive: true
 
   compile:
     desc: Compile the Kotlin sources
     sources: *kotlinSources
     cmds:
-      - ./gradlew compileKotlin
+      - ../gradlew compileKotlin
     interactive: true
 
   install:
@@ -39,7 +39,7 @@ tasks:
     generates:
       - ./build/install/cli/bin/cli
     cmds:
-      - ./gradlew installDist
+      - ../gradlew installDist
 
   bootstrap:
     desc: Bootstrap the user-specific CLI script

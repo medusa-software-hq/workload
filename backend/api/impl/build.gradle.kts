@@ -1,12 +1,5 @@
-plugins {
-    alias(libs.plugins.jib) apply false
-    alias(libs.plugins.kotlin.jvm) apply false
-    alias(libs.plugins.protobuf) apply false
-    alias(libs.plugins.versionCatalogUpdate)
-    alias(libs.plugins.ktfmt) apply false
-    alias(libs.plugins.detekt) apply false
-}
-
+// Plugin versions are declared once in the root build.gradle.kts (`apply false`); this project only
+// configures the three api modules below.
 allprojects {
     repositories {
         mavenCentral()
@@ -20,6 +13,12 @@ subprojects {
 
         tasks.named("check") {
             dependsOn(tasks.named("ktfmtCheck"))
+        }
+
+        // One detekt config for every module in the repo (detekt would otherwise look for a
+        // per-project config/detekt/detekt.yml).
+        extensions.configure<io.gitlab.arturbosch.detekt.extensions.DetektExtension> {
+            config.setFrom(rootProject.file("config/detekt/detekt.yml"))
         }
 
         extensions.configure<JavaPluginExtension> {
