@@ -82,4 +82,45 @@ class AdminApiClientTest {
     assertEquals(401, error.statusCode)
     assertTrue(error.message!!.contains("admin login"))
   }
+
+  @Test
+  fun `approveWorker posts the worker id and parses the returned worker`() {
+    val api =
+        StubApi(
+            200,
+            """{"worker":{"workerId":"w-1","name":"jakub-mac","status":"WORKER_STATUS_ACTIVE"}}""",
+        )
+    stub = api
+    val worker = AdminApiClient(api.baseUrl, idTokenProvider = { "t" }).approveWorker("w-1")
+
+    assertEquals("/medusa.workload.v1.FleetService/ApproveWorker", api.lastPath)
+    assertEquals("""{"workerId":"w-1"}""", api.lastBody)
+    assertEquals("WORKER_STATUS_ACTIVE", worker.status)
+  }
+
+  @Test
+  fun `grantProfile posts both ids`() {
+    val api = StubApi(200, "{}")
+    stub = api
+    AdminApiClient(api.baseUrl, idTokenProvider = { "t" }).grantProfile("w-1", "p-1")
+
+    assertEquals("/medusa.workload.v1.FleetService/GrantProfile", api.lastPath)
+    assertEquals("""{"workerId":"w-1","profileId":"p-1"}""", api.lastBody)
+  }
+
+  @Test
+  fun `listProfileRevisions parses revisions`() {
+    val api =
+        StubApi(
+            200,
+            """{"revisions":[{"profileId":"p","revision":1,"targetServiceAccount":"sa@x","envVars":{"K":"V"}}]}""",
+        )
+    stub = api
+    val revisions = AdminApiClient(api.baseUrl, idTokenProvider = { "t" }).listProfileRevisions("p")
+
+    assertEquals("""{"profileId":"p"}""", api.lastBody)
+    assertEquals(1, revisions.size)
+    assertEquals("sa@x", revisions[0].targetServiceAccount)
+    assertEquals(mapOf("K" to "V"), revisions[0].envVars)
+  }
 }

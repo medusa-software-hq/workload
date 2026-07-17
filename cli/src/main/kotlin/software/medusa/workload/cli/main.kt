@@ -25,7 +25,22 @@ fun main(
               .subcommands(
                   AdminLoginCommand(),
                   AdminLogoutCommand(),
-                  AdminProfilesCommand().subcommands(AdminProfilesListCommand()),
+                  AdminProfilesCommand()
+                      .subcommands(
+                          AdminProfilesListCommand(),
+                          AdminProfilesShowCommand(),
+                          AdminProfilesVerifyCommand(),
+                          AdminProfilesArchiveCommand(),
+                          AdminProfilesGrantCommand(),
+                          AdminProfilesRevokeGrantCommand(),
+                      ),
+                  AdminWorkersCommand()
+                      .subcommands(
+                          AdminWorkersListCommand(),
+                          AdminWorkersApproveCommand(),
+                          AdminWorkersRejectCommand(),
+                          AdminWorkersRevokeCommand(),
+                      ),
               ),
       )
       .main(args)
