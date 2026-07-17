@@ -123,8 +123,8 @@ internal fun parseImageRef(imageRef: String): ParsedImageRef? {
 }
 
 /**
- * Mints a short-lived access token impersonating a target SA. Injectable so the host-guard tests can
- * prove no token is ever minted for a non-Google registry.
+ * Mints a short-lived access token impersonating a target SA. Injectable so the host-guard tests
+ * can prove no token is ever minted for a non-Google registry.
  */
 internal fun interface ImpersonatedTokenMinter {
   fun mint(targetServiceAccount: String): String
@@ -257,7 +257,6 @@ internal constructor(
             .build()
     return httpClient.send(request, HttpResponse.BodyHandlers.discarding())
   }
-
 
   private fun undetermined(
       targetServiceAccount: String,

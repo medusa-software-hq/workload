@@ -3,6 +3,7 @@ package software.medusa.workload.cli
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import software.medusa.workload.docker.ProgressDetail
 import software.medusa.workload.docker.PullProgress
@@ -87,23 +88,80 @@ class RunCommandTest {
   }
 
   @Test
-  fun `an auth-flavored pull failure names the one-time gcloud setup for that registry`() {
+  fun `an auth-flavored pull failure blames the target SA's missing reader grant`() {
     val message =
         pullFailureMessage(
             pinnedRef = "europe-docker.pkg.dev/p/repo/app@sha256:abc",
+            serviceAccount = "target@p.iam.gserviceaccount.com",
             reason = "unauthorized: authentication required",
         )
-    assertTrue("gcloud auth configure-docker europe-docker.pkg.dev" in message, message)
+    assertTrue("artifactregistry.reader" in message, message)
+    assertTrue("target@p.iam.gserviceaccount.com" in message, message)
   }
 
   @Test
-  fun `a non-auth pull failure does not suggest the gcloud setup`() {
+  fun `an auth failure never suggests falling back to this host's docker login`() {
+    // Silent fallback to ambient dev creds would mask a broken opt-in grant: the profile would work
+    // on the one laptop that happens to be logged in and fail everywhere else.
     val message =
         pullFailureMessage(
             pinnedRef = "us-docker.pkg.dev/p/repo/app@sha256:abc",
-            reason = "manifest unknown",
+            serviceAccount = "target@p.iam.gserviceaccount.com",
+            reason = "denied: permission denied",
         )
     assertFalse("configure-docker" in message, message)
+    assertFalse("gcloud auth login" in message, message)
+  }
+
+  @Test
+  fun `a non-auth pull failure stays terse`() {
+    val message =
+        pullFailureMessage(
+            pinnedRef = "us-docker.pkg.dev/p/repo/app@sha256:abc",
+            serviceAccount = "target@p.iam.gserviceaccount.com",
+            reason = "manifest unknown",
+        )
+    assertFalse("artifactregistry.reader" in message, message)
+  }
+
+  @Test
+  fun `the brokered token is sent to a Google registry as oauth2accesstoken`() {
+    val auth = brokeredRegistryAuth("us-docker.pkg.dev/p/repo/app@sha256:abc", "ya29.brokered")
+
+    assertEquals(brokeredRegistryUsername, auth?.username)
+    assertEquals("ya29.brokered", auth?.password)
+    assertEquals("us-docker.pkg.dev", auth?.serverAddress)
+  }
+
+  @Test
+  fun `gcr hosts also get the brokered token`() {
+    assertEquals("ya29.x", brokeredRegistryAuth("gcr.io/p/app@sha256:abc", "ya29.x")?.password)
+    assertEquals("ya29.x", brokeredRegistryAuth("us.gcr.io/p/app@sha256:abc", "ya29.x")?.password)
+  }
+
+  @Test
+  fun `the brokered token is never sent to a non-Google registry`() {
+    // The token is a live credential for the profile's target SA — handing it to a third-party
+    // registry would give that host the service account. Anonymous instead; never a leak.
+    for (ref in
+        listOf(
+            "ghcr.io/someone/app@sha256:abc",
+            "docker.io/library/busybox@sha256:abc",
+            "attacker.example/x@sha256:abc",
+            "us-docker.pkg.dev.evil.com/x@sha256:abc",
+            "evil-pkg.dev/x@sha256:abc",
+            "us-docker.pkg.dev:8080/x@sha256:abc",
+        )) {
+      assertNull(brokeredRegistryAuth(ref, "ya29.secret"), "must not send the token to $ref")
+    }
+  }
+
+  @Test
+  fun `the CLI's Google-registry rule matches the backend's`() {
+    assertTrue(isGoogleRegistryHost("us-docker.pkg.dev"))
+    assertTrue(isGoogleRegistryHost("GCR.IO"))
+    assertFalse(isGoogleRegistryHost("gcr.io.evil.com"))
+    assertFalse(isGoogleRegistryHost("pkg.dev"))
   }
 
   @Test

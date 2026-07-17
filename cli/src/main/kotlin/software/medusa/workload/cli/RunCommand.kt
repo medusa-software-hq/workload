@@ -17,9 +17,9 @@ import software.medusa.workload.docker.DockerConnectionException
 import software.medusa.workload.docker.DockerConnector
 import software.medusa.workload.docker.DockerConnectorConfig
 import software.medusa.workload.docker.DockerConnectorException
-import software.medusa.workload.docker.DockerCredentialException
 import software.medusa.workload.docker.LogStream
 import software.medusa.workload.docker.PullProgress
+import software.medusa.workload.docker.RegistryAuth
 
 internal const val workloadProfileLabel = "ms-workload.profile"
 internal const val workloadRevisionLabel = "ms-workload.revision"
@@ -44,6 +44,43 @@ internal fun repositoryOf(ref: String): String {
 
 /** The registry host of an image ref — the first path segment. */
 internal fun registryHostOf(ref: String): String = ref.trim().substringBefore('/')
+
+/**
+ * The username Google's registries expect when the password is an OAuth access token — the same
+ * convention `gcloud auth configure-docker`'s helper uses under the hood.
+ */
+internal const val brokeredRegistryUsername = "oauth2accesstoken"
+
+/**
+ * Whether [host] is a Google-operated container registry. Mirrors the backend's
+ * `isGoogleRegistryHost` (which rejects anything else at profile create/update).
+ *
+ * **A security boundary.** The brokered token is a live credential for the profile's target service
+ * account; sending it to a host that isn't Google's would hand that credential away. The backend
+ * won't accept a non-Google image ref, so this is belt-and-braces for a profile stored before that
+ * rule existed — such an image simply pulls anonymously rather than leaking the token.
+ */
+internal fun isGoogleRegistryHost(host: String): Boolean {
+  val normalized = host.lowercase()
+  return normalized == "gcr.io" || normalized.endsWith(".gcr.io") || normalized.endsWith(".pkg.dev")
+}
+
+/**
+ * The credentials to pull [pinnedRef] with: the brokered token, but **only** for a Google registry.
+ * Null means "pull anonymously" — never "fall back to this host's Docker sign-in".
+ *
+ * One token, two uses: the same access token authenticates the registry pull and the workload's own
+ * GCP access inside the container, so IAM stays coherent — it's one identity end to end.
+ */
+internal fun brokeredRegistryAuth(pinnedRef: String, accessToken: String): RegistryAuth? {
+  val host = registryHostOf(pinnedRef)
+  if (!isGoogleRegistryHost(host)) return null
+  return RegistryAuth(
+      serverAddress = host,
+      username = brokeredRegistryUsername,
+      password = accessToken,
+  )
+}
 
 /**
  * The immutable ref to actually pull and run: the repository addressed by the digest the revision
@@ -90,18 +127,24 @@ internal fun looksLikeAuthFailure(output: String): Boolean {
       .any { it in text }
 }
 
-/** The message for a failed pull, with the one-time gcloud setup hint when auth looks at fault. */
-internal fun pullFailureMessage(pinnedRef: String, reason: String): String {
+/**
+ * The message for a failed pull. An auth failure now means the *profile's* target service account
+ * can't read the repository — nothing about this host's own sign-in, which `workload run` no longer
+ * uses. Deliberately does **not** suggest `gcloud auth configure-docker`: falling back to ambient
+ * developer credentials would mask a broken opt-in grant and make the profile look fine on the one
+ * machine that happens to be logged in.
+ */
+internal fun pullFailureMessage(pinnedRef: String, serviceAccount: String, reason: String): String {
   val base = "Failed to pull $pinnedRef: $reason"
   if (!looksLikeAuthFailure(reason)) {
     return base
   }
   return "$base\n" +
-      "This looks like a registry authentication failure. `workload run` uses this host's own\n" +
-      "Docker sign-in (via the credential helper in ~/.docker/config.json), which needs a\n" +
-      "one-time setup:\n" +
-      "    gcloud auth configure-docker ${registryHostOf(pinnedRef)} --quiet\n" +
-      "Then make sure you're signed in (`gcloud auth login`) and try again."
+      "The pull authenticated as the profile's target service account ($serviceAccount), which\n" +
+      "appears to lack read access to this repository. An admin needs to grant it\n" +
+      "roles/artifactregistry.reader — via the workload-impersonation module's\n" +
+      "artifact_repository_id input — and then re-verify the profile.\n" +
+      "(`workload run` deliberately does not fall back to this machine's own Docker login.)"
 }
 
 /**
@@ -238,7 +281,7 @@ class RunCommand : CliktCommand(name = "run") {
       echo("Image:        ${image.ref}", err = true)
       echo("Pinned to:    $pinnedRef", err = true)
 
-      pullImage(connector, pinnedRef)
+      pullImage(connector, pinnedRef, claim)
 
       val exitCode = runContainer(connector, claim, pinnedRef, config.workerId, secretValues)
       throw ProgramResult(exitCode)
@@ -254,23 +297,25 @@ class RunCommand : CliktCommand(name = "run") {
    * A cached digest makes this a fast no-op. Progress records are rendered to stderr so they can't
    * be confused with the container's own stdout.
    */
-  private fun pullImage(connector: DockerConnector, pinnedRef: String) {
+  private fun pullImage(connector: DockerConnector, pinnedRef: String, claim: WorkerClaimResponse) {
     echo("Pulling $pinnedRef ...", err = true)
     val seen = mutableSetOf<String>()
+    // Stage 3: authenticate with the brokered token, not this host's Docker sign-in. Passing an
+    // explicit authConfig also stops the connector consulting ~/.docker/config.json at all, so a
+    // fresh machine needs Docker and nothing else — no gcloud, no docker login.
+    val auth = brokeredRegistryAuth(pinnedRef, claim.accessToken)
     try {
       runBlocking {
-        connector.images.pull(pinnedRef).collect { progress ->
+        connector.images.pull(pinnedRef, auth).collect { progress ->
           renderPullProgress(progress, seen)?.let { echo(it, err = true) }
         }
       }
-    } catch (e: DockerCredentialException) {
-      // Credential-helper problems are already phrased for a human by the connector.
-      throw PrintMessage(e.message ?: "Failed to get registry credentials", 1, printError = true)
     } catch (e: DockerConnectorException) {
       // Covers both shapes of pull failure: an HTTP status (DockerApiException) and the in-stream
-      // error record a daemon may send after a 200 (DockerPullException).
+      // error record a daemon may send after a 200 (DockerPullException). No fallback to credential
+      // helpers on a 401/403 — see pullFailureMessage.
       throw PrintMessage(
-          pullFailureMessage(pinnedRef, e.message ?: e.toString()),
+          pullFailureMessage(pinnedRef, claim.serviceAccount, e.message ?: e.toString()),
           statusCode = 1,
           printError = true,
       )

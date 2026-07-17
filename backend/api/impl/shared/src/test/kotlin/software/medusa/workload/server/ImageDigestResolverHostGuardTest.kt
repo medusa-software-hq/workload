@@ -47,7 +47,8 @@ class ImageDigestResolverHostGuardTest {
             "docker.io",
         )
     for (host in hosts) {
-      val resolution = resolverThatMustNotMint().resolve("sa@p.iam.gserviceaccount.com", "$host/x:v1")
+      val resolution =
+          resolverThatMustNotMint().resolve("sa@p.iam.gserviceaccount.com", "$host/x:v1")
       assertEquals(ImageStatus.UNRESOLVABLE, resolution.status, "host '$host' must be refused")
     }
   }
