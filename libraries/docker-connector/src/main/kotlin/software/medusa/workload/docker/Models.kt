@@ -96,9 +96,16 @@ data class ContainerSummary(
     @SerialName("Names") val names: List<String> = emptyList(),
     @SerialName("Image") val image: String? = null,
     @SerialName("State") val state: String? = null,
+    /** The daemon's own human phrase, e.g. `Up 3 minutes` / `Exited (137) 2 minutes ago`. */
     @SerialName("Status") val status: String? = null,
+    /** Creation time, epoch seconds — what `docker ps` shows as CREATED. */
+    @SerialName("Created") val created: Long = 0,
     @SerialName("Labels") val labels: Map<String, String> = emptyMap(),
-)
+) {
+  /** True while the container is still running — the daemon's `State` is a lowercase word. */
+  val running: Boolean
+    get() = state.equals("running", ignoreCase = true)
+}
 
 /** Minimal typed projection of `GET /containers/{id}/json`. */
 @Serializable

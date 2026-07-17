@@ -109,15 +109,18 @@ class ContainerApi internal constructor(private val engine: DockerEngine) {
    */
   suspend fun list(
       labels: Map<String, String> = emptyMap(),
+      labelKeys: List<String> = emptyList(),
       all: Boolean = true,
   ): List<ContainerSummary> {
     val params = QueryParams.builder().add("all", all.toString())
-    if (labels.isNotEmpty()) {
-      val labelValues = labels.map { (k, v) -> "$k=$v" }
+    // Docker's label filter takes both `key=value` and bare `key` (existence) terms. The bare form
+    // is what `workload ps` needs: find everything *we* own, whatever its profile.
+    val labelTerms = labels.map { (k, v) -> "$k=$v" } + labelKeys
+    if (labelTerms.isNotEmpty()) {
       val filters =
           engine.json.encodeToString(
               MapSerializer(String.serializer(), ListSerializer(String.serializer())),
-              mapOf("label" to labelValues),
+              mapOf("label" to labelTerms),
           )
       params.add("filters", filters)
     }
