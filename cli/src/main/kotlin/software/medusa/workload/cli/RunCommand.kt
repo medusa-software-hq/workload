@@ -17,7 +17,9 @@ import software.medusa.workload.docker.DockerConnectionException
 import software.medusa.workload.docker.DockerConnector
 import software.medusa.workload.docker.DockerConnectorConfig
 import software.medusa.workload.docker.DockerConnectorException
+import software.medusa.workload.docker.DockerCredentialException
 import software.medusa.workload.docker.LogStream
+import software.medusa.workload.docker.PullProgress
 
 internal const val workloadProfileLabel = "ms-workload.profile"
 internal const val workloadRevisionLabel = "ms-workload.revision"
@@ -89,15 +91,29 @@ internal fun looksLikeAuthFailure(output: String): Boolean {
 }
 
 /** The message for a failed pull, with the one-time gcloud setup hint when auth looks at fault. */
-internal fun pullFailureMessage(pinnedRef: String, exitCode: Int, output: String): String {
-  val base = "docker pull $pinnedRef failed (exit $exitCode)."
-  if (!looksLikeAuthFailure(output)) {
-    return "$base See the output above."
+internal fun pullFailureMessage(pinnedRef: String, reason: String): String {
+  val base = "Failed to pull $pinnedRef: $reason"
+  if (!looksLikeAuthFailure(reason)) {
+    return base
   }
-  return "$base This looks like a registry authentication failure.\n" +
-      "`workload run` uses this host's own Docker sign-in, which needs a one-time setup:\n" +
+  return "$base\n" +
+      "This looks like a registry authentication failure. `workload run` uses this host's own\n" +
+      "Docker sign-in (via the credential helper in ~/.docker/config.json), which needs a\n" +
+      "one-time setup:\n" +
       "    gcloud auth configure-docker ${registryHostOf(pinnedRef)} --quiet\n" +
       "Then make sure you're signed in (`gcloud auth login`) and try again."
+}
+
+/**
+ * Renders one progress record as a line, or null to skip it. The daemon emits a record per layer
+ * per byte-range; keying on (id, status) collapses that to one line per state change, which reads
+ * well both on a terminal and in a log. [seen] carries the dedupe state across a pull.
+ */
+internal fun renderPullProgress(progress: PullProgress, seen: MutableSet<String>): String? {
+  val status = progress.status?.takeIf { it.isNotBlank() } ?: return null
+  val key = "${progress.id.orEmpty()}|$status"
+  if (!seen.add(key)) return null
+  return if (progress.id.isNullOrBlank()) status else "${progress.id}: $status"
 }
 
 /**
@@ -168,8 +184,10 @@ class RunCommand : CliktCommand(name = "run") {
 
   override fun run() {
     val config = loadConfigOrFail()
-    requireDockerCli()
 
+    // No `docker` CLI preflight any more: stage 2 pulls through the library, so the only binary
+    // `workload run` may still invoke is the credential *helper*, and only if config.json names
+    // one.
     DockerConnector(DockerConnectorConfig.fromEnvironment()).use { connector ->
       requireDaemon(connector)
 
@@ -220,7 +238,7 @@ class RunCommand : CliktCommand(name = "run") {
       echo("Image:        ${image.ref}", err = true)
       echo("Pinned to:    $pinnedRef", err = true)
 
-      pullImage(pinnedRef)
+      pullImage(connector, pinnedRef)
 
       val exitCode = runContainer(connector, claim, pinnedRef, config.workerId, secretValues)
       throw ProgramResult(exitCode)
@@ -228,35 +246,31 @@ class RunCommand : CliktCommand(name = "run") {
   }
 
   /**
-   * Stage 1 of the migration ladder: the pull shells out to the `docker` CLI so it rides this
-   * host's existing Docker sign-in (credential helpers), which needs no broker-specific auth. The
-   * daemon no-ops fast when the digest is already cached. Everything after this goes through the
-   * library.
+   * Stage 2 of the migration ladder: the pull goes through the library, no `docker` binary
+   * involved. It still rides this host's own Docker sign-in — the connector resolves credentials
+   * from `~/.docker/config.json`, running the configured credential *helper* binary (which is a
+   * separate program from the `docker` CLI, and stays by design).
+   *
+   * A cached digest makes this a fast no-op. Progress records are rendered to stderr so they can't
+   * be confused with the container's own stdout.
    */
-  private fun pullImage(pinnedRef: String) {
+  private fun pullImage(connector: DockerConnector, pinnedRef: String) {
     echo("Pulling $pinnedRef ...", err = true)
-    val process =
-        try {
-          ProcessBuilder("docker", "pull", pinnedRef).redirectErrorStream(true).start()
-        } catch (e: IOException) {
-          throw PrintMessage(
-              "Failed to run 'docker pull': ${e.message}",
-              statusCode = 1,
-              printError = true,
-          )
+    val seen = mutableSetOf<String>()
+    try {
+      runBlocking {
+        connector.images.pull(pinnedRef).collect { progress ->
+          renderPullProgress(progress, seen)?.let { echo(it, err = true) }
         }
-
-    // Pass the pull's own progress through as it arrives (on stderr, so it can't be confused with
-    // the container's stdout), while keeping a copy to diagnose a failure.
-    val output = StringBuilder()
-    process.inputStream.bufferedReader().forEachLine { line ->
-      echo(line, err = true)
-      output.appendLine(line)
-    }
-    val exitCode = process.waitFor()
-    if (exitCode != 0) {
+      }
+    } catch (e: DockerCredentialException) {
+      // Credential-helper problems are already phrased for a human by the connector.
+      throw PrintMessage(e.message ?: "Failed to get registry credentials", 1, printError = true)
+    } catch (e: DockerConnectorException) {
+      // Covers both shapes of pull failure: an HTTP status (DockerApiException) and the in-stream
+      // error record a daemon may send after a 200 (DockerPullException).
       throw PrintMessage(
-          pullFailureMessage(pinnedRef, exitCode, output.toString()),
+          pullFailureMessage(pinnedRef, e.message ?: e.toString()),
           statusCode = 1,
           printError = true,
       )
@@ -322,26 +336,6 @@ class RunCommand : CliktCommand(name = "run") {
     }
     Runtime.getRuntime().addShutdownHook(hook)
     return hook
-  }
-
-  private fun requireDockerCli() {
-    val found =
-        runCatching {
-              ProcessBuilder("docker", "--version")
-                  .redirectErrorStream(true)
-                  .start()
-                  .also { it.inputStream.readBytes() }
-                  .waitFor() == 0
-            }
-            .getOrDefault(false)
-    if (!found) {
-      throw PrintMessage(
-          "The 'docker' CLI isn't on PATH. `workload run` needs it to pull images " +
-              "(see the host prerequisites in the CLI README).",
-          statusCode = 1,
-          printError = true,
-      )
-    }
   }
 
   private fun requireDaemon(connector: DockerConnector) {

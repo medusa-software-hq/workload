@@ -33,8 +33,44 @@ internal interface DockerEngine {
    * each collection opens a fresh request, and cancelling the collector aborts the request and
    * closes the socket. Connection failures map to [DockerConnectionException]; a non-2xx status
    * maps to [DockerApiException] (with the daemon's message) before any body byte is emitted.
+   *
+   * [headers] adds request headers (e.g. `X-Registry-Auth` for a pull).
    */
-  fun streamBytes(method: HttpMethod, pathWithQuery: String): Flow<ByteArray>
+  fun streamBytes(
+      method: HttpMethod,
+      pathWithQuery: String,
+      headers: Map<String, String> = emptyMap(),
+  ): Flow<ByteArray>
+}
+
+/**
+ * Splits a byte stream into newline-delimited JSON records. The daemon reports pull progress as one
+ * JSON object per line, but transport chunks don't align to line boundaries, so this buffers across
+ * calls and yields only whole lines — the same problem (and shape) as [FrameDemuxer].
+ */
+internal class NdjsonSplitter {
+  private val buffer = StringBuilder()
+
+  /** Appends [chunk] and returns every complete, non-blank line now available. */
+  fun feed(chunk: ByteArray): List<String> {
+    buffer.append(String(chunk, Charsets.UTF_8))
+    val lines = mutableListOf<String>()
+    while (true) {
+      val newline = buffer.indexOf("\n")
+      if (newline < 0) break
+      val line = buffer.substring(0, newline).trim()
+      buffer.delete(0, newline + 1)
+      if (line.isNotEmpty()) lines += line
+    }
+    return lines
+  }
+
+  /** Any trailing content not terminated by a newline — the daemon may not end with one. */
+  fun flush(): List<String> {
+    val rest = buffer.toString().trim()
+    buffer.clear()
+    return if (rest.isEmpty()) emptyList() else listOf(rest)
+  }
 }
 
 private val successRange = 200..299

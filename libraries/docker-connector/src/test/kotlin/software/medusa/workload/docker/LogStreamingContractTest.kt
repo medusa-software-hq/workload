@@ -42,7 +42,7 @@ class LogStreamingContractTest {
         }
         assumeTrue(false, "no reachable Docker daemon; skipping contract test")
       }
-      ensureBusybox()
+      ensureBusybox(connector)
       try {
         runBlocking { withTimeout(TEST_TIMEOUT_MS) { block(connector) } }
       } finally {
@@ -206,15 +206,10 @@ class LogStreamingContractTest {
           .filter { it.startsWith(prefix) }
           .map { it.removePrefix(prefix).trim().toInt() }
 
-  private fun ensureBusybox() {
-    runCatching {
-          ProcessBuilder("docker", "pull", BUSYBOX)
-              .redirectErrorStream(true)
-              .start()
-              .also { it.inputStream.readBytes() }
-              .waitFor()
-        }
-        .getOrNull()
+  private fun ensureBusybox(connector: DockerConnector) {
+    // Primed through the library now that it can pull (M3-06) — the `docker` CLI is no longer
+    // needed by these tests either.
+    runBlocking { connector.images.pull(BUSYBOX).collect {} }
   }
 
   private companion object {

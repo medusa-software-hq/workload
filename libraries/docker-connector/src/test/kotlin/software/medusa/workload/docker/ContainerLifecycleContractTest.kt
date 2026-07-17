@@ -43,7 +43,7 @@ class ContainerLifecycleContractTest {
         }
         assumeTrue(false, "no reachable Docker daemon; skipping contract test")
       }
-      ensureBusybox()
+      ensureBusybox(connector)
       try {
         runBlocking { block(connector.containers) }
       } finally {
@@ -195,17 +195,10 @@ class ContainerLifecycleContractTest {
     assertTrue(onlyA.none { it.id == b.id }, "filtered list should exclude non-matching containers")
   }
 
-  private fun ensureBusybox() {
-    // Best-effort: pull busybox so a fresh runner isn't missing the image. Image pull is a later M3
-    // story; until then the test harness leans on the CLI just to prime the cache.
-    runCatching {
-          ProcessBuilder("docker", "pull", BUSYBOX)
-              .redirectErrorStream(true)
-              .start()
-              .also { it.inputStream.readBytes() }
-              .waitFor()
-        }
-        .getOrNull()
+  private fun ensureBusybox(connector: DockerConnector) {
+    // Primed through the library now that it can pull (M3-06) — the `docker` CLI is no longer
+    // needed by these tests either.
+    runBlocking { connector.images.pull(BUSYBOX).collect {} }
   }
 
   private companion object {

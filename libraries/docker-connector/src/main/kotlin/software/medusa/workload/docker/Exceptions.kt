@@ -32,3 +32,15 @@ class DockerApiException(
  */
 class DockerProtocolException(message: String, cause: Throwable? = null) :
     DockerConnectorException(message, cause)
+
+/**
+ * A pull failed. The daemon answers `POST /images/create` with **200** and then reports the real
+ * failure as an `{"error": ...}` record partway through the progress stream — so a client that only
+ * checks the HTTP status (or drains the stream without reading it, as docker-py's high-level
+ * `images.pull` does) reports success for a pull that never happened. That false-success is exactly
+ * what Drydock's hand-rolled attempt hit; this exception is how the connector refuses to.
+ *
+ * [detail] is the daemon's `errorDetail.message` when it differs from the summary.
+ */
+class DockerPullException(message: String, val detail: String? = null) :
+    DockerConnectorException(message)
