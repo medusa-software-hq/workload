@@ -170,14 +170,34 @@ private fun requireValidEnvVars(envVars: Map<String, String>, secretEnvVars: Map
 // Artifact Registry. Mirrors the console-side `validateImageRef` in fleetValidation.ts.
 private val imageRefPattern = Regex("""[^\s/]+[.:][^\s/]*/\S+""")
 
-/** Validates a non-blank image ref; a blank ref means "no image" and is allowed. */
+/**
+ * Validates a non-blank image ref; a blank ref means "no image" and is allowed.
+ *
+ * The registry must be Google's. That's a **security** rule, not a taste one: both the backend
+ * (resolving the digest) and the worker (pulling) authenticate to the image's registry with an
+ * access token impersonating the revision's target SA, so allowing an arbitrary host would let
+ * anyone who can edit a profile harvest a live token for that service account. See
+ * [isGoogleRegistryHost].
+ */
 private fun requireValidImageRef(dockerImage: String) {
   if (dockerImage.isBlank()) return
-  if (!imageRefPattern.matches(dockerImage.trim())) {
+  val trimmed = dockerImage.trim()
+  if (!imageRefPattern.matches(trimmed)) {
     throw StatusException(
         Status.INVALID_ARGUMENT.withDescription(
             "docker_image '$dockerImage' must be a fully-qualified registry ref " +
                 "(e.g. LOCATION-docker.pkg.dev/PROJECT/REPO/IMAGE:TAG)"
+        )
+    )
+  }
+  val host = trimmed.substringBefore('/')
+  if (!isGoogleRegistryHost(host)) {
+    throw StatusException(
+        Status.INVALID_ARGUMENT.withDescription(
+            "docker_image '$dockerImage' must live in a Google container registry " +
+                "(*.pkg.dev, gcr.io, or *.gcr.io) — '$host' is not one. Workload authenticates to " +
+                "the image's registry with a token impersonating the profile's target service " +
+                "account, so it will only ever send credentials to a Google registry."
         )
     )
   }

@@ -416,6 +416,31 @@ test('creating a profile with an image passes docker_image to createProfile', as
   });
 });
 
+test('a non-Google registry image ref is rejected client-side without calling createProfile', async () => {
+  // Security rule, not a preference: the backend and the worker both authenticate to the image's
+  // registry with a token impersonating the profile's target SA, so a third-party host would be
+  // handed a live credential for that account.
+  const user = userEvent.setup();
+  listProfiles
+    .mockResolvedValueOnce({ profiles: [] })
+    .mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.type(within(dialog).getByLabelText(/Container image/), 'ghcr.io/someone/app:v1');
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  expect(await within(dialog).findByText(/Google container registry/)).toBeInTheDocument();
+  expect(createProfile).not.toHaveBeenCalled();
+});
+
 test('a bare Docker Hub image ref is rejected client-side without calling createProfile', async () => {
   const user = userEvent.setup();
   listProfiles

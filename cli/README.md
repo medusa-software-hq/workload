@@ -22,39 +22,34 @@ short-lived credentials, and runs work under them.
 
 ## Host prerequisites for `workload run`
 
-> **Temporary.** These are the stage-2 requirements. `workload run` no longer
-> invokes the `docker` CLI at all — the pull goes through the library — but it
-> still rides this host's user-global Docker sign-in, which means a credential
-> *helper* binary. See [plan/m3](../../plan/m3) for the migration ladder.
+**Docker. That's the whole list.**
 
-1. **Docker** — a running daemon this user can reach. `workload run` talks to
-   `/var/run/docker.sock` directly (override with `DOCKER_HOST=unix:///path`).
-   If your user isn't in the `docker` group, `docker info` will tell you.
-2. **A one-time registry sign-in.** `workload run` deliberately uses **no
-   broker-specific Docker auth** — it reads `~/.docker/config.json` and uses
-   whatever credential helper is configured there, exactly as `docker` itself
-   would. For an Artifact Registry image, once per host:
+- A running daemon this user can reach. `workload run` talks to
+  `/var/run/docker.sock` directly (override with `DOCKER_HOST=unix:///path`).
+  If your user isn't in the `docker` group, `docker info` will tell you.
 
-   ```bash
-   gcloud auth login                                    # if you aren't already
-   gcloud auth configure-docker us-docker.pkg.dev --quiet   # match the image's region
-   ```
+No `gcloud`, no `gcloud auth configure-docker`, no `docker login`, and not even
+the `docker` CLI itself. The image pull authenticates with the **brokered token**
+from the claim — the profile's own target service account — so a fresh machine
+just works, and nothing is written to `~/.docker/config.json`.
 
-   Use the registry host from the profile's image ref (e.g.
-   `europe-docker.pkg.dev` for a `europe-docker.pkg.dev/...` image). If a pull
-   fails on auth, `workload run` prints this exact command for the right host.
+The permission that matters is on the *profile*, not on your machine: the
+target service account needs `roles/artifactregistry.reader` on the image's
+repository, granted via the
+[workload-impersonation module](../infra/modules/workload-impersonation)'s
+`artifact_repository_id` input. If it's missing, the console flags the revision
+at verification and the profile isn't claimable — so you get a clear error up
+front rather than a 403 in the middle of a pull.
 
-   That command writes a `credHelpers` entry into `~/.docker/config.json` and
-   installs `docker-credential-gcloud`. The **helper binary** is what
-   `workload run` executes — it is a separate program from the `docker` CLI,
-   which is no longer needed. Credential resolution order matches Docker's:
-   `credHelpers[registry]` → `credsStore` → a static `auths` entry → anonymous
-   (so public images pull with no setup at all).
+`workload run` deliberately **won't** fall back to your machine's own Docker
+login if the brokered pull is denied. That would mask a broken grant: the
+profile would work on whichever laptop happened to be signed in, and fail
+everywhere else.
 
-Your Google identity needs read access to the image's repository. Note this is
-*separate* from the profile's target service account, which needs
-`roles/artifactregistry.reader` so the **backend** can resolve the image digest —
-see the [workload-impersonation module](../infra/modules/workload-impersonation).
+> Profile images must live in a Google container registry (`*.pkg.dev`,
+> `gcr.io`, `*.gcr.io`). That's a security rule — the pull sends a live token
+> for the target service account to the image's registry, so Workload will only
+> ever send it to Google.
 
 ## What `workload run` does
 
@@ -63,9 +58,12 @@ see the [workload-impersonation module](../infra/modules/workload-impersonation)
    (`ref` + the `digest` the revision pinned at creation).
 3. Resolves secret env vars directly against Secret Manager using the brokered
    token (values never pass through the broker).
-4. Pulls `<repo>@<digest>` through the library — **the pinned digest, not the
-   tag**, so a tag that has moved since the revision was created can't change
-   what runs. An already-cached digest makes this a fast no-op.
+4. Pulls `<repo>@<digest>` through the library, authenticating with the brokered
+   token as `oauth2accesstoken` — **the pinned digest, not the tag**, so a tag
+   that has moved since the revision was created can't change what runs. An
+   already-cached digest makes this a fast no-op. One token, two uses: the same
+   credential authenticates this pull and the workload's GCP access inside the
+   container, so it's one identity end to end.
 5. Creates the container with the env in the request body (never on a command
    line, so values can't appear in `ps`), labelled `ms-workload.profile`,
    `ms-workload.revision`, and `ms-workload.worker`.

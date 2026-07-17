@@ -5,6 +5,11 @@ const SECRET_RESOURCE_NAME_PATTERN = /^projects\/[^/]+\/secrets\/[^/]+\/versions
 // A fully-qualified registry ref: a host with a dot or port before the first slash, then a path.
 // Mirrors the backend's imageRefPattern (FleetServiceImpl.kt) — bare Docker Hub shorthand is out.
 const IMAGE_REF_PATTERN = /^[^\s/]+[.:][^\s/]*\/\S+$/;
+// Only Google's registries. This mirrors the backend's isGoogleRegistryHost, and it is a security
+// rule: both the backend (resolving the digest) and the worker (pulling) authenticate to the
+// image's registry with a token impersonating the profile's target service account, so an
+// arbitrary host would be handed a live credential for that account.
+const GOOGLE_REGISTRY_PATTERN = /(^gcr\.io$)|(\.gcr\.io$)|(\.pkg\.dev$)/;
 
 /** Mirrors the backend's ProfileId validation (FleetModel.kt) — kept in sync by hand. */
 export function validateProfileId(id: string): string | null {
@@ -45,7 +50,13 @@ export function validateImageRef(imageRef: string): string | null {
   if (imageRef.trim() === '') {
     return null;
   }
-  return IMAGE_REF_PATTERN.test(imageRef.trim())
-    ? null
-    : 'Must be a fully-qualified registry ref, e.g. LOCATION-docker.pkg.dev/PROJECT/REPO/IMAGE:TAG.';
+  const trimmed = imageRef.trim();
+  if (!IMAGE_REF_PATTERN.test(trimmed)) {
+    return 'Must be a fully-qualified registry ref, e.g. LOCATION-docker.pkg.dev/PROJECT/REPO/IMAGE:TAG.';
+  }
+  const host = trimmed.split('/')[0];
+  if (!GOOGLE_REGISTRY_PATTERN.test(host.toLowerCase())) {
+    return `Must live in a Google container registry (*.pkg.dev, gcr.io, *.gcr.io) — '${host}' is not one.`;
+  }
+  return null;
 }
