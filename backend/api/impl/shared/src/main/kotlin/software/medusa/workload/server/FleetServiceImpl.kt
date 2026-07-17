@@ -24,6 +24,8 @@ import software.medusa.workload.v1.Profile as ProfileProto
 import software.medusa.workload.v1.ProfileRevision as ProfileRevisionProto
 import software.medusa.workload.v1.RejectWorkerRequest
 import software.medusa.workload.v1.RejectWorkerResponse
+import software.medusa.workload.v1.ResolveImageRequest
+import software.medusa.workload.v1.ResolveImageResponse
 import software.medusa.workload.v1.RevokeProfileGrantRequest
 import software.medusa.workload.v1.RevokeProfileGrantResponse
 import software.medusa.workload.v1.RevokeWorkerRequest
@@ -284,6 +286,13 @@ class FleetServiceImpl(
     }
 
     val admin = currentAdminEmail()
+    // Resolve + CAS-check the image *before* inserting, so a moved-tag rejection creates nothing.
+    val imageResolution =
+        resolveImageWithCas(
+            request.targetServiceAccount,
+            request.dockerImage.ifBlank { null },
+            request.expectedDockerImageDigest,
+        )
     val profile =
         fleetStore.createProfile(
             profileId,
@@ -297,7 +306,12 @@ class FleetServiceImpl(
                 dockerImage = request.dockerImage.ifBlank { null },
             ),
         )
-    val revision = verifyAndRecord(profileId, fleetStore.getLatestProfileRevision(profileId)!!)
+    val inserted = fleetStore.getLatestProfileRevision(profileId)!!
+    val verified = recordVerification(profileId, inserted)
+    val revision =
+        imageResolution?.let {
+          recordImageResolution(profileId, inserted.revision, inserted.targetServiceAccount, it)
+        } ?: verified
     auditProfileChange("profile_created", profileId, revision.revision)
     return CreateProfileResponse.newBuilder()
         .setProfile(profile.toProto())
@@ -316,6 +330,12 @@ class FleetServiceImpl(
     }
 
     val admin = currentAdminEmail()
+    val imageResolution =
+        resolveImageWithCas(
+            request.targetServiceAccount,
+            request.dockerImage.ifBlank { null },
+            request.expectedDockerImageDigest,
+        )
     val appended =
         fleetStore.appendProfileRevision(
             profileId,
@@ -328,7 +348,11 @@ class FleetServiceImpl(
                 dockerImage = request.dockerImage.ifBlank { null },
             ),
         )
-    val revision = verifyAndRecord(profileId, appended)
+    val verified = recordVerification(profileId, appended)
+    val revision =
+        imageResolution?.let {
+          recordImageResolution(profileId, appended.revision, appended.targetServiceAccount, it)
+        } ?: verified
     val profile = fleetStore.getProfile(profileId)!!
     auditProfileChange("profile_updated", profileId, revision.revision)
     return UpdateProfileResponse.newBuilder()
@@ -363,8 +387,41 @@ class FleetServiceImpl(
     fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
     val latest = fleetStore.getLatestProfileRevision(profileId)!!
 
-    val revision = verifyAndRecord(profileId, latest)
+    // Re-check the (SA, secrets) grants in place — those can change for a fixed revision. But never
+    // re-pin an already-resolved digest: a pinned revision is immutable. Only an unresolved image
+    // (e.g. the reader grant was just added) gets filled in here.
+    val verified = recordVerification(profileId, latest)
+    val revision = reResolveImageIfUnpinned(profileId, verified)
     return VerifyProfileResponse.newBuilder().setRevision(revision.toProto()).build()
+  }
+
+  override suspend fun resolveImage(request: ResolveImageRequest): ResolveImageResponse {
+    requireTargetServiceAccount(request.targetServiceAccount)
+    requireValidImageRef(request.dockerImage)
+    if (request.dockerImage.isBlank()) {
+      return ResolveImageResponse.newBuilder()
+          .setImageStatus(ImageStatus.NOT_APPLICABLE.toProto())
+          .build()
+    }
+    // Same resolution the create path runs, but read-only — nothing is stored. Lets the console
+    // show the exact digest (or the unresolvable reason) before an admin commits to pinning it.
+    val resolution = imageDigestResolver.resolve(request.targetServiceAccount, request.dockerImage)
+    audit(
+        AuditLogEntry(
+            event = "image_resolution_preview",
+            requestId = UUID.randomUUID().toString(),
+            timestamp = Instant.now().toString(),
+            sourceIp = currentSourceIp(),
+            targetServiceAccount = request.targetServiceAccount,
+            result = resolution.status.name.lowercase(),
+            reason = resolution.detail,
+        )
+    )
+    return ResolveImageResponse.newBuilder()
+        .setDockerImageDigest(resolution.digest.orEmpty())
+        .setImageStatus(resolution.status.toProto())
+        .setDetail(resolution.detail.orEmpty())
+        .build()
   }
 
   override suspend fun grantProfile(request: GrantProfileRequest): GrantProfileResponse {
@@ -413,11 +470,12 @@ class FleetServiceImpl(
   }
 
   /**
-   * Dry-run verifies [revision] (SA impersonation + secret access) and, if it carries an image,
-   * resolves that image's digest — persisting and audit-logging both outcomes. Returns the revision
-   * reflecting both records.
+   * Dry-run verifies a revision's impersonation + secret access and records the result. This is the
+   * part that legitimately changes over the life of a fixed revision (a grant is added or revoked),
+   * so it re-runs on every create/update/verify. Image resolution is deliberately NOT here — see
+   * [resolveImageWithCas], [recordImageResolution], and [reResolveImageIfUnpinned].
    */
-  private suspend fun verifyAndRecord(
+  private suspend fun recordVerification(
       profileId: ProfileId,
       revision: ProfileRevision,
   ): ProfileRevision {
@@ -435,23 +493,46 @@ class FleetServiceImpl(
             reason = result.detail,
         )
     )
-    val verified =
-        fleetStore.recordVerification(profileId, revision.revision, result.status)
-            ?: revision.copy(verificationStatus = result.status)
-    return resolveImageAndRecord(profileId, verified)
+    return fleetStore.recordVerification(profileId, revision.revision, result.status)
+        ?: revision.copy(verificationStatus = result.status)
   }
 
   /**
-   * Resolves [revision]'s image tag to a digest (impersonating its target SA) and records the
-   * verdict; a no-op that returns the revision unchanged when it has no image. Audit-logs the
-   * outcome without leaking the resolved digest beyond the diagnostic detail.
+   * Resolves [dockerImage]'s digest as [targetServiceAccount], enforcing the compare-and-swap
+   * contract: if [expectedDigest] is non-blank and the tag no longer resolves to it, the tag moved
+   * since the admin previewed it — reject so they can't silently pin something they didn't see. A
+   * blank [expectedDigest] means "resolve fresh, no check". Returns null when there's no image.
+   *
+   * Runs *before* the revision is inserted, so a rejected CAS leaves nothing behind.
    */
-  private suspend fun resolveImageAndRecord(
+  private suspend fun resolveImageWithCas(
+      targetServiceAccount: String,
+      dockerImage: String?,
+      expectedDigest: String,
+  ): ImageResolution? {
+    if (dockerImage == null) return null
+    val resolution = imageDigestResolver.resolve(targetServiceAccount, dockerImage)
+    if (expectedDigest.isNotBlank() && expectedDigest != resolution.digest) {
+      throw StatusException(
+          Status.FAILED_PRECONDITION.withDescription(
+              "The image '$dockerImage' now resolves to '${resolution.digest ?: "nothing"}', " +
+                  "not the '$expectedDigest' you confirmed — the tag moved since you previewed it. " +
+                  "Refresh the resolved digest and try again."
+          )
+      )
+    }
+    return resolution
+  }
+
+  /**
+   * Records an already-computed [ImageResolution] (from [resolveImageWithCas]) on a fresh revision.
+   */
+  private suspend fun recordImageResolution(
       profileId: ProfileId,
-      revision: ProfileRevision,
+      revision: Int,
+      targetServiceAccount: String,
+      resolution: ImageResolution,
   ): ProfileRevision {
-    val imageRef = revision.dockerImage ?: return revision
-    val resolution = imageDigestResolver.resolve(revision.targetServiceAccount, imageRef)
     audit(
         AuditLogEntry(
             event = "profile_revision_image_resolution",
@@ -459,18 +540,35 @@ class FleetServiceImpl(
             timestamp = Instant.now().toString(),
             sourceIp = currentSourceIp(),
             profileId = profileId.value,
-            revision = revision.revision,
-            targetServiceAccount = revision.targetServiceAccount,
+            revision = revision,
+            targetServiceAccount = targetServiceAccount,
             result = resolution.status.name.lowercase(),
             reason = resolution.detail,
         )
     )
-    return fleetStore.recordImageDigest(
+    return fleetStore.recordImageDigest(profileId, revision, resolution.digest, resolution.status)
+        ?: error("revision $revision of ${profileId.value} vanished while recording its digest")
+  }
+
+  /**
+   * Re-resolves the image only when the revision has **not** already pinned a digest — a `RESOLVED`
+   * digest is immutable and must never change (that's the whole point of pinning), but an
+   * `UNRESOLVABLE`/`UNDETERMINED` revision has nothing pinned yet, so re-verifying after a grant is
+   * fixed can fill it in. Used by VerifyProfile; there is no CAS token on that path.
+   */
+  private suspend fun reResolveImageIfUnpinned(
+      profileId: ProfileId,
+      revision: ProfileRevision,
+  ): ProfileRevision {
+    val imageRef = revision.dockerImage ?: return revision
+    if (revision.imageStatus == ImageStatus.RESOLVED) return revision
+    val resolution = imageDigestResolver.resolve(revision.targetServiceAccount, imageRef)
+    return recordImageResolution(
         profileId,
         revision.revision,
-        resolution.digest,
-        resolution.status,
-    ) ?: revision.copy(dockerImageDigest = resolution.digest, imageStatus = resolution.status)
+        revision.targetServiceAccount,
+        resolution,
+    )
   }
 
   private fun auditWorkerChange(event: String, workerId: WorkerId) {
