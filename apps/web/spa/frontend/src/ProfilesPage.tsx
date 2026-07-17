@@ -167,6 +167,8 @@ function ImageBadge({ status }: { status: ImageStatus }) {
 
 type ImagePreview =
   | { state: 'idle' }
+  // A valid image ref is entered, but there's no target SA yet to resolve it against.
+  | { state: 'awaiting-sa' }
   | { state: 'loading' }
   | { state: 'resolved'; digest: string }
   | { state: 'unresolved'; status: ImageStatus; detail: string };
@@ -191,10 +193,16 @@ function useImagePreview(
   useEffect(() => {
     const image = dockerImage.trim();
     const sa = targetServiceAccount.trim();
-    // Only resolve once we have a plausible ref and SA — no point pinging the backend on every
-    // keystroke of a half-typed value. Local validation is the same rule the backend enforces.
-    if (image === '' || validateImageRef(image) !== null || validateServiceAccount(sa) !== null) {
+    // No ref yet (or it's malformed — the field shows its own error): nothing to preview.
+    if (image === '' || validateImageRef(image) !== null) {
       setPreview({ state: 'idle' });
+      return;
+    }
+    // The ref is good, but resolving a digest means pulling as the target SA (ResolveImage
+    // impersonates it), so we can't preview until one is entered. Say so rather than sit silent —
+    // otherwise a filled-in image with an empty SA looks like the preview is just broken.
+    if (validateServiceAccount(sa) !== null) {
+      setPreview({ state: 'awaiting-sa' });
       return;
     }
 
@@ -244,6 +252,13 @@ function isTagMovedError(err: unknown): boolean {
 function ImagePreviewLine({ preview }: { preview: ImagePreview }) {
   if (preview.state === 'idle') {
     return null;
+  }
+  if (preview.state === 'awaiting-sa') {
+    return (
+      <Text size="sm" c="dimmed">
+        Enter the target service account above to preview the digest this tag pins to.
+      </Text>
+    );
   }
   if (preview.state === 'loading') {
     return (
