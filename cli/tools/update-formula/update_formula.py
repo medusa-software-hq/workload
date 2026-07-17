@@ -29,7 +29,15 @@ def render_formula(version: str, sha256: str) -> str:
 
           def install
             libexec.install "workload-cli.jar"
-            bin.write_jar_script libexec/"workload-cli.jar", "ms-workload", "--enable-native-access=ALL-UNNAMED"
+            # java_version pins the launcher to the openjdk@21 we depend on and build against.
+            # Without it, write_jar_script defaults to "any JDK" — so the declared dependency was
+            # installed but never used, and the CLI ran on whatever JDK happened to be newest
+            # (or on JAVA_HOME). That is how a user ended up running it on JDK 24, where Netty's
+            # sun.misc.Unsafe calls print four JEP 498 deprecation warnings over the CLI's output.
+            bin.write_jar_script libexec/"workload-cli.jar",
+                                 "ms-workload",
+                                 "--enable-native-access=ALL-UNNAMED",
+                                 java_version: "21"
           end
         end
     """)
