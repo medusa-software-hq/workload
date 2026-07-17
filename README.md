@@ -43,7 +43,7 @@ scaffolding a real service needs, so a new worker can be dropped in with batteri
 included:
 
 - **`cli/`** (`ms-workload`) — the worker, a standalone Kotlin CLI. `register`,
-  `status`, `unregister`; `token`/`read-object` to claim and use a brokered
+  `status`, `unregister`; `token` to claim and use a brokered
   token; `exec` to run any command with a profile's env vars (plain + secrets,
   resolved worker-side) and GCP credentials injected — no `gcloud auth`
   needed. This is the "plug" end of plug-and-play.

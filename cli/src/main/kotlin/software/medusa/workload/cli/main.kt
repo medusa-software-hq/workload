@@ -17,7 +17,6 @@ fun main(
                   ExecCommand(),
                   RunCommand(),
                   PsCommand(),
-                  ReadObjectCommand(),
                   RegisterCommand(),
                   StatusCommand(),
                   UnregisterCommand(),

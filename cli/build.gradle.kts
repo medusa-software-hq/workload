@@ -12,8 +12,6 @@ repositories { mavenCentral() }
 
 dependencies {
   implementation(libs.clikt)
-  implementation(platform(libs.google.cloud.libraries.bom))
-  implementation(libs.google.cloud.storage)
   implementation(libs.kotlinx.serialization.json)
 
   // Container lifecycle + log streaming for `workload run`. Brings Armeria and the Netty native
