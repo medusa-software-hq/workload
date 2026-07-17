@@ -1,0 +1,23 @@
+<!--
+  The CLI's stderr belongs to the operator (and, during `workload run`, to the container's own
+  streamed output), so framework logging is quiet by default.
+
+  Netty is pinned to ERROR rather than OFF: Armeria sets TCP_USER_TIMEOUT on every channel, which
+  Netty warns about on each domain-socket connection ("Unknown channel option ... for channel ...
+  EpollDomainSocketChannel") — benign, constant, and pure noise. Silencing the WARN keeps genuine
+  Netty errors visible.
+-->
+<configuration>
+  <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+    <target>System.err</target>
+    <encoder>
+      <pattern>%-5level %logger{0} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <logger name="io.netty" level="ERROR" />
+
+  <root level="WARN">
+    <appender-ref ref="STDERR" />
+  </root>
+</configuration>

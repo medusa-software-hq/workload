@@ -16,6 +16,17 @@ dependencies {
   implementation(libs.google.cloud.storage)
   implementation(libs.kotlinx.serialization.json)
 
+  // Container lifecycle + log streaming for `workload run`. Brings Armeria and the Netty native
+  // UDS transports (epoll on Linux) with it, so the shadow jar can talk to the daemon socket.
+  implementation(project(":libraries:docker-connector"))
+
+  // The connector declares only slf4j-api and leaves the backend to its consumer — that's us.
+  // Without a binding, SLF4J prints a "No SLF4J providers were found" banner over the container's
+  // own streamed output. slf4j-nop is *not* enough: Netty deliberately rejects a NOP binding and
+  // falls back to java.util.logging, which then warns on every run. A real binding (configured by
+  // logback.xml) is what actually keeps the framework quiet.
+  runtimeOnly(libs.logback.classic)
+
   testImplementation(libs.kotlin.test)
 }
 
