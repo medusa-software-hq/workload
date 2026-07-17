@@ -31,6 +31,9 @@ data class TokenClaimResponse(
     val revision: Int,
 )
 
+/** The revision's container image: the tag ref as typed, plus the digest it resolved to (M3-04). */
+@Serializable data class ClaimImage(val ref: String, val digest: String)
+
 @Serializable
 data class WorkerClaimResponse(
     val accessToken: String,
@@ -40,6 +43,8 @@ data class WorkerClaimResponse(
     val revision: Int,
     val envVars: Map<String, String> = emptyMap(),
     val secretEnvVars: Map<String, String> = emptyMap(),
+    /** Null for a pure exec/env profile — `workload run` requires it, `workload exec` doesn't. */
+    val image: ClaimImage? = null,
 )
 
 @Serializable private data class RegisterWorkerRequest(val name: String, val hostname: String?)

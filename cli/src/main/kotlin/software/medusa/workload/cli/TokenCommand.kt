@@ -51,5 +51,11 @@ internal fun tokenClaimErrorMessage(e: WorkerApiException, profileId: String): S
           "You don't have access to profile '$profileId'. Ask an admin to grant it to you."
       "failed_to_mint_token" ->
           "The broker failed to mint a token — likely an IAM misconfiguration on the target service account. Contact an admin."
+      "not_verified" ->
+          "Profile '$profileId' has an unverified revision and can't be claimed. Ask an admin to re-verify it."
+      "image_unresolvable" ->
+          "Profile '$profileId' has an image whose digest couldn't be resolved, so it can't be claimed. " +
+              "Its target service account likely lacks roles/artifactregistry.reader on the image's repository " +
+              "(see the workload-impersonation module's artifact_repository_id input). Ask an admin to re-verify it."
       else -> "Token claim failed: ${e.errorCode}"
     }

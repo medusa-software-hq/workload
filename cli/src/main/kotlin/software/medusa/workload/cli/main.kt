@@ -13,6 +13,7 @@ fun main(
       .subcommands(
           TokenCommand(),
           ExecCommand(),
+          RunCommand(),
           ReadObjectCommand(),
           RegisterCommand(),
           StatusCommand(),
