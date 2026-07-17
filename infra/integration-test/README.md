@@ -32,6 +32,31 @@ token, produced by the production mechanism:
 The two accounts are identical apart from that one grant, which is the only
 variable the test measures.
 
+## The manual hand test
+
+Two more accounts exist for the one thing the workflow deliberately doesn't cover:
+`register → approve → grant → workload run` against the **live broker**
+(it needs an admin identity and mutates real fleet state).
+
+Unlike the pair above, these two trust the **production** broker
+(`api-sa@ms-workload-d91b0eaf`), via the real
+[workload-impersonation](../modules/workload-impersonation) module — so the hand
+test walks the same path a real consumer would, rather than hand-rolled bindings:
+
+| Account | Broker can impersonate | `artifactregistry.reader` | Expected in the console |
+| --- | --- | --- | --- |
+| `it-handtest` | ✅ | ✅ | verifies, digest pins, `workload run` pulls and runs |
+| `it-handtest-no-reader` | ✅ | ❌ | revision flags **`image_unresolvable`** |
+
+`terraform output hand_test_profile_inputs` prints the two values to paste into
+the console's *Create profile* form.
+
+> **Why not reuse `it-reader`/`it-no-reader`?** They trust only the federated CI
+> identity. A profile pointing at them would flag `binding_missing` — the broker
+> can't impersonate them at all, so it never reaches the registry and you'd be
+> reading the wrong error. Keeping the two pairs separate also keeps each one's
+> claim unambiguous, and keeps a prod-trusting binding off the automated fixtures.
+
 ## Applying
 
 Manual, against the throwaway `workload - test` project — like

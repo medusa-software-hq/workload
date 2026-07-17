@@ -161,6 +161,57 @@ resource "google_service_account_iam_member" "ci_can_impersonate_no_reader" {
   member             = "serviceAccount:${google_service_account.integration_test_ci.email}"
 }
 
+# A target service account for the *manual* end-to-end hand test (M3-05/07 AC 1: register →
+# approve → grant → `workload run` against the live broker).
+#
+# Deliberately separate from it-reader/it-no-reader above. Those exist for the automated workflow
+# and trust only the federated CI identity; giving them prod-broker trust as well would blur what
+# each fixture proves, and would leave a throwaway test account trusting production. This one is
+# honest about being exactly that: an opt-in from the test project to the *production* broker.
+#
+# It goes through the real workload-impersonation module rather than hand-rolled bindings, so the
+# hand test exercises the same path a real consumer follows — which is the point of the exercise.
+resource "google_service_account" "hand_test" {
+  project      = var.gcp_project_id
+  account_id   = "it-handtest"
+  display_name = "Integration test: hand-test target SA (production broker impersonates this)"
+
+  depends_on = [google_project_service.apis["iam.googleapis.com"]]
+}
+
+module "hand_test_impersonation" {
+  source = "../modules/workload-impersonation"
+
+  service_account_id    = google_service_account.hand_test.name
+  service_account_email = google_service_account.hand_test.email
+
+  # Grants the SA roles/artifactregistry.reader on the fixture repo, so the backend can resolve the
+  # image's digest and the worker can pull it — both as this account.
+  artifact_repository_id = google_artifact_registry_repository.integration_test.id
+}
+
+# The hand test's negative case, and the reason it needs its own account: pointing a profile at
+# it-no-reader would flag `binding_missing`, not `image_unresolvable` — the production broker can't
+# impersonate that one at all, so it would never reach the registry and you'd be reading the wrong
+# error. This account *is* impersonable by the broker and simply has no reader grant, so it isolates
+# the missing grant exactly the way the automated pair does.
+resource "google_service_account" "hand_test_no_reader" {
+  project      = var.gcp_project_id
+  account_id   = "it-handtest-no-reader"
+  display_name = "Integration test: hand-test target SA WITHOUT artifactregistry.reader"
+
+  depends_on = [google_project_service.apis["iam.googleapis.com"]]
+}
+
+module "hand_test_no_reader_impersonation" {
+  source = "../modules/workload-impersonation"
+
+  service_account_id    = google_service_account.hand_test_no_reader.name
+  service_account_email = google_service_account.hand_test_no_reader.email
+
+  # No artifact_repository_id on purpose: this is the whole experiment.
+}
+
 # Actions variables consumed by the integration-test workflow.
 
 resource "github_actions_variable" "it_ci_sa_email" {
@@ -201,4 +252,17 @@ output "integration_test_ci_sa_email" {
 output "image_repository" {
   description = "The private image the test pulls."
   value       = "${google_artifact_registry_repository.integration_test.registry_uri}/busybox"
+}
+
+output "hand_test_profile_inputs" {
+  description = "Paste these two into the console's Create profile form for the manual end-to-end test."
+  value = {
+    target_service_account = google_service_account.hand_test.email
+    container_image        = "${google_artifact_registry_repository.integration_test.registry_uri}/busybox:latest"
+  }
+}
+
+output "hand_test_negative_case_service_account" {
+  description = "Same image, but a target SA with no artifactregistry.reader: the revision should flag image_unresolvable (NOT binding_missing — the broker can impersonate this one)."
+  value       = google_service_account.hand_test_no_reader.email
 }
