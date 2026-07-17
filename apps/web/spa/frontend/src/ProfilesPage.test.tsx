@@ -176,7 +176,7 @@ test('editing from the detail view appends a revision without asking for a new I
   render(<ProfilesPage token="tok" />);
 
   const detail = await openProfile(user);
-  await user.click(within(detail).getByRole('button', { name: /Edit \(define new revision\)/ }));
+  await user.click(within(detail).getByRole('button', { name: /New revision from Revision/ }));
 
   const dialog = await screen.findByRole('dialog');
   expect(within(dialog).getByText(/creates revision/)).toBeInTheDocument();
@@ -227,9 +227,7 @@ test('an archived profile disables Edit and Archive in its detail view', async (
   render(<ProfilesPage token="tok" />);
 
   const detail = await openProfile(user);
-  expect(
-    within(detail).getByRole('button', { name: /Edit \(define new revision\)/ })
-  ).toBeDisabled();
+  expect(within(detail).getByRole('button', { name: /New revision from Revision/ })).toBeDisabled();
   expect(within(detail).getByRole('button', { name: 'Archive' })).toBeDisabled();
 });
 
@@ -285,7 +283,7 @@ test('Edit templates from the revision currently being viewed, not always the la
   const detail = await openProfile(user);
   // Page back to revision 1, then Edit — the form should seed from rev 1, not the latest.
   await user.click(within(detail).getByRole('button', { name: 'Previous revision' }));
-  await user.click(within(detail).getByRole('button', { name: /Edit \(define new revision\)/ }));
+  await user.click(within(detail).getByRole('button', { name: /New revision from Revision/ }));
 
   const dialog = await screen.findByRole('dialog');
   expect(
@@ -418,7 +416,7 @@ test('editing a profile pre-populates its existing env vars', async () => {
   render(<ProfilesPage token="tok" />);
 
   const detail = await openProfile(user);
-  await user.click(within(detail).getByRole('button', { name: /Edit \(define new revision\)/ }));
+  await user.click(within(detail).getByRole('button', { name: /New revision from Revision/ }));
   const dialog = await screen.findByRole('dialog');
 
   expect(within(dialog).getByDisplayValue('MODE')).toBeInTheDocument();
@@ -439,7 +437,7 @@ test('a secret_inaccessible profile shows the remediation alert when editing', a
   render(<ProfilesPage token="tok" />);
 
   const detail = await openProfile(user);
-  await user.click(within(detail).getByRole('button', { name: /Edit \(define new revision\)/ }));
+  await user.click(within(detail).getByRole('button', { name: /New revision from Revision/ }));
   const dialog = await screen.findByRole('dialog');
 
   expect(await within(dialog).findByText(/secret_ids input/)).toBeInTheDocument();
@@ -490,7 +488,7 @@ test('creating a profile with an image previews the digest and pins it as the CA
   );
 
   // The preview resolves and is shown to the admin *before* they commit.
-  expect(await within(dialog).findByText(/Resolves to sha256:abc123/)).toBeInTheDocument();
+  expect(await within(dialog).findByText(/sha256:abc123/)).toBeInTheDocument();
   expect(resolveImage).toHaveBeenCalledWith(
     {
       dockerImage: 'us-docker.pkg.dev/p/repo/app:v1',
@@ -544,12 +542,12 @@ test('a CAS mismatch (tag moved) re-previews the new digest instead of dead-endi
     'us-docker.pkg.dev/p/repo/app:v1'
   );
 
-  expect(await within(dialog).findByText(/Resolves to sha256:aaa/)).toBeInTheDocument();
+  expect(await within(dialog).findByText(/sha256:aaa/)).toBeInTheDocument();
   await user.click(within(dialog).getByRole('button', { name: 'Create' }));
 
   // The create was rejected, but the form recovers: it re-resolves and shows the new digest, so the
   // admin can confirm the current one rather than being stuck.
-  expect(await within(dialog).findByText(/Resolves to sha256:bbb/)).toBeInTheDocument();
+  expect(await within(dialog).findByText(/sha256:bbb/)).toBeInTheDocument();
 });
 
 test('an unresolvable image surfaces the reason in the form before creating', async () => {
