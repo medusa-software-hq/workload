@@ -1,12 +1,12 @@
 # workload CLI
 
-The worker-side CLI: registers this machine with the broker, claims a profile's
-short-lived credentials, and runs work under them.
+Two planes: the **worker** side registers this machine with the broker, claims a
+profile's short-lived credentials, and runs work under them; the **admin** side
+manages profiles, authenticated with your own Google sign-in.
 
-## Commands
+## Worker commands
 
-Worker operations live under the `workload worker` group (a sibling to the
-forthcoming `workload admin` group for profile management).
+Worker operations live under the `workload worker` group.
 
 | Command | What it does |
 | --- | --- |
@@ -17,6 +17,29 @@ forthcoming `workload admin` group for profile management).
 | `workload worker run -p <profile>` | Runs the profile's **container image**, streaming its output. |
 | `workload worker ps` | Lists containers workload started here; `--reap` stops and removes them. |
 | `workload worker unregister` | Removes this worker's local registration. |
+
+## Admin commands
+
+Admin operations live under the `workload admin` group and act on the profile
+management API — the same one the console SPA drives.
+
+| Command | What it does |
+| --- | --- |
+| `workload admin login` | Signs in with your medusa.software Google account (opens a browser) and caches the session. |
+| `workload admin logout` | Forgets the cached session on this machine. |
+| `workload admin profiles list` | Lists all profiles. |
+
+`admin login` uses the standard installed-app OAuth flow: it opens your browser,
+you sign in as yourself, and it captures the result on a one-shot `127.0.0.1`
+loopback (PKCE-protected). It caches a **refresh token** under
+`~/.config/ms-workload/admin.json` (0600) and mints a fresh ID token for each
+call, so you only sign in occasionally — not every command. The API accepts you
+because your token carries the `medusa.software` hosted-domain claim; a service
+account can't reach this plane (see the repo README's auth notes).
+
+> **This is human, not machine, auth.** The cached refresh token is your standing
+> admin access — treat `~/.config/ms-workload/admin.json` accordingly, and
+> `workload admin logout` to clear it.
 
 `exec` and `run` are the two ways to do work:
 

@@ -39,6 +39,29 @@ application {
       )
 }
 
+// Bake the admin OAuth client secret + API base URL into the fat jar as a resource. The Publish CLI
+// workflow passes them via `-PadminOauthClientSecret` / `-PadminApiBaseUrl` (from an Actions secret
+// and variable). Absent locally → empty values, and AdminConfig falls back to env vars / a default,
+// so dev builds still work. Neither value is ever committed.
+val adminBuildConfigDir = layout.buildDirectory.dir("generated/adminBuildConfig")
+
+val generateAdminBuildConfig by tasks.registering {
+  val clientSecret = providers.gradleProperty("adminOauthClientSecret").orElse("")
+  val apiBaseUrl = providers.gradleProperty("adminApiBaseUrl").orElse("")
+  inputs.property("clientSecret", clientSecret)
+  inputs.property("apiBaseUrl", apiBaseUrl)
+  outputs.dir(adminBuildConfigDir)
+  doLast {
+    val file = adminBuildConfigDir.get().file("workload-admin-build.properties").asFile
+    file.parentFile.mkdirs()
+    // Both values are known to be properties-safe (a `GOCSPX-…` secret and an https URL — the
+    // `:` and `/` are fine in a value). Written by hand to avoid Properties.store's date comment.
+    file.writeText("oauthClientSecret=${clientSecret.get()}\napiBaseUrl=${apiBaseUrl.get()}\n")
+  }
+}
+
+sourceSets.named("main") { resources.srcDir(generateAdminBuildConfig) }
+
 tasks.shadowJar {
   archiveBaseName = "workload-cli"
   archiveClassifier = ""

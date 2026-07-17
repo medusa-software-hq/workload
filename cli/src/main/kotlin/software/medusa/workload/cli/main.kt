@@ -21,6 +21,12 @@ fun main(
                   StatusCommand(),
                   UnregisterCommand(),
               ),
+          AdminCommand()
+              .subcommands(
+                  AdminLoginCommand(),
+                  AdminLogoutCommand(),
+                  AdminProfilesCommand().subcommands(AdminProfilesListCommand()),
+              ),
       )
       .main(args)
 }
