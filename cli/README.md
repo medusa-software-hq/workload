@@ -28,6 +28,17 @@ management API — the same one the console SPA drives.
 | `workload admin login` | Signs in with your medusa.software Google account (opens a browser) and caches the session. |
 | `workload admin logout` | Forgets the cached session on this machine. |
 | `workload admin profiles list` | Lists all profiles. |
+| `workload admin profiles show <id>` | Shows a profile's latest revision (`--revision N` for one; `--json` emits the create/update spec). |
+| `workload admin profiles verify <id>` | Re-verifies a profile's latest revision against live GCP. |
+| `workload admin profiles archive <id>` | Archives a profile (no longer grantable). |
+| `workload admin profiles grant <profile> <worker>` | Grants a profile to a worker. |
+| `workload admin profiles revoke <profile> <worker>` | Revokes a worker's grant of a profile. |
+| `workload admin workers list` | Lists all workers. |
+| `workload admin workers approve\|reject\|revoke <id>` | Moves a worker through its registration lifecycle. |
+
+`profiles show --json` emits the same spec shape that `create` / `update` will
+accept (coming next), so `show <id> --json > p.json`, edit, and feed it back will
+round-trip.
 
 `admin login` uses the standard installed-app OAuth flow: it opens your browser,
 you sign in as yourself, and it captures the result on a one-shot `127.0.0.1`
