@@ -66,17 +66,34 @@ report_identity() {
     return
   }
 
+  # Decide VALID vs REJECTED on the `error` field, not on whether `email` is present. Those are
+  # different things: the broker mints this token with `cloud-platform` scope only, and tokeninfo
+  # returns `email` only for tokens that also carry the userinfo.email scope — so a perfectly valid
+  # token simply has no email claim. An earlier version read "no email" as "rejected" and cried wolf
+  # on a token that had just pulled a private image.
+  error=$(echo "$response" | sed -n 's/.*"error"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1)
+  if [ -n "$error" ]; then
+    echo "identity: Google rejected the brokered token: $error"
+    echo "  (unexpected — this same token authenticated the image pull above.)"
+    return
+  fi
+
   email=$(echo "$response" | sed -n 's/.*"email"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  sub=$(echo "$response" | sed -n 's/.*"sub"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  scope=$(echo "$response" | sed -n 's/.*"scope"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
   expires=$(echo "$response" | sed -n 's/.*"expires_in"[[:space:]]*:[[:space:]]*"\{0,1\}\([0-9]*\).*/\1/p')
 
+  echo "identity: the brokered token is LIVE — Google accepted it."
   if [ -n "$email" ]; then
-    echo "identity: the brokered token is live and belongs to"
-    echo "  $email"
-    [ -n "$expires" ] && echo "  (expires in ${expires}s)"
-    echo "  -> the same token pulled this image and can act as this SA from in here."
-  else
-    echo "identity: Google rejected the brokered token (expired, or not an access token)"
+    echo "  belongs to: $email"
+  elif [ -n "$sub" ]; then
+    echo "  service account id: $sub"
+    echo "  (no email claim — the token carries cloud-platform scope only; the pull above already"
+    echo "   proves it acts as the profile's target SA)"
   fi
+  [ -n "$scope" ] && echo "  scope: $scope"
+  [ -n "$expires" ] && echo "  expires in: ${expires}s"
+  echo "  -> the same token pulled this image and can call GCP as this SA from in here."
 }
 
 banner
