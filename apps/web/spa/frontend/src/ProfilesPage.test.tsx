@@ -39,6 +39,15 @@ vi.mock('./useAuth.tsx', () => ({ useAuth: () => ({ handleUnauthorized: vi.fn() 
 
 const { ProfilesPage } = await import('./ProfilesPage.tsx');
 
+/** Clicks a profile row to open its detail modal, and returns the modal element. */
+async function openProfile(
+  user: ReturnType<typeof userEvent.setup>,
+  profileId = 'my-profile-1'
+): Promise<HTMLElement> {
+  await user.click(await screen.findByRole('button', { name: `Open ${profileId}` }));
+  return screen.findByRole('dialog');
+}
+
 function fakeProfile(overrides: Partial<Profile> = {}): Profile {
   return {
     profileId: 'my-profile-1',
@@ -161,12 +170,14 @@ test('creating a valid profile calls createProfile and refreshes', async () => {
   });
 });
 
-test('editing a profile appends a revision without asking for a new ID', async () => {
+test('editing from the detail view appends a revision without asking for a new ID', async () => {
   const user = userEvent.setup();
   listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
   render(<ProfilesPage token="tok" />);
 
-  await user.click(await screen.findByRole('button', { name: 'Edit' }));
+  const detail = await openProfile(user);
+  await user.click(within(detail).getByRole('button', { name: /Edit \(define new revision\)/ }));
+
   const dialog = await screen.findByRole('dialog');
   expect(within(dialog).getByText(/creates revision/)).toBeInTheDocument();
 
@@ -191,14 +202,16 @@ test('editing a profile appends a revision without asking for a new ID', async (
   });
 });
 
-test('archiving a profile requires confirmation', async () => {
+test('archiving from the detail view requires confirmation', async () => {
   const user = userEvent.setup();
   listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
   render(<ProfilesPage token="tok" />);
 
-  await user.click(await screen.findByRole('button', { name: 'Archive' }));
-  const dialog = await screen.findByRole('dialog');
-  await user.click(within(dialog).getByRole('button', { name: 'Archive' }));
+  const detail = await openProfile(user);
+  await user.click(within(detail).getByRole('button', { name: 'Archive' }));
+
+  const confirm = await screen.findByRole('dialog');
+  await user.click(within(confirm).getByRole('button', { name: 'Archive' }));
 
   await waitFor(() => {
     expect(archiveProfile).toHaveBeenCalledWith(
@@ -208,21 +221,25 @@ test('archiving a profile requires confirmation', async () => {
   });
 });
 
-test('an archived profile cannot be edited or archived again', async () => {
+test('an archived profile disables Edit and Archive in its detail view', async () => {
+  const user = userEvent.setup();
   listProfiles.mockResolvedValue({ profiles: [fakeProfile({ archived: true })] });
   render(<ProfilesPage token="tok" />);
 
-  expect(await screen.findByText('Archived')).toBeInTheDocument();
-  expect(screen.getByRole('button', { name: 'Edit' })).toBeDisabled();
-  expect(screen.getByRole('button', { name: 'Archive' })).toBeDisabled();
+  const detail = await openProfile(user);
+  expect(
+    within(detail).getByRole('button', { name: /Edit \(define new revision\)/ })
+  ).toBeDisabled();
+  expect(within(detail).getByRole('button', { name: 'Archive' })).toBeDisabled();
 });
 
-test('re-verifying a profile', async () => {
+test('re-verifying from the detail view', async () => {
   const user = userEvent.setup();
   listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
   render(<ProfilesPage token="tok" />);
 
-  await user.click(await screen.findByRole('button', { name: 'Re-verify' }));
+  const detail = await openProfile(user);
+  await user.click(within(detail).getByRole('button', { name: 'Re-verify' }));
 
   await waitFor(() => {
     expect(verifyProfile).toHaveBeenCalledWith(
@@ -232,7 +249,51 @@ test('re-verifying a profile', async () => {
   });
 });
 
-test('profile details show revision history and granted workers', async () => {
+test('the revision pager steps between revisions, defaulting to the latest', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile({ latestRevision: 2 })] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({ revision: 1, targetServiceAccount: 'old-sa@project.iam.gserviceaccount.com' }),
+      fakeRevision({ revision: 2, targetServiceAccount: 'new-sa@project.iam.gserviceaccount.com' }),
+    ],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+  // Lands on the latest (rev 2), which is flagged as such and shows rev 2's SA.
+  expect(within(detail).getByText('Latest')).toBeInTheDocument();
+  expect(within(detail).getByText('new-sa@project.iam.gserviceaccount.com')).toBeInTheDocument();
+
+  await user.click(within(detail).getByRole('button', { name: 'Previous revision' }));
+  // Now viewing rev 1: its SA, and no "Latest" badge.
+  expect(within(detail).getByText('old-sa@project.iam.gserviceaccount.com')).toBeInTheDocument();
+  expect(within(detail).queryByText('Latest')).not.toBeInTheDocument();
+});
+
+test('Edit templates from the revision currently being viewed, not always the latest', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile({ latestRevision: 2 })] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({ revision: 1, targetServiceAccount: 'old-sa@project.iam.gserviceaccount.com' }),
+      fakeRevision({ revision: 2, targetServiceAccount: 'new-sa@project.iam.gserviceaccount.com' }),
+    ],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+  // Page back to revision 1, then Edit — the form should seed from rev 1, not the latest.
+  await user.click(within(detail).getByRole('button', { name: 'Previous revision' }));
+  await user.click(within(detail).getByRole('button', { name: /Edit \(define new revision\)/ }));
+
+  const dialog = await screen.findByRole('dialog');
+  expect(
+    within(dialog).getByDisplayValue('old-sa@project.iam.gserviceaccount.com')
+  ).toBeInTheDocument();
+});
+
+test('the detail view shows the selected revision and its granted workers', async () => {
   const user = userEvent.setup();
   listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
   listWorkers.mockResolvedValue({
@@ -246,12 +307,11 @@ test('profile details show revision history and granted workers', async () => {
   });
   render(<ProfilesPage token="tok" />);
 
-  await user.click(await screen.findByRole('button', { name: 'Details' }));
-  const dialog = await screen.findByRole('dialog');
+  const detail = await openProfile(user);
 
-  expect(within(dialog).getByText('Revision history')).toBeInTheDocument();
-  expect(within(dialog).getByText('Granted workers')).toBeInTheDocument();
-  expect(await within(dialog).findByText('jakub-mbp')).toBeInTheDocument();
+  expect(within(detail).getByText('Revision')).toBeInTheDocument();
+  expect(within(detail).getByText('Granted workers')).toBeInTheDocument();
+  expect(await within(detail).findByText('jakub-mbp')).toBeInTheDocument();
 });
 
 test('creating a profile with an env var and a secret env var sends both maps', async () => {
@@ -357,7 +417,8 @@ test('editing a profile pre-populates its existing env vars', async () => {
   const user = userEvent.setup();
   render(<ProfilesPage token="tok" />);
 
-  await user.click(await screen.findByRole('button', { name: 'Edit' }));
+  const detail = await openProfile(user);
+  await user.click(within(detail).getByRole('button', { name: /Edit \(define new revision\)/ }));
   const dialog = await screen.findByRole('dialog');
 
   expect(within(dialog).getByDisplayValue('MODE')).toBeInTheDocument();
@@ -377,7 +438,8 @@ test('a secret_inaccessible profile shows the remediation alert when editing', a
   const user = userEvent.setup();
   render(<ProfilesPage token="tok" />);
 
-  await user.click(await screen.findByRole('button', { name: 'Edit' }));
+  const detail = await openProfile(user);
+  await user.click(within(detail).getByRole('button', { name: /Edit \(define new revision\)/ }));
   const dialog = await screen.findByRole('dialog');
 
   expect(await within(dialog).findByText(/secret_ids input/)).toBeInTheDocument();
@@ -394,13 +456,12 @@ test('revision history shows an env diff between adjacent revisions', async () =
   });
   render(<ProfilesPage token="tok" />);
 
-  await user.click(await screen.findByRole('button', { name: 'Details' }));
-  const dialog = await screen.findByRole('dialog');
+  // Opens on the latest revision, whose "Changes from the previous revision" is the diff vs rev 1.
+  const detail = await openProfile(user);
 
-  expect(within(dialog).getByText('Initial revision')).toBeInTheDocument();
-  expect(within(dialog).getByText('+NEW_VAR')).toBeInTheDocument();
-  expect(within(dialog).getByText('~MODE')).toBeInTheDocument();
-  expect(within(dialog).getByText('-OLD_VAR')).toBeInTheDocument();
+  expect(within(detail).getByText('+NEW_VAR')).toBeInTheDocument();
+  expect(within(detail).getByText('~MODE')).toBeInTheDocument();
+  expect(within(detail).getByText('-OLD_VAR')).toBeInTheDocument();
 });
 
 test('creating a profile with an image previews the digest and pins it as the CAS token', async () => {
@@ -588,15 +649,14 @@ test('revision history surfaces a digest change under an identical tag', async (
   });
   render(<ProfilesPage token="tok" />);
 
-  await user.click(await screen.findByRole('button', { name: 'Details' }));
-  const dialog = await screen.findByRole('dialog');
+  // Latest revision: same tag as rev 1 but a different pinned digest → flagged as an image change.
+  const detail = await openProfile(user);
 
-  expect(within(dialog).getByText('image digest')).toBeInTheDocument();
-  // Both revisions show the tag; the short digest is rendered too.
-  expect(within(dialog).getByText('sha256:bbbbbbbb')).toBeInTheDocument();
+  expect(within(detail).getByText('image digest')).toBeInTheDocument();
+  expect(within(detail).getByText(/sha256:bbbbbbbb22222222/)).toBeInTheDocument();
 });
 
-test('an unresolvable image revision shows the flagged badge in history', async () => {
+test('an unresolvable image revision shows the flagged badge in the detail view', async () => {
   const user = userEvent.setup();
   listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
   listProfileRevisions.mockResolvedValue({
@@ -611,8 +671,7 @@ test('an unresolvable image revision shows the flagged badge in history', async 
   });
   render(<ProfilesPage token="tok" />);
 
-  await user.click(await screen.findByRole('button', { name: 'Details' }));
-  const dialog = await screen.findByRole('dialog');
+  const detail = await openProfile(user);
 
-  expect(within(dialog).getByText('Unresolvable')).toBeInTheDocument();
+  expect(within(detail).getByText('Unresolvable')).toBeInTheDocument();
 });
