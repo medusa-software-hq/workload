@@ -511,6 +511,36 @@ test('creating a profile with an image previews the digest and pins it as the CA
   });
 });
 
+test('an image without a target service account prompts for one instead of resolving', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [] });
+  resolveImage.mockResolvedValue({
+    dockerImageDigest: 'sha256:def456',
+    imageStatus: ImageStatus.RESOLVED,
+    detail: '',
+  });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  // Image filled, SA still empty — can't resolve a digest as nobody, so we prompt rather than
+  // sit silent, and never hit the backend.
+  await user.type(
+    within(dialog).getByLabelText(/Container image/),
+    'us-docker.pkg.dev/p/repo/app:v1'
+  );
+  expect(await within(dialog).findByText(/Enter the target service account/)).toBeInTheDocument();
+  expect(resolveImage).not.toHaveBeenCalled();
+
+  // Once the SA is provided, the preview resolves.
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  expect(await within(dialog).findByText(/sha256:def456/)).toBeInTheDocument();
+});
+
 test('a CAS mismatch (tag moved) re-previews the new digest instead of dead-ending', async () => {
   const user = userEvent.setup();
   listProfiles.mockResolvedValue({ profiles: [] });
