@@ -48,8 +48,15 @@ test walks the same path a real consumer would, rather than hand-rolled bindings
 | `it-handtest` | ✅ | ✅ | verifies, digest pins, `workload run` pulls and runs |
 | `it-handtest-no-reader` | ✅ | ❌ | revision flags **`image_unresolvable`** |
 
-`terraform output hand_test_profile_inputs` prints the two values to paste into
-the console's *Create profile* form.
+`terraform output hand_test_profile_inputs` prints everything to paste into the
+console's *Create profile* form — target SA, image, the demo secret's resource
+name, and the sha256 fingerprint a correct run must print for it.
+
+The image is [hello-workload](../../images/hello-workload), which reports what
+actually arrived (resolved secret, live brokered token) rather than exiting
+silently like busybox. The demo secret here is what makes "the secret really was
+resolved" checkable: its value is deliberately non-secret and committed, because
+it exists to be compared against a fingerprint.
 
 > **Why not reuse `it-reader`/`it-no-reader`?** They trust only the federated CI
 > identity. A profile pointing at them would flag `binding_missing` — the broker

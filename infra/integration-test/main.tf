@@ -75,6 +75,7 @@ resource "google_project_service" "apis" {
     "artifactregistry.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "secretmanager.googleapis.com",
   ])
 
   project            = var.gcp_project_id
@@ -179,6 +180,31 @@ resource "google_service_account" "hand_test" {
   depends_on = [google_project_service.apis["iam.googleapis.com"]]
 }
 
+# A secret for the hand test to resolve, so the run proves the *payload* arrived and not just that
+# the container started. The value is deliberately non-secret and committed here: it exists to be
+# compared against a fingerprint, and a fixture that pretended to be sensitive would only invite
+# someone to treat a real secret this way.
+resource "google_secret_manager_secret" "hand_test_demo" {
+  project   = var.gcp_project_id
+  secret_id = "hello-workload-demo"
+
+  replication {
+    auto {}
+  }
+
+  depends_on = [google_project_service.apis["secretmanager.googleapis.com"]]
+}
+
+resource "google_secret_manager_secret_version" "hand_test_demo" {
+  secret      = google_secret_manager_secret.hand_test_demo.id
+  secret_data = local.hand_test_demo_secret_value
+}
+
+locals {
+  # sha256 of this is what hello-workload prints, so the hand test can verify end to end.
+  hand_test_demo_secret_value = "hello-workload-demo-secret-value"
+}
+
 module "hand_test_impersonation" {
   source = "../modules/workload-impersonation"
 
@@ -188,6 +214,10 @@ module "hand_test_impersonation" {
   # Grants the SA roles/artifactregistry.reader on the fixture repo, so the backend can resolve the
   # image's digest and the worker can pull it — both as this account.
   artifact_repository_id = google_artifact_registry_repository.integration_test.id
+
+  # ...and secretAccessor on the demo secret, which the worker resolves itself using the brokered
+  # token. Exercises the module's other input on the same account.
+  secret_ids = [google_secret_manager_secret.hand_test_demo.id]
 }
 
 # The hand test's negative case, and the reason it needs its own account: pointing a profile at
@@ -244,6 +274,12 @@ resource "github_actions_variable" "it_image_repository" {
   value         = "${google_artifact_registry_repository.integration_test.registry_uri}/busybox"
 }
 
+resource "github_actions_variable" "it_hello_image_repository" {
+  repository    = data.github_repository.this.name
+  variable_name = "IT_HELLO_IMAGE_REPOSITORY"
+  value         = "${google_artifact_registry_repository.integration_test.registry_uri}/hello-workload"
+}
+
 output "integration_test_ci_sa_email" {
   description = "The identity the integration-test workflow federates into."
   value       = google_service_account.integration_test_ci.email
@@ -255,10 +291,17 @@ output "image_repository" {
 }
 
 output "hand_test_profile_inputs" {
-  description = "Paste these two into the console's Create profile form for the manual end-to-end test."
+  description = "Everything to paste into the console's Create profile form for the manual end-to-end test."
   value = {
     target_service_account = google_service_account.hand_test.email
-    container_image        = "${google_artifact_registry_repository.integration_test.registry_uri}/busybox:latest"
+    container_image        = "${google_artifact_registry_repository.integration_test.registry_uri}/hello-workload:latest"
+    secret_env_var = {
+      DEMO_SECRET = "${google_secret_manager_secret.hand_test_demo.id}/versions/latest"
+    }
+    # hello-workload prints a sha256 prefix per env var; these are what a correct run must show.
+    expected_fingerprints = {
+      DEMO_SECRET = substr(sha256(local.hand_test_demo_secret_value), 0, 12)
+    }
   }
 }
 
