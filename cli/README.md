@@ -5,15 +5,18 @@ short-lived credentials, and runs work under them.
 
 ## Commands
 
+Worker operations live under the `workload worker` group (a sibling to the
+forthcoming `workload admin` group for profile management).
+
 | Command | What it does |
 | --- | --- |
-| `workload register` | Registers this machine; an admin approves it in the console. |
-| `workload status` | Shows this worker's status and granted profiles. |
-| `workload token -p <profile>` | Prints a brokered access token for a profile. |
-| `workload exec -p <profile> -- <cmd>` | Runs a **local command** with the profile's env injected. |
-| `workload run -p <profile>` | Runs the profile's **container image**, streaming its output. |
-| `workload ps` | Lists containers workload started here; `--reap` stops and removes them. |
-| `workload unregister` | Removes this worker's local registration. |
+| `workload worker register` | Registers this machine; an admin approves it in the console. |
+| `workload worker status` | Shows this worker's status and granted profiles. |
+| `workload worker token -p <profile>` | Prints a brokered access token for a profile. |
+| `workload worker exec -p <profile> -- <cmd>` | Runs a **local command** with the profile's env injected. |
+| `workload worker run -p <profile>` | Runs the profile's **container image**, streaming its output. |
+| `workload worker ps` | Lists containers workload started here; `--reap` stops and removes them. |
+| `workload worker unregister` | Removes this worker's local registration. |
 
 `exec` and `run` are the two ways to do work:
 
@@ -21,7 +24,7 @@ short-lived credentials, and runs work under them.
 - **`run`** requires the profile to have a container image. If it doesn't, `run`
   tells you to use `exec` instead.
 
-## Host prerequisites for `workload run`
+## Host prerequisites for `workload worker run`
 
 **A Docker daemon. That's the whole list.**
 
@@ -55,7 +58,7 @@ repository, granted via the
 at verification and the profile isn't claimable — so you get a clear error up
 front rather than a 403 in the middle of a pull.
 
-`workload run` deliberately **won't** fall back to your machine's own Docker
+`workload worker run` deliberately **won't** fall back to your machine's own Docker
 login if the brokered pull is denied. That would mask a broken grant: the
 profile would work on whichever laptop happened to be signed in, and fail
 everywhere else.
@@ -65,7 +68,7 @@ everywhere else.
 > for the target service account to the image's registry, so Workload will only
 > ever send it to Google.
 
-## What `workload run` does
+## What `workload worker run` does
 
 1. Preflights the daemon.
 2. Claims the profile — token, env vars, secret refs, and the image
@@ -86,14 +89,14 @@ everywhere else.
 
 Ctrl-C stops the container (SIGTERM, then SIGKILL after a grace period) and
 removes it. If you `kill -9` the CLI itself, the container is left behind — that
-is the accepted teardown boundary, and `workload ps` is the mitigation:
+is the accepted teardown boundary, and `workload worker ps` is the mitigation:
 
 ```console
-$ workload ps
+$ workload worker ps
 CONTAINER     PROFILE      REV  STATE    STATUS                 AGE
 082f30f0376b  my-profile   1    running  Up 4 minutes           4m
 
-$ workload ps --reap     # stops + removes; asks first (-y to skip)
+$ workload worker ps --reap     # stops + removes; asks first (-y to skip)
 ```
 
 `ps` finds containers by the `ms-workload.*` labels every run applies, so it

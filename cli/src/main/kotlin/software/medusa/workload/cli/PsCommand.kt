@@ -17,10 +17,10 @@ import software.medusa.workload.docker.DockerConnector
 import software.medusa.workload.docker.DockerConnectorConfig
 import software.medusa.workload.docker.DockerConnectorException
 
-// Same grace `workload run` gives a container on Ctrl-C.
+// Same grace `workload worker run` gives a container on Ctrl-C.
 private val reapStopGrace = 10.seconds
 
-/** A row of `workload ps`, already reduced to what we print. */
+/** A row of `workload worker ps`, already reduced to what we print. */
 internal data class PsRow(
     val id: String,
     val profile: String,
@@ -82,7 +82,7 @@ internal fun renderPsTable(rows: List<PsRow>): List<String> {
 class PsCommand : CliktCommand(name = "ps") {
   override fun help(context: Context) =
       "List containers started by workload on this machine. --reap stops and removes them — " +
-          "the way to clean up a container orphaned by a hard kill of 'workload run'."
+          "the way to clean up a container orphaned by a hard kill of 'workload worker run'."
 
   private val reap by
       option("--reap", help = "Stop and remove the listed containers (asks first)").flag()
@@ -94,7 +94,8 @@ class PsCommand : CliktCommand(name = "ps") {
       val containers =
           try {
             runBlocking {
-              // Every container `workload run` creates carries the profile label, so its presence
+              // Every container `workload worker run` creates carries the profile label, so its
+              // presence
               // is exactly "workload owns this" — regardless of which profile or worker.
               connector.containers.list(labelKeys = listOf(workloadProfileLabel))
             }
@@ -124,10 +125,11 @@ class PsCommand : CliktCommand(name = "ps") {
     val running = containers.count { it.running }
     echo("", err = true)
     if (running > 0) {
-      // A running container may be a live `workload run` in another terminal, not an orphan. We
+      // A running container may be a live `workload worker run` in another terminal, not an orphan.
+      // We
       // can't tell the difference — there's no heartbeat — so say so instead of guessing.
       echo(
-          "Warning: $running of these are still running. If a 'workload run' is in progress " +
+          "Warning: $running of these are still running. If a 'workload worker run' is in progress " +
               "elsewhere on this machine, reaping will kill it.",
           err = true,
       )

@@ -43,7 +43,10 @@ data class WorkerClaimResponse(
     val revision: Int,
     val envVars: Map<String, String> = emptyMap(),
     val secretEnvVars: Map<String, String> = emptyMap(),
-    /** Null for a pure exec/env profile — `workload run` requires it, `workload exec` doesn't. */
+    /**
+     * Null for a pure exec/env profile — `workload worker run` requires it, `workload worker exec`
+     * doesn't.
+     */
     val image: ClaimImage? = null,
 )
 

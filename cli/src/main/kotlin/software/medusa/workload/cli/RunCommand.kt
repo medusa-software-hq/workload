@@ -129,10 +129,10 @@ internal fun looksLikeAuthFailure(output: String): Boolean {
 
 /**
  * The message for a failed pull. An auth failure now means the *profile's* target service account
- * can't read the repository — nothing about this host's own sign-in, which `workload run` no longer
- * uses. Deliberately does **not** suggest `gcloud auth configure-docker`: falling back to ambient
- * developer credentials would mask a broken opt-in grant and make the profile look fine on the one
- * machine that happens to be logged in.
+ * can't read the repository — nothing about this host's own sign-in, which `workload worker run` no
+ * longer uses. Deliberately does **not** suggest `gcloud auth configure-docker`: falling back to
+ * ambient developer credentials would mask a broken opt-in grant and make the profile look fine on
+ * the one machine that happens to be logged in.
  */
 internal fun pullFailureMessage(pinnedRef: String, serviceAccount: String, reason: String): String {
   val base = "Failed to pull $pinnedRef: $reason"
@@ -144,7 +144,7 @@ internal fun pullFailureMessage(pinnedRef: String, serviceAccount: String, reaso
       "appears to lack read access to this repository. An admin needs to grant it\n" +
       "roles/artifactregistry.reader — via the workload-impersonation module's\n" +
       "artifact_repository_id input — and then re-verify the profile.\n" +
-      "(`workload run` deliberately does not fall back to this machine's own Docker login.)"
+      "(`workload worker run` deliberately does not fall back to this machine's own Docker login.)"
 }
 
 /**
@@ -165,8 +165,8 @@ internal fun renderPullProgress(progress: PullProgress, seen: MutableSet<String>
  * ladder is proving out.
  *
  * [onCreated] fires with the container id as soon as it exists, so a caller can arm teardown before
- * the container is started. [cmd] overrides the image's own command — `workload run` leaves it null
- * (the profile's image decides what to run); tests use it to drive a stock image.
+ * the container is started. [cmd] overrides the image's own command — `workload worker run` leaves
+ * it null (the profile's image decides what to run); tests use it to drive a stock image.
  *
  * **Why not AutoRemove.** The obvious shape is `AutoRemove=true` and let the daemon reap the
  * container. It doesn't work here: a short-lived container (`echo` and exit) is reaped before our
@@ -229,7 +229,8 @@ class RunCommand : CliktCommand(name = "run") {
     val config = loadConfigOrFail()
 
     // No `docker` CLI preflight any more: stage 2 pulls through the library, so the only binary
-    // `workload run` may still invoke is the credential *helper*, and only if config.json names
+    // `workload worker run` may still invoke is the credential *helper*, and only if config.json
+    // names
     // one.
     DockerConnector(DockerConnectorConfig.fromEnvironment()).use { connector ->
       requireDaemon(connector)
@@ -249,7 +250,7 @@ class RunCommand : CliktCommand(name = "run") {
             throw PrintMessage(
                 "Cannot reach the broker at ${config.brokerBaseUrl}: ${e.javaClass.simpleName}" +
                     (e.message?.let { ": $it" } ?: "") +
-                    "\nCheck your network, or re-run 'workload register' if the broker URL changed.",
+                    "\nCheck your network, or re-run 'workload worker register' if the broker URL changed.",
                 statusCode = 1,
                 printError = true,
             )
@@ -259,7 +260,7 @@ class RunCommand : CliktCommand(name = "run") {
           claim.image
               ?: throw PrintMessage(
                   "Profile '$profileId' has no container image, so there's nothing to run. " +
-                      "Did you mean 'workload exec -p $profileId -- <command>'?",
+                      "Did you mean 'workload worker exec -p $profileId -- <command>'?",
                   statusCode = 1,
                   printError = true,
               )
