@@ -33,7 +33,7 @@ jobs:
       - name: Build fat jar
         working-directory: cli
         run: |
-          ./gradlew shadowJar
+          ../gradlew shadowJar
           echo "JAR=$GITHUB_WORKSPACE/cli/build/libs/workload-cli.jar" >> $GITHUB_ENV
           echo "VERSION=0.0.${{ github.run_number }}" >> $GITHUB_ENV
 

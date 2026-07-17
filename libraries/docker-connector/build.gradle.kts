@@ -5,7 +5,6 @@ plugins {
   alias(libs.plugins.kotlin.serialization)
   alias(libs.plugins.ktfmt)
   alias(libs.plugins.detekt)
-  alias(libs.plugins.versionCatalogUpdate)
 }
 
 repositories { mavenCentral() }
@@ -37,6 +36,10 @@ dependencies {
 }
 
 tasks.named("check") { dependsOn(tasks.named("ktfmtCheck")) }
+
+// One detekt config for every module in the repo (detekt would otherwise look for a per-project
+// config/detekt/detekt.yml).
+detekt { config.setFrom(rootProject.file("config/detekt/detekt.yml")) }
 
 java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
 
