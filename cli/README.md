@@ -12,6 +12,7 @@ short-lived credentials, and runs work under them.
 | `workload token -p <profile>` | Prints a brokered access token for a profile. |
 | `workload exec -p <profile> -- <cmd>` | Runs a **local command** with the profile's env injected. |
 | `workload run -p <profile>` | Runs the profile's **container image**, streaming its output. |
+| `workload ps` | Lists containers workload started here; `--reap` stops and removes them. |
 | `workload unregister` | Removes this worker's local registration. |
 
 `exec` and `run` are the two ways to do work:
@@ -22,16 +23,29 @@ short-lived credentials, and runs work under them.
 
 ## Host prerequisites for `workload run`
 
-**Docker. That's the whole list.**
+**A Docker daemon. That's the whole list.**
 
-- A running daemon this user can reach. `workload run` talks to
-  `/var/run/docker.sock` directly (override with `DOCKER_HOST=unix:///path`).
-  If your user isn't in the `docker` group, `docker info` will tell you.
+Not `gcloud`, not `gcloud auth configure-docker`, not `docker login` — and not
+the `docker` CLI itself, which `ms-workload` never invokes. The image pull
+authenticates with the **brokered token** from the claim (the profile's own
+target service account), so a fresh machine just works and nothing is written to
+`~/.docker/config.json`.
 
-No `gcloud`, no `gcloud auth configure-docker`, no `docker login`, and not even
-the `docker` CLI itself. The image pull authenticates with the **brokered token**
-from the claim — the profile's own target service account — so a fresh machine
-just works, and nothing is written to `~/.docker/config.json`.
+The daemon is found the way Docker itself decides, by reading the same files —
+never by shelling out to `docker context`:
+
+1. `DOCKER_HOST` (a `unix://` socket), if you set it.
+2. The active `docker context` — `DOCKER_CONTEXT`, else `currentContext` from
+   `~/.docker/config.json`. This is what makes **Docker Desktop** and **Colima**
+   work with no configuration.
+3. Well-known paths: `/var/run/docker.sock` (stock Ubuntu, tried first),
+   `$XDG_RUNTIME_DIR/docker.sock` (rootless), then Docker Desktop's and Colima's
+   sockets under `$HOME`.
+
+A `tcp://` or `ssh://` `DOCKER_HOST`/context is a clear error rather than a
+silent fallback — running your workload against a different daemon than you
+asked for would be worse than refusing. If your user isn't in the `docker`
+group, the error says so.
 
 The permission that matters is on the *profile*, not on your machine: the
 target service account needs `roles/artifactregistry.reader` on the image's
@@ -72,7 +86,20 @@ everywhere else.
 
 Ctrl-C stops the container (SIGTERM, then SIGKILL after a grace period) and
 removes it. If you `kill -9` the CLI itself, the container is left behind — that
-is the accepted teardown boundary for now.
+is the accepted teardown boundary, and `workload ps` is the mitigation:
+
+```console
+$ workload ps
+CONTAINER     PROFILE      REV  STATE    STATUS                 AGE
+082f30f0376b  my-profile   1    running  Up 4 minutes           4m
+
+$ workload ps --reap     # stops + removes; asks first (-y to skip)
+```
+
+`ps` finds containers by the `ms-workload.*` labels every run applies, so it
+only ever touches containers workload started. It cannot tell an orphan from a
+run in progress in another terminal — there's no heartbeat — so `--reap` warns
+about running containers and asks before doing anything.
 
 ## Development
 

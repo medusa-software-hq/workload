@@ -14,6 +14,7 @@ fun main(
           TokenCommand(),
           ExecCommand(),
           RunCommand(),
+          PsCommand(),
           ReadObjectCommand(),
           RegisterCommand(),
           StatusCommand(),

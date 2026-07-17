@@ -1,13 +1,17 @@
 package software.medusa.workload.docker
 
 /**
- * How the connector finds the daemon socket. Ubuntu-first: the default is the plain
- * `/var/run/docker.sock`; `DOCKER_HOST` is honored only for the `unix://` scheme (tcp/ssh and
- * `docker context` discovery are out of story 01's scope — see the design doc's Ubuntu-first and
- * Transport sections; macOS discovery is story 08).
+ * How the connector finds the daemon socket. Ubuntu-first: `/var/run/docker.sock` is the default
+ * and the first well-known path tried, and it's the platform the contract tests run against.
+ *
+ * [fromEnvironment] runs the full discovery order (`DOCKER_HOST` → the active `docker context` →
+ * well-known paths); see [DockerSocketDiscovery]. Discovery deliberately never shells out to the
+ * `docker` binary — the product must work with no CLI on PATH.
  */
 class DockerConnectorConfig(
     val socketPath: String = DEFAULT_SOCKET_PATH,
+    /** How [socketPath] was found. Purely diagnostic; defaults to an explicitly-passed path. */
+    val source: SocketSource = SocketSource.DEFAULT,
 ) {
   init {
     require(socketPath.isNotBlank()) { "socketPath must not be blank" }
@@ -16,26 +20,15 @@ class DockerConnectorConfig(
   companion object {
     const val DEFAULT_SOCKET_PATH: String = "/var/run/docker.sock"
 
-    private const val UNIX_SCHEME = "unix://"
-
     /**
-     * Builds config from the environment: `DOCKER_HOST` if it's a `unix://` URL, else the default
-     * socket. A non-`unix://` `DOCKER_HOST` is a hard, actionable error rather than a silent
-     * fallback — a user who set `tcp://`/`ssh://` should be told it isn't supported yet, not have
-     * it quietly ignored.
+     * Discovers the daemon socket from the environment. A non-`unix://` `DOCKER_HOST` (or docker
+     * context) is a hard, actionable error rather than a silent fallback — a user who set
+     * `tcp://`/`ssh://` should be told it isn't supported, not have their workload quietly run
+     * against some other daemon.
      */
-    fun fromEnvironment(env: (String) -> String? = System::getenv): DockerConnectorConfig {
-      val dockerHost = env("DOCKER_HOST")?.takeIf { it.isNotBlank() }
-      if (dockerHost == null) {
-        return DockerConnectorConfig()
-      }
-      if (!dockerHost.startsWith(UNIX_SCHEME)) {
-        throw DockerConnectionException(
-            "DOCKER_HOST='$dockerHost' is not supported: only unix:// sockets are supported " +
-                "(tcp/ssh and docker-context discovery are not implemented yet)."
-        )
-      }
-      return DockerConnectorConfig(dockerHost.removePrefix(UNIX_SCHEME))
+    fun fromEnvironment(host: DiscoveryHost = SystemDiscoveryHost): DockerConnectorConfig {
+      val discovered = DockerSocketDiscovery.discover(host)
+      return DockerConnectorConfig(discovered.path, discovered.source)
     }
   }
 }
