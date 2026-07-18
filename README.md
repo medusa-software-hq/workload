@@ -28,8 +28,12 @@ The end-to-end flow:
 3. The worker **claims** a profile. The broker checks the grant, then uses its
    own cloud identity to mint a short-lived token that **impersonates that
    profile's target service account**.
-4. The worker uses that token to talk to Google Cloud for the few minutes it
-   stays valid — then it's gone.
+4. The worker uses that token to talk to Google Cloud. When it runs a workload
+   (`run`/`exec`), a local **metadata server** — indistinguishable from GCE's to
+   Google tooling — hands the workload short-lived tokens and refreshes them on
+   demand, so the credential never sits in the workload's environment and jobs
+   aren't capped at one token's lifetime. Revoke the worker and the next refresh
+   simply fails.
 
 The trust and the blast radius live in one place — the broker and the IAM
 bindings behind it — instead of being spread across every worker. Workers stay
