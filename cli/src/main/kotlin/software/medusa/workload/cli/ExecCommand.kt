@@ -73,7 +73,7 @@ class ExecCommand : CliktCommand(name = "exec") {
     echo("Profile:     ${claim.profileId} (revision ${claim.revision})", err = true)
     echo("Service acct: ${claim.serviceAccount}", err = true)
     echo(
-        "Token expires: ${claim.expiresAt} (~1h lifetime; longer-running jobs may outlive it — " +
+        "Token expires: ${claim.expiresAt} (15-min lifetime; longer-running jobs may outlive it — " +
             "token refresh isn't supported yet)",
         err = true,
     )
