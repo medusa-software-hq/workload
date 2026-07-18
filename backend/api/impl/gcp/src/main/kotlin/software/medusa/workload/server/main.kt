@@ -73,7 +73,6 @@ fun main() {
           port = port,
           workerApiPathPrefix = workerApiPathPrefix,
           auth = GoogleIdTokenAuthDecorator(setOfNotNull(clientId, cliClientId), allowedDomain),
-          counterStore = PostgresWorkloadStore(database),
           fleetStore = fleetStore,
           impersonationVerifier = IamImpersonationVerifier(iamCredentialsClient),
           imageDigestResolver = GcpImageDigestResolver(iamCredentialsClient),

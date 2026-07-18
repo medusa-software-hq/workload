@@ -30,7 +30,6 @@ class ServerWorkerApiPrefixTest {
             port = 0,
             workerApiPathPrefix = prefix,
             auth = NoOpAuthDecorator,
-            counterStore = InMemoryWorkloadStore(),
             fleetStore = InMemoryFleetStore(),
             impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
             imageDigestResolver = AlwaysResolvedImageDigestResolver,

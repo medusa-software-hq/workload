@@ -59,7 +59,6 @@ fun buildServer(
     port: Int,
     workerApiPathPrefix: String,
     auth: DecoratingHttpServiceFunction,
-    counterStore: WorkloadStore,
     fleetStore: FleetStore,
     impersonationVerifier: ImpersonationVerifier,
     imageDigestResolver: ImageDigestResolver,
@@ -92,7 +91,6 @@ fun buildServer(
   val grpcService =
       GrpcService.builder()
           .apply {
-            addService(WorkloadServiceImpl(counterStore))
             addService(FleetServiceImpl(fleetStore, impersonationVerifier, imageDigestResolver))
             enableUnframedRequests(true)
           }
