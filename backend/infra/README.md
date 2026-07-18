@@ -5,7 +5,7 @@ is meant to stay a single Terraform config as other backend services (e.g. a wor
 are added:
 
 - the Cloud Run service and its service account (`gcp-service.tf`)
-- a **Neon serverless Postgres** project backing the counter store (`neon.tf`)
+- a **Neon serverless Postgres** project backing the workload database (`neon.tf`)
 - a **Secret Manager** secret holding the Neon JDBC connection string, injected
   into Cloud Run as `DATABASE_URL` (`gcp-secret-manager.tf`)
 - a **Secret Manager** secret holding the deployment-wide worker API path prefix
