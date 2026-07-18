@@ -41,21 +41,29 @@ internal fun loadConfigOrFail(): WorkloadConfig =
         )
 
 internal fun tokenClaimErrorMessage(e: WorkerApiException, profileId: String): String =
-    when (e.errorCode) {
-      "unauthorized" ->
-          "Worker is not approved (pending, rejected, or revoked). Run 'workload worker status' to check."
-      "profile_not_found" ->
-          "No such profile '$profileId'. Check the profile ID, or ask an admin to grant it to you."
-      "profile_archived" -> "Profile '$profileId' has been archived and can no longer be claimed."
-      "not_granted" ->
-          "You don't have access to profile '$profileId'. Ask an admin to grant it to you."
-      "failed_to_mint_token" ->
-          "The broker failed to mint a token — likely an IAM misconfiguration on the target service account. Contact an admin."
-      "not_verified" ->
-          "Profile '$profileId' has an unverified revision and can't be claimed. Ask an admin to re-verify it."
-      "image_unresolvable" ->
-          "Profile '$profileId' has an image whose digest couldn't be resolved, so it can't be claimed. " +
-              "Its target service account likely lacks roles/artifactregistry.reader on the image's repository " +
-              "(see the workload-impersonation module's artifact_repository_id input). Ask an admin to re-verify it."
-      else -> "Token claim failed: ${e.errorCode}"
-    }
+    if (e.statusCode == 404) {
+      // The v2 worker plane returns a bare 404 for a wrong URL *and* for any rejected credential
+      // (revoked, or a worker that never activated) — it's deliberately indistinguishable.
+      "The broker returned 404. That means either a wrong broker URL, or a credential the broker " +
+          "rejected — this worker may have been revoked or never activated. Check " +
+          "'workload worker status', and re-register with 'workload worker register --force' if needed."
+    } else
+        when (e.errorCode) {
+          "unauthorized" ->
+              "Worker is not approved (pending, rejected, or revoked). Run 'workload worker status' to check."
+          "profile_not_found" ->
+              "No such profile '$profileId'. Check the profile ID, or ask an admin to grant it to you."
+          "profile_archived" ->
+              "Profile '$profileId' has been archived and can no longer be claimed."
+          "not_granted" ->
+              "You don't have access to profile '$profileId'. Ask an admin to grant it to you."
+          "failed_to_mint_token" ->
+              "The broker failed to mint a token — likely an IAM misconfiguration on the target service account. Contact an admin."
+          "not_verified" ->
+              "Profile '$profileId' has an unverified revision and can't be claimed. Ask an admin to re-verify it."
+          "image_unresolvable" ->
+              "Profile '$profileId' has an image whose digest couldn't be resolved, so it can't be claimed. " +
+                  "Its target service account likely lacks roles/artifactregistry.reader on the image's repository " +
+                  "(see the workload-impersonation module's artifact_repository_id input). Ask an admin to re-verify it."
+          else -> "Token claim failed: ${e.errorCode}"
+        }
