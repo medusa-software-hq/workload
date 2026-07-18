@@ -44,4 +44,12 @@ class TokenCommandTest {
     val message = tokenClaimErrorMessage(WorkerApiException(500, "something_else"), "my-profile")
     assertTrue(message.contains("something_else"))
   }
+
+  @Test
+  fun `a 404 explains it can be a wrong URL or a rejected credential`() {
+    // The v2 plane returns a bare 404 (empty body -> unknown_error) for any rejected credential.
+    val message = tokenClaimErrorMessage(WorkerApiException(404, "unknown_error"), "my-profile")
+    assertTrue(message.contains("404"))
+    assertTrue(message.contains("status") || message.contains("register"))
+  }
 }
