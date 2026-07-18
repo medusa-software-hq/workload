@@ -26,6 +26,13 @@ dependencies {
   runtimeOnly(libs.logback.classic)
 
   testImplementation(libs.kotlin.test)
+
+  // The metadata emulator's contract test drives a real Google auth client
+  // (ComputeEngineCredentials
+  // pointed at the emulator via GCE_METADATA_HOST) — proving genuine GCE-client compatibility, not
+  // just our own view of the wire shape. Version managed by the same BOM the backend uses.
+  testImplementation(platform(libs.google.cloud.libraries.bom))
+  testImplementation(libs.google.auth.oauth2.http)
 }
 
 application {
