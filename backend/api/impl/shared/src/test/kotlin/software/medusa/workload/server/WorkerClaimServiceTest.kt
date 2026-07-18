@@ -33,7 +33,6 @@ class WorkerClaimServiceTest {
             port = 0,
             workerApiPathPrefix = prefix,
             auth = NoOpAuthDecorator,
-            counterStore = InMemoryWorkloadStore(),
             fleetStore = fleetStore,
             impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
             imageDigestResolver = AlwaysResolvedImageDigestResolver,

@@ -13,8 +13,8 @@ private const val testDatabaseUrlEnvVarName = "TEST_DATABASE_URL"
 /**
  * Runs [FleetStoreContractTest] against a real Postgres, skipped unless [testDatabaseUrlEnvVarName]
  * points at one (e.g. `postgresql://user:pass@localhost:5432/db?sslmode=disable`) — there's no
- * Postgres available in this repo's CI today, matching [PostgresWorkloadStore]'s existing (lack of)
- * test coverage. Point it at a local/throwaway database to run this locally.
+ * Postgres available in this repo's CI today. Point it at a local/throwaway database to run this
+ * locally.
  */
 class PostgresFleetStoreTest : FleetStoreContractTest() {
   @BeforeEach

@@ -155,8 +155,7 @@ is one install away.
 
 ## Status
 
-Internal and experimental. It began life as a full-stack template — some
-scaffolding (a leftover counter service) still rides along — and is being grown
-toward the worker platform described above. Each component's own `README.md` and
-`Taskfile.yml` carry the operational detail and exact commands; this document is
-only meant to explain what the system is and how it holds together.
+Internal and experimental. It began life as a full-stack template and has been
+grown into the worker platform described above. Each component's own `README.md`
+and `Taskfile.yml` carry the operational detail and exact commands; this document
+is only meant to explain what the system is and how it holds together.

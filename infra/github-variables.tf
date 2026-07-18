@@ -47,7 +47,7 @@ resource "github_actions_variable" "gcp_api_url" {
   variable_name = module.common.gh_api_url_var_name
 
   # Managed manually (for now):
-  # https://github.com/medusa-software-hq/counter/settings/variables/actions/API_URL
+  # https://github.com/medusa-software-hq/workload/settings/variables/actions/API_URL
   value = "https://example.com/placeholder"
 
   lifecycle {

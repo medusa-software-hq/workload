@@ -6,7 +6,7 @@
 # which is a verified owner of the domain (a one-time org bootstrap performed in
 # the `meta` repo) — so no per-project domain-ownership step is needed.
 resource "google_cloud_run_domain_mapping" "web" {
-  name     = local.counter_web_host_name
+  name     = local.web_host_name
   location = module.common.gcp_primary_location
   project  = var.gcp_project_id
 
@@ -22,5 +22,5 @@ resource "google_cloud_run_domain_mapping" "web" {
 
 output "web_url" {
   description = "Public URL of the web app."
-  value       = "https://${local.counter_web_host_name}"
+  value       = "https://${local.web_host_name}"
 }

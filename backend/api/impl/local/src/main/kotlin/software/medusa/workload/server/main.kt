@@ -15,7 +15,6 @@ fun main() {
           port = localPort,
           workerApiPathPrefix = localWorkerApiPathPrefix,
           auth = NoOpAuthDecorator,
-          counterStore = InMemoryWorkloadStore(),
           fleetStore = fleetStore,
           impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
           imageDigestResolver = AlwaysResolvedImageDigestResolver,
