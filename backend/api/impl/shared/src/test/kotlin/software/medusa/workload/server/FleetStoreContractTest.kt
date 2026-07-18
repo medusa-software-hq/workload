@@ -6,6 +6,10 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
 
 /**
@@ -466,6 +470,141 @@ abstract class FleetStoreContractTest {
     store.grant(worker.workerId, profile.profileId, grantedBy = "admin@example.com")
     store.grant(worker.workerId, profile.profileId, grantedBy = "admin2@example.com")
     assertTrue(store.hasGrant(worker.workerId, profile.profileId))
+  }
+
+  private fun newEnrollmentToken(
+      plaintext: String,
+      expiresAt: java.time.Instant = java.time.Instant.now().plusSeconds(3600),
+      requireApproval: Boolean = false,
+      note: String? = "for a teammate",
+  ) =
+      NewEnrollmentToken(
+          tokenHash = hashEnrollmentToken(plaintext),
+          note = note,
+          createdBy = "admin@example.com",
+          expiresAt = expiresAt,
+          requireApproval = requireApproval,
+      )
+
+  @Test
+  fun `createEnrollmentToken persists only the hash and lists as outstanding`() = test { store ->
+    val plaintext = "wle_secret-token-value"
+    val created = store.createEnrollmentToken(newEnrollmentToken(plaintext, note = "kuba's mbp"))
+
+    assertEquals("kuba's mbp", created.note)
+    assertEquals("admin@example.com", created.createdBy)
+    assertFalse(created.requireApproval)
+    assertNull(created.usedAt)
+    assertNull(created.revokedAt)
+    // Only the hash is stored — never the plaintext.
+    assertFalse(created.tokenHash.bytes.contentEquals(plaintext.toByteArray()))
+    assertEquals(hashEnrollmentToken(plaintext), created.tokenHash)
+
+    val outstanding = store.listOutstandingEnrollmentTokens(java.time.Instant.now())
+    assertTrue(outstanding.any { it.id == created.id })
+  }
+
+  @Test
+  fun `an expired token is not outstanding and cannot be burnt`() = test { store ->
+    val plaintext = "wle_expired"
+    val past = java.time.Instant.now().minusSeconds(60)
+    store.createEnrollmentToken(newEnrollmentToken(plaintext, expiresAt = past))
+
+    val now = java.time.Instant.now()
+    assertTrue(
+        store.listOutstandingEnrollmentTokens(now).none {
+          it.tokenHash == hashEnrollmentToken(plaintext)
+        }
+    )
+    assertNull(
+        store.burnEnrollmentToken(
+            hashEnrollmentToken(plaintext),
+            WorkerId(java.util.UUID.randomUUID()),
+            now,
+        )
+    )
+  }
+
+  @Test
+  fun `revokeEnrollmentToken drops it from outstanding and is idempotent-safe`() = test { store ->
+    val created = store.createEnrollmentToken(newEnrollmentToken("wle_to-revoke"))
+
+    val now = java.time.Instant.now()
+    val revoked = store.revokeEnrollmentToken(created.id, now)
+    assertNotNull(revoked)
+    assertEquals(now, revoked.revokedAt)
+    assertTrue(store.listOutstandingEnrollmentTokens(now).none { it.id == created.id })
+
+    // Revoking again (already revoked) or an unknown id yields null.
+    assertNull(store.revokeEnrollmentToken(created.id, now))
+    assertNull(store.revokeEnrollmentToken(EnrollmentTokenId(java.util.UUID.randomUUID()), now))
+  }
+
+  @Test
+  fun `a revoked token cannot be burnt`() = test { store ->
+    val created = store.createEnrollmentToken(newEnrollmentToken("wle_revoked-then-burn"))
+    val now = java.time.Instant.now()
+    store.revokeEnrollmentToken(created.id, now)
+    assertNull(
+        store.burnEnrollmentToken(created.tokenHash, WorkerId(java.util.UUID.randomUUID()), now)
+    )
+  }
+
+  @Test
+  fun `burnEnrollmentToken redeems once, records the worker, and drops it from outstanding`() =
+      test { store ->
+        val plaintext = "wle_one-shot"
+        store.createEnrollmentToken(newEnrollmentToken(plaintext))
+        val workerId = WorkerId(java.util.UUID.randomUUID())
+        val now = java.time.Instant.now()
+
+        val burnt = store.burnEnrollmentToken(hashEnrollmentToken(plaintext), workerId, now)
+        assertNotNull(burnt)
+        assertEquals(now, burnt.usedAt)
+        assertEquals(workerId, burnt.usedByWorkerId)
+        assertTrue(store.listOutstandingEnrollmentTokens(now).none { it.id == burnt.id })
+
+        // A second redemption of the same token fails — single use.
+        assertNull(
+            store.burnEnrollmentToken(
+                hashEnrollmentToken(plaintext),
+                WorkerId(java.util.UUID.randomUUID()),
+                now,
+            )
+        )
+      }
+
+  @Test
+  fun `burning an unknown token returns null`() = test { store ->
+    assertNull(
+        store.burnEnrollmentToken(
+            hashEnrollmentToken("wle_never-created"),
+            WorkerId(java.util.UUID.randomUUID()),
+            java.time.Instant.now(),
+        )
+    )
+  }
+
+  @Test
+  fun `concurrent redemptions of one token — exactly one succeeds`() = test { store ->
+    val plaintext = "wle_race"
+    store.createEnrollmentToken(newEnrollmentToken(plaintext))
+    val hash = hashEnrollmentToken(plaintext)
+    val now = java.time.Instant.now()
+
+    val attempts = 32
+    val results = coroutineScope {
+      (1..attempts)
+          .map {
+            async(Dispatchers.Default) {
+              store.burnEnrollmentToken(hash, WorkerId(java.util.UUID.randomUUID()), now)
+            }
+          }
+          .awaitAll()
+    }
+
+    val winners = results.filterNotNull()
+    assertEquals(1, winners.size, "exactly one concurrent redemption must win, got ${winners.size}")
   }
 
   @Test

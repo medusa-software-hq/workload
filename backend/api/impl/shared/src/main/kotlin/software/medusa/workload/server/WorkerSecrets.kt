@@ -25,6 +25,14 @@ fun verifyWorkerSecret(secret: String, expected: SecretHash): Boolean =
     constantTimeEquals(hashWorkerSecret(secret).bytes, expected.bytes)
 
 /**
+ * Hashes an enrollment token for storage — same SHA-256-of-UTF-8 as [hashWorkerSecret], the only
+ * form of the token ever persisted. The plaintext `wle_` token is shown once at creation and
+ * dropped.
+ */
+fun hashEnrollmentToken(token: String): SecretHash =
+    SecretHash(MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.UTF_8)))
+
+/**
  * A 4-digit, zero-padded code shown to the human approving a pending worker — never a credential.
  */
 fun generateConfirmationCode(): String = "%04d".format(secureRandom.nextInt(10_000))

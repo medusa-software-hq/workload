@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from '@test-utils';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, test, vi } from 'vitest';
 import {
+  type EnrollmentToken,
   WorkerStatus,
   type Profile,
   type Worker,
@@ -9,21 +10,27 @@ import {
 
 const listWorkers = vi.fn();
 const listProfiles = vi.fn();
+const listEnrollmentTokens = vi.fn();
 const approveWorker = vi.fn();
 const rejectWorker = vi.fn();
 const revokeWorker = vi.fn();
 const grantProfile = vi.fn();
 const revokeProfileGrant = vi.fn();
+const createEnrollmentToken = vi.fn();
+const revokeEnrollmentToken = vi.fn();
 
 vi.mock('@connectrpc/connect', () => ({
   createClient: () => ({
     listWorkers,
     listProfiles,
+    listEnrollmentTokens,
     approveWorker,
     rejectWorker,
     revokeWorker,
     grantProfile,
     revokeProfileGrant,
+    createEnrollmentToken,
+    revokeEnrollmentToken,
   }),
 }));
 vi.mock('@connectrpc/connect-web', () => ({ createGrpcWebTransport: () => ({}) }));
@@ -61,20 +68,38 @@ function fakeProfile(overrides: Partial<Profile> = {}): Profile {
   } as Profile;
 }
 
+function fakeEnrollmentToken(overrides: Partial<EnrollmentToken> = {}): EnrollmentToken {
+  return {
+    enrollmentTokenId: 'token-1',
+    note: "kuba's mbp",
+    createdBy: 'admin@medusa.software',
+    createdAt: '2026-01-01T00:00:00Z',
+    expiresAt: '2026-01-08T00:00:00Z',
+    requireApproval: false,
+    ...overrides,
+  } as EnrollmentToken;
+}
+
 beforeEach(() => {
   listWorkers.mockReset();
   listProfiles.mockReset();
+  listEnrollmentTokens.mockReset();
   approveWorker.mockReset();
   rejectWorker.mockReset();
   revokeWorker.mockReset();
   grantProfile.mockReset();
   revokeProfileGrant.mockReset();
+  createEnrollmentToken.mockReset();
+  revokeEnrollmentToken.mockReset();
   listProfiles.mockResolvedValue({ profiles: [] });
+  listEnrollmentTokens.mockResolvedValue({ enrollmentTokens: [] });
   approveWorker.mockResolvedValue({});
   rejectWorker.mockResolvedValue({});
   revokeWorker.mockResolvedValue({});
   grantProfile.mockResolvedValue({});
   revokeProfileGrant.mockResolvedValue({});
+  createEnrollmentToken.mockResolvedValue({});
+  revokeEnrollmentToken.mockResolvedValue({});
 });
 
 test('shows a pending worker with its confirmation code', async () => {
@@ -230,6 +255,66 @@ test('revoking a grant from the manage-grants dialog', async () => {
   await waitFor(() => {
     expect(revokeProfileGrant).toHaveBeenCalledWith(
       { workerId: 'worker-1', profileId: 'my-profile-1' },
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+});
+
+test('creating an enrollment token shows it once, then never again after the dialog closes', async () => {
+  const user = userEvent.setup();
+  listWorkers.mockResolvedValue({ workers: [] });
+  createEnrollmentToken.mockResolvedValue({
+    token: 'wle_the-secret-token-value',
+    enrollmentToken: fakeEnrollmentToken(),
+  });
+  render(<WorkersPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'New worker' }));
+  const dialog = await screen.findByRole('dialog');
+  await user.type(within(dialog).getByLabelText('Note'), "kuba's mbp");
+  await user.click(within(dialog).getByRole('button', { name: 'Create token' }));
+
+  // The plaintext is revealed exactly once, with the copy affordance.
+  expect(await screen.findByText('wle_the-secret-token-value')).toBeInTheDocument();
+  expect(screen.getByText(/only time the token is shown/i)).toBeInTheDocument();
+
+  await waitFor(() => {
+    expect(createEnrollmentToken).toHaveBeenCalledWith(
+      { note: "kuba's mbp", expiresInDays: 7, requireApproval: false },
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+
+  // Closing the dialog wipes the token — it must never be displayed again.
+  await user.click(screen.getByRole('button', { name: 'Done' }));
+  await waitFor(() => {
+    expect(screen.queryByText('wle_the-secret-token-value')).not.toBeInTheDocument();
+  });
+
+  // Reopening "New worker" shows the form afresh, not the old token.
+  await user.click(screen.getByRole('button', { name: 'New worker' }));
+  expect(await screen.findByRole('button', { name: 'Create token' })).toBeInTheDocument();
+  expect(screen.queryByText('wle_the-secret-token-value')).not.toBeInTheDocument();
+});
+
+test('lists an outstanding enrollment token and revokes it', async () => {
+  const user = userEvent.setup();
+  listWorkers.mockResolvedValue({ workers: [] });
+  listEnrollmentTokens.mockResolvedValue({
+    enrollmentTokens: [fakeEnrollmentToken({ enrollmentTokenId: 'token-42', note: 'laptop' })],
+  });
+  render(<WorkersPage token="tok" />);
+
+  expect(await screen.findByText('laptop')).toBeInTheDocument();
+  expect(screen.getByText('admin@medusa.software')).toBeInTheDocument();
+
+  await user.click(screen.getByRole('button', { name: 'Revoke' }));
+  const dialog = await screen.findByRole('dialog');
+  await user.click(within(dialog).getByRole('button', { name: 'Revoke' }));
+
+  await waitFor(() => {
+    expect(revokeEnrollmentToken).toHaveBeenCalledWith(
+      { enrollmentTokenId: 'token-42' },
       { headers: { Authorization: 'Bearer tok' } }
     );
   });

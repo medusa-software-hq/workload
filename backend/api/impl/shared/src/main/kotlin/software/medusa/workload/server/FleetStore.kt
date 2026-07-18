@@ -1,5 +1,7 @@
 package software.medusa.workload.server
 
+import java.time.Instant
+
 /**
  * Persistence for workers, profiles/revisions, and (worker, profile) grants.
  *
@@ -79,4 +81,29 @@ interface FleetStore {
   suspend fun hasGrant(workerId: WorkerId, profileId: ProfileId): Boolean
 
   suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId>
+
+  // Enrollment tokens
+
+  suspend fun createEnrollmentToken(token: NewEnrollmentToken): EnrollmentToken
+
+  /** Outstanding = never redeemed, never revoked, and not expired as of [now]; newest first. */
+  suspend fun listOutstandingEnrollmentTokens(now: Instant): List<EnrollmentToken>
+
+  /**
+   * Revokes an outstanding token. Returns the revoked token, or null if it doesn't exist or was
+   * already used/revoked.
+   */
+  suspend fun revokeEnrollmentToken(id: EnrollmentTokenId, now: Instant): EnrollmentToken?
+
+  /**
+   * Atomically redeems (burns) the token whose hash is [tokenHash], if it is outstanding as of
+   * [now]. Returns the burnt token on success, or null if it's unknown, already used, revoked, or
+   * expired. The single conditional write is the race guard: given concurrent redemptions of one
+   * token, exactly one succeeds.
+   */
+  suspend fun burnEnrollmentToken(
+      tokenHash: SecretHash,
+      workerId: WorkerId,
+      now: Instant,
+  ): EnrollmentToken?
 }

@@ -146,3 +146,36 @@ data class Grant(
     val grantedAt: Instant,
     val grantedBy: String,
 )
+
+@JvmInline
+value class EnrollmentTokenId(
+    val value: UUID,
+)
+
+/**
+ * A one-time `wle_` enrollment token an admin mints and hands to a teammate, who exchanges it for a
+ * worker credential (M4-A3). Only the SHA-256 [tokenHash] is persisted — the plaintext is shown
+ * once at creation and never stored. A token is *outstanding* while [usedAt], [revokedAt], and
+ * expiry are all clear; redeeming it sets [usedAt]/[usedByWorkerId], revoking it sets [revokedAt],
+ * and either way it drops out of the outstanding list but survives as audit history.
+ */
+data class EnrollmentToken(
+    val id: EnrollmentTokenId,
+    val tokenHash: SecretHash,
+    val note: String?,
+    val createdBy: String,
+    val createdAt: Instant,
+    val expiresAt: Instant,
+    val requireApproval: Boolean,
+    val usedAt: Instant?,
+    val usedByWorkerId: WorkerId?,
+    val revokedAt: Instant?,
+)
+
+data class NewEnrollmentToken(
+    val tokenHash: SecretHash,
+    val note: String?,
+    val createdBy: String,
+    val expiresAt: Instant,
+    val requireApproval: Boolean,
+)

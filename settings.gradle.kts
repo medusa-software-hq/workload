@@ -16,6 +16,8 @@ include(":cli")
 
 include(":libraries:docker-connector")
 
+include(":libraries:token-format")
+
 // The api build's own parent project (backend/api/impl/build.gradle.kts) configures these three.
 include(":backend:api:impl:shared")
 
