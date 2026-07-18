@@ -53,10 +53,16 @@ data class SystemInfo(
 /**
  * `HostConfig` subset we set on create. [autoRemove] maps to `--rm`: the daemon reaps the
  * container's filesystem the moment it exits, so short-lived workload runs leave nothing behind.
+ * [extraHosts] maps to `--add-host` (each `hostname:ip`, or `hostname:host-gateway` for the special
+ * value), and [networkMode] to `--network` — both null (omitted) unless set, so existing callers'
+ * bodies are unchanged. Together they let `workload run` publish `metadata.google.internal` and put
+ * the container on its own bridge (M4-B2).
  */
 @Serializable
 internal data class HostConfig(
     @SerialName("AutoRemove") val autoRemove: Boolean,
+    @SerialName("ExtraHosts") val extraHosts: List<String>? = null,
+    @SerialName("NetworkMode") val networkMode: String? = null,
 )
 
 /**
@@ -114,6 +120,7 @@ data class ContainerInspect(
     @SerialName("Name") val name: String? = null,
     @SerialName("State") val state: State = State(),
     @SerialName("Config") val config: Config = Config(),
+    @SerialName("NetworkSettings") val networkSettings: NetworkSettings = NetworkSettings(),
 ) {
   @Serializable
   data class State(
@@ -130,4 +137,76 @@ data class ContainerInspect(
       @SerialName("Labels") val labels: Map<String, String> = emptyMap(),
       @SerialName("Tty") val tty: Boolean = false,
   )
+
+  @Serializable
+  data class NetworkSettings(
+      @SerialName("Networks") val networks: Map<String, EndpointSettings> = emptyMap(),
+  )
+
+  @Serializable
+  data class EndpointSettings(
+      @SerialName("IPAddress") val ipAddress: String? = null,
+      @SerialName("Gateway") val gateway: String? = null,
+  )
+
+  /**
+   * The container's IP on [network], or null if it isn't attached there (or has no address yet).
+   * `workload run` uses this to admit only the started container to the metadata emulator (M4-B2).
+   */
+  fun ipOnNetwork(network: String): String? =
+      networkSettings.networks[network]?.ipAddress?.takeIf { it.isNotBlank() }
+}
+
+// --- Networks (M4-B2) ---
+
+/**
+ * Request body for `POST /networks/create`. We create only labeled bridge networks (one per
+ * `workload run`), so the fields are just what that needs.
+ */
+@Serializable
+internal data class NetworkCreateRequest(
+    @SerialName("Name") val name: String,
+    @SerialName("Driver") val driver: String = "bridge",
+    @SerialName("Labels") val labels: Map<String, String> = emptyMap(),
+)
+
+/** Response of `POST /networks/create`. */
+@Serializable
+data class NetworkCreateResponse(
+    @SerialName("Id") val id: String,
+    @SerialName("Warning") val warning: String? = null,
+)
+
+/** One entry from `GET /networks` — the minimal projection we consume for cleanup. */
+@Serializable
+data class NetworkSummary(
+    @SerialName("Id") val id: String,
+    @SerialName("Name") val name: String? = null,
+    @SerialName("Driver") val driver: String? = null,
+    @SerialName("Labels") val labels: Map<String, String> = emptyMap(),
+)
+
+/** Minimal typed projection of `GET /networks/{id}` — enough to find the bridge's gateway IP. */
+@Serializable
+data class NetworkInspect(
+    @SerialName("Id") val id: String,
+    @SerialName("Name") val name: String? = null,
+    @SerialName("Driver") val driver: String? = null,
+    @SerialName("IPAM") val ipam: Ipam = Ipam(),
+    @SerialName("Labels") val labels: Map<String, String> = emptyMap(),
+) {
+  @Serializable data class Ipam(@SerialName("Config") val config: List<IpamConfig> = emptyList())
+
+  @Serializable
+  data class IpamConfig(
+      @SerialName("Subnet") val subnet: String? = null,
+      @SerialName("Gateway") val gateway: String? = null,
+  )
+
+  /**
+   * The bridge's host-side gateway IP — the address `workload run` binds the metadata emulator to,
+   * reachable from every container on this network. Null if the daemon didn't assign one.
+   */
+  val gateway: String?
+    get() = ipam.config.firstNotNullOfOrNull { it.gateway?.takeIf(String::isNotBlank) }
 }
