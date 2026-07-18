@@ -30,6 +30,7 @@ armeria-kotlin = { module = "com.linecorp.armeria:armeria-kotlin", version.ref =
 clikt = "com.github.ajalt.clikt:clikt-jvm:5.1.0"
 flyway-core = { module = "org.flywaydb:flyway-core", version.ref = "flyway" }
 flyway-database-postgresql = { module = "org.flywaydb:flyway-database-postgresql", version.ref = "flyway" }
+google-auth-oauth2-http = { module = "com.google.auth:google-auth-library-oauth2-http" }
 google-cloud-iamcredentials = { module = "com.google.cloud:google-cloud-iamcredentials" }
 google-cloud-libraries-bom = { module = "com.google.cloud:libraries-bom", version.ref = "google-cloud-libraries-bom" }
 google-cloud-secretmanager = { module = "com.google.cloud:google-cloud-secretmanager" }
