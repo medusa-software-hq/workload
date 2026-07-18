@@ -22,6 +22,7 @@ fun main() {
           workerClaimService = WorkerClaimService(fleetStore, FakeTokenMinter),
           registrationService = RegistrationService(fleetStore),
           selfStatusService = SelfStatusService(fleetStore),
+          v2RegistrationService = RegistrationServiceV2(fleetStore),
       )
       .start()
       .join()
