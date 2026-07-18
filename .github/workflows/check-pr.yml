@@ -54,3 +54,7 @@ jobs:
   check-docker-connector:
     name: docker-connector
     uses: ./.github/workflows/check-docker-connector.yml
+
+  check-token-format:
+    name: token-format
+    uses: ./.github/workflows/check-token-format.yml
