@@ -14,6 +14,8 @@ import com.linecorp.armeria.server.grpc.GrpcService
 import com.linecorp.armeria.server.healthcheck.HealthCheckService
 import com.linecorp.armeria.server.throttling.ThrottlingService
 import com.linecorp.armeria.server.throttling.ThrottlingStrategy
+import software.medusa.workload.tokenformat.TokenKind
+import software.medusa.workload.tokenformat.WorkloadToken
 
 private const val workerTokenBrokerQps = 5.0
 
@@ -54,6 +56,50 @@ private fun workerApiPathPrefixDecorator(
     }
   }
 }
+
+/**
+ * Parse-and-drop for `/worker/v2/registrations`: a request whose Bearer credential isn't a
+ * well-formed `wle_` enrollment token (or is absent) is bot/scanner noise — dropped with a bare 404
+ * *before* the handler or any DB read, counted in [RejectedWorkerRequestCounter], never audited. A
+ * well-formed token that then fails to redeem (expired/burnt/unknown) is the handler's business and
+ * is audited there.
+ */
+private val v2EnrollmentTokenDrop: DecoratingHttpServiceFunction =
+    DecoratingHttpServiceFunction { delegate, ctx, req ->
+      val token = extractBearerToken(req)
+      if (token == null || !WorkloadToken.isValid(token, TokenKind.ENROLLMENT)) {
+        RejectedWorkerRequestCounter.increment()
+        bareNotFound()
+      } else {
+        delegate.serve(ctx, req)
+      }
+    }
+
+/**
+ * Parse-and-drop + 404-unification for the authenticated v2 endpoints (`/worker/v2/token`,
+ * `/claim`, `/registrations/self`). A missing or malformed `<workerId>.<wlw_secret>` bearer — or a
+ * secret that isn't a well-formed `wlw_` worker token — is dropped with a bare 404 before the
+ * shared resolver runs, counted, never audited (it's noise). A well-formed credential that then
+ * fails authentication comes back from the resolver as a 401 (which it audit-logs with the true
+ * reason); that 401 is rewritten to the same bare 404 so the whole v2 plane is unprobeable. Post-
+ * auth denials (403: no grant, archived, unverified) pass through untouched — the caller has proven
+ * membership and deserves a real error.
+ */
+private val v2WorkerCredentialDrop: DecoratingHttpServiceFunction =
+    DecoratingHttpServiceFunction { delegate, ctx, req ->
+      val secret = extractBearerToken(req)?.let { parseWorkerBearerToken(it) }?.second
+      if (secret == null || !WorkloadToken.isValid(secret, TokenKind.WORKER)) {
+        RejectedWorkerRequestCounter.increment()
+        bareNotFound()
+      } else {
+        HttpResponse.of(
+            delegate.serve(ctx, req).aggregate().thenApply { aggregated ->
+              if (aggregated.status() == HttpStatus.UNAUTHORIZED) bareNotFound()
+              else aggregated.toHttpResponse()
+            }
+        )
+      }
+    }
 
 fun buildServer(
     originRegex: String,
@@ -153,16 +199,28 @@ fun buildServer(
         // a wlw_ token). This is what lets the CLI store the broker URL bare and speak v2 for
         // everything.
         v2RegistrationService?.let {
-          route().methods(HttpMethod.POST).path("/worker/v2/registrations").build(it)
+          route()
+              .methods(HttpMethod.POST)
+              .path("/worker/v2/registrations")
+              .build(it.decorate(v2EnrollmentTokenDrop))
         }
         throttledWorkerTokenBroker?.let {
-          route().methods(HttpMethod.POST).path("/worker/v2/token").build(it)
+          route()
+              .methods(HttpMethod.POST)
+              .path("/worker/v2/token")
+              .build(it.decorate(v2WorkerCredentialDrop))
         }
         throttledWorkerClaimService?.let {
-          route().methods(HttpMethod.POST).path("/worker/v2/claim").build(it)
+          route()
+              .methods(HttpMethod.POST)
+              .path("/worker/v2/claim")
+              .build(it.decorate(v2WorkerCredentialDrop))
         }
         selfStatusService?.let {
-          route().methods(HttpMethod.GET).path("/worker/v2/registrations/self").build(it)
+          route()
+              .methods(HttpMethod.GET)
+              .path("/worker/v2/registrations/self")
+              .build(it.decorate(v2WorkerCredentialDrop))
         }
 
         serviceUnder("/", grpcService.decorate(auth).decorate(cors))

@@ -1,6 +1,5 @@
 package software.medusa.workload.server
 
-import com.linecorp.armeria.common.HttpMethod
 import com.linecorp.armeria.common.HttpRequest
 import com.linecorp.armeria.common.HttpResponse
 import com.linecorp.armeria.common.HttpStatus
@@ -40,12 +39,13 @@ internal data class RegisterWorkerV2Response(
  * a fresh `wlw_` worker secret, returning `{workerId, workerSecret}` with no confirmation code. The
  * worker lands `active`, or `pending` when the token was minted requiring approval.
  *
- * Everything that isn't a successful exchange — missing/malformed/unknown/expired/already-used
- * token, a rate-limited caller, a malformed body, a non-POST method — returns a **bare 404** with
- * no body, so the whole plane is unprobeable; the true reason lives only in the audit log. The
- * token format is checked (offline, no I/O) before any DB read, and a modest per-IP rate limit
- * shields the database from load. Unlike v1 this endpoint is deliberately not behind the UUID path
- * prefix — the `wle_`/`wlw_` format is the filter now.
+ * Absent or malformed credentials are dropped upstream by the `v2EnrollmentTokenDrop` decorator
+ * (bare 404, counted, not audited), so this handler only ever sees a well-formed `wle_` token.
+ * Everything else that isn't a successful exchange — unknown/expired/already-used token, a
+ * rate-limited caller, a malformed body — also returns a **bare 404** with no body, audit-logged
+ * with the true reason, so the whole plane is unprobeable. A modest per-IP rate limit shields the
+ * database from load. Unlike v1 this endpoint is deliberately not behind the UUID path prefix — the
+ * `wle_`/`wlw_` format is the filter now.
  *
  * Never logs the worker secret or the response body containing it.
  */
@@ -63,15 +63,11 @@ class RegistrationServiceV2(
     val requestId = UUID.randomUUID().toString()
     val sourceIp = ctx.clientAddress().hostAddress
 
-    if (ctx.method() != HttpMethod.POST) return drop(requestId, sourceIp, "method_not_allowed")
+    // Absent/malformed credentials are already dropped upstream by v2EnrollmentTokenDrop (bare 404,
+    // counted, not audited), so a well-formed wle_ token is guaranteed here. The per-IP rate limit
+    // still shields the DB from a flood of format-valid but unredeemable tokens.
     if (!rateLimiter.tryAcquire(sourceIp)) return drop(requestId, sourceIp, "rate_limited")
-
-    val token = extractBearerToken(req)
-    // Parse-and-drop: reject anything that isn't a well-formed enrollment token before any DB read.
-    if (token == null) return drop(requestId, sourceIp, "missing_token")
-    if (!WorkloadToken.isValid(token, TokenKind.ENROLLMENT)) {
-      return drop(requestId, sourceIp, "malformed_token")
-    }
+    val token = extractBearerToken(req) ?: return drop(requestId, sourceIp, "missing_token")
 
     // Reading the body and redeeming both may block; keep off Armeria's event-loop thread.
     return HttpResponse.of(
