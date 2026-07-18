@@ -25,6 +25,10 @@ internal const val workloadProfileLabel = "ms-workload.profile"
 internal const val workloadRevisionLabel = "ms-workload.revision"
 internal const val workloadWorkerLabel = "ms-workload.worker"
 
+// Marks a per-run bridge network `workload run` creates for the metadata emulator (M4-B2), so
+// `workload ps --reap` can sweep any orphaned by a hard-killed CLI. Presence == "workload owns it".
+internal const val workloadNetworkLabel = "ms-workload.network"
+
 // Grace given to the container on Ctrl-C before the daemon SIGKILLs it.
 private val containerStopGrace = 10.seconds
 
