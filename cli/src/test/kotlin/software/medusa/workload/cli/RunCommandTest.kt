@@ -69,6 +69,24 @@ class RunCommandTest {
   }
 
   @Test
+  fun `metadata container env carries pointers and profile vars but no token`() {
+    val env =
+        buildMetadataContainerEnv(
+            profileEnv = mapOf("MODE" to "batch", "API_KEY" to "resolved-secret"),
+            pointerEnv = metadataPointerEnv("172.18.0.1:49812"),
+        )
+
+    assertTrue("MODE=batch" in env)
+    assertTrue("API_KEY=resolved-secret" in env)
+    assertTrue("GCE_METADATA_HOST=172.18.0.1:49812" in env)
+    assertTrue("GCE_METADATA_ROOT=172.18.0.1:49812" in env)
+    // The whole point of Beacon: the credential is not in the env.
+    val names = env.map { it.substringBefore('=') }.toSet()
+    assertFalse(googleOauthAccessTokenEnvVar in names, "no token var in Beacon env")
+    assertFalse(cloudsdkAuthAccessTokenEnvVar in names, "no token var in Beacon env")
+  }
+
+  @Test
   fun `auth-flavored pull failures are recognized`() {
     assertTrue(
         looksLikeAuthFailure("Error response from daemon: unauthorized: authentication required")

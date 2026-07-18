@@ -4,9 +4,11 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.core.ProgramResult
+import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import java.io.IOException
+import java.net.InetSocketAddress
 import kotlin.time.Duration.Companion.seconds
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
@@ -25,8 +27,10 @@ internal const val workloadProfileLabel = "ms-workload.profile"
 internal const val workloadRevisionLabel = "ms-workload.revision"
 internal const val workloadWorkerLabel = "ms-workload.worker"
 
-// Marks a per-run bridge network `workload run` creates for the metadata emulator (M4-B2), so
-// `workload ps --reap` can sweep any orphaned by a hard-killed CLI. Presence == "workload owns it".
+// Marks a per-run bridge network as workload-owned, so `workload ps --reap` can sweep any orphaned
+// by a hard-killed CLI (M4-B2). `run` doesn't create these today — the metadata emulator runs on
+// the host, not a per-run network (see runContainerWithMetadata) — but the label + reap stand ready
+// for the future sidecar-container variant that will. Presence == "workload owns it".
 internal const val workloadNetworkLabel = "ms-workload.network"
 
 // Grace given to the container on Ctrl-C before the daemon SIGKILLs it.
@@ -94,13 +98,25 @@ internal fun pinnedImageRef(image: ClaimImage): String =
     "${repositoryOf(image.ref)}@${image.digest}"
 
 /**
- * The container's environment: the profile's plain vars + resolved secret values + the brokered
- * token under both names google-auth libraries and gcloud look for. Deliberately does **not**
- * inherit this host's environment — a container starts from its image's env, and leaking the
- * operator's shell into it would be surprising.
+ * The container's environment for the default (Beacon) path: the profile's plain vars + resolved
+ * secret values + the non-secret metadata-emulator **pointer** vars. The brokered token is
+ * deliberately **absent** — the workload fetches (and refreshes) it from the emulator at
+ * [pointerEnv]'s address, so `docker inspect` shows a pointer, not a credential. Deliberately does
+ * **not** inherit this host's environment.
  *
  * Returned as `KEY=VALUE` strings for the create body only; nothing here ever reaches a command
  * line, so values can't show up in `ps` on the host.
+ */
+internal fun buildMetadataContainerEnv(
+    profileEnv: Map<String, String>,
+    pointerEnv: Map<String, String>,
+): List<String> = (profileEnv + pointerEnv).map { (name, value) -> "$name=$value" }
+
+/**
+ * The container's environment for the legacy `--static-token` path: the profile vars + the brokered
+ * token injected under both names google-auth libraries and gcloud look for. One static 15-minute
+ * token in the env, no refresh — the pre-Beacon behavior, kept for one release for debugging.
+ * Deliberately does **not** inherit this host's environment.
  */
 internal fun buildContainerEnv(
     profileEnv: Map<String, String>,
@@ -186,8 +202,10 @@ internal suspend fun runContainerToCompletion(
     image: String,
     env: List<String>,
     labels: Map<String, String>,
-    onCreated: (String) -> Unit = {},
+    onCreated: suspend (String) -> Unit = {},
     cmd: List<String>? = null,
+    extraHosts: List<String> = emptyList(),
+    networkMode: String? = null,
     onStdout: (ByteArray) -> Unit,
     onStderr: (ByteArray) -> Unit,
 ): Int {
@@ -198,6 +216,8 @@ internal suspend fun runContainerToCompletion(
           env = env,
           labels = labels,
           autoRemove = false,
+          extraHosts = extraHosts,
+          networkMode = networkMode,
       )
   onCreated(created.id)
 
@@ -228,6 +248,15 @@ class RunCommand : CliktCommand(name = "run") {
           "output and exits with the container's exit code."
 
   private val profileId by option("--profile", "-p", help = "The profile to run").required()
+
+  private val staticToken by
+      option(
+              "--static-token",
+              help =
+                  "Deprecated: inject one static 15-minute token into the container env instead of " +
+                      "running the refreshing metadata server. Removed next release.",
+          )
+          .flag()
 
   override fun run() {
     val config = loadConfigOrFail()
@@ -288,7 +317,7 @@ class RunCommand : CliktCommand(name = "run") {
 
       pullImage(connector, pinnedRef, claim)
 
-      val exitCode = runContainer(connector, claim, pinnedRef, config.workerId, secretValues)
+      val exitCode = runContainer(connector, config, claim, pinnedRef, secretValues)
       throw ProgramResult(exitCode)
     }
   }
@@ -329,11 +358,107 @@ class RunCommand : CliktCommand(name = "run") {
 
   private fun runContainer(
       connector: DockerConnector,
+      config: WorkloadConfig,
+      claim: WorkerClaimResponse,
+      pinnedRef: String,
+      secretValues: Map<String, String>,
+  ): Int =
+      if (staticToken) {
+        runContainerStaticToken(connector, claim, pinnedRef, config.workerId, secretValues)
+      } else {
+        runContainerWithMetadata(connector, config, claim, pinnedRef, secretValues)
+      }
+
+  private fun containerLabels(claim: WorkerClaimResponse, workerId: String): Map<String, String> =
+      mapOf(
+          workloadProfileLabel to claim.profileId,
+          workloadRevisionLabel to claim.revision.toString(),
+          workloadWorkerLabel to workerId,
+      )
+
+  /**
+   * The Beacon path (default): an in-CLI metadata-server emulator, reached by the container exactly
+   * as the GCE metadata server would be. The container fetches and refreshes brokered tokens on
+   * demand — no access token in its env, only the non-secret `GCE_METADATA_*` pointers — so jobs
+   * longer than the token's 15-minute lifetime keep working.
+   *
+   * **Why the host primary IP, not a per-run network gateway (as the M4 design first proposed).**
+   * Verified on the Ubuntu VM (Docker 29): a freshly-created bridge's gateway IP is not assigned to
+   * any host interface (unbindable), and — decisively — a container on a *custom* network cannot
+   * reach a host-side listener at all under modern Docker's host-access hardening. The one path
+   * that works is the default bridge reaching the host's own primary IP (Docker source-NATs it
+   * there). So the emulator binds that address; the peer check ([isTrustedRunPeer]) admits the
+   * private-range source, and the `Metadata-Flavor` header + random port complete the guard.
+   * Restoring the design's per-run-network, per-container isolation needs the sidecar-container
+   * variant — deferred; the B2 network API stands ready for it.
+   */
+  private fun runContainerWithMetadata(
+      connector: DockerConnector,
+      config: WorkloadConfig,
+      claim: WorkerClaimResponse,
+      pinnedRef: String,
+      secretValues: Map<String, String>,
+  ): Int {
+    var hook: Thread? = null
+    val primary = hostPrimaryAddress()
+    val emulator =
+        MetadataEmulator(
+            RefreshingTokenCache(brokerTokenClaimer(config, profileId)),
+            InetSocketAddress(primary, 0),
+            ::isTrustedRunPeer,
+        )
+    emulator.start()
+    val metadataAddress = "${primary.hostAddress}:${emulator.port}"
+    echo("Metadata:     http://$metadataAddress (tokens refresh automatically)", err = true)
+
+    return try {
+      runBlocking {
+        runContainerToCompletion(
+            connector = connector,
+            image = pinnedRef,
+            env =
+                buildMetadataContainerEnv(
+                    claim.envVars + secretValues,
+                    metadataPointerEnv(metadataAddress),
+                ),
+            labels = containerLabels(claim, config.workerId),
+            extraHosts = listOf("metadata.google.internal:${primary.hostAddress}"),
+            onCreated = { id -> hook = stopOnShutdownHook(connector, id, emulator) },
+            onStdout = {
+              System.out.write(it)
+              System.out.flush()
+            },
+            onStderr = {
+              System.err.write(it)
+              System.err.flush()
+            },
+        )
+      }
+    } catch (e: DockerConnectorException) {
+      throw PrintMessage(
+          "Failed to run the container: ${e.message}",
+          statusCode = 1,
+          printError = true,
+      )
+    } finally {
+      hook?.let { runCatching { Runtime.getRuntime().removeShutdownHook(it) } }
+      runCatching { emulator.close() }
+    }
+  }
+
+  /** Legacy `--static-token` path: one static 15-minute token in the container env, no refresh. */
+  private fun runContainerStaticToken(
+      connector: DockerConnector,
       claim: WorkerClaimResponse,
       pinnedRef: String,
       workerId: String,
       secretValues: Map<String, String>,
   ): Int {
+    echo(
+        "Warning: --static-token injects one 15-minute token and does not refresh; a longer job " +
+            "will lose GCP access mid-run. This flag is deprecated and goes away next release.",
+        err = true,
+    )
     var hook: Thread? = null
     return try {
       runBlocking {
@@ -341,12 +466,7 @@ class RunCommand : CliktCommand(name = "run") {
             connector = connector,
             image = pinnedRef,
             env = buildContainerEnv(claim.envVars + secretValues, claim.accessToken),
-            labels =
-                mapOf(
-                    workloadProfileLabel to claim.profileId,
-                    workloadRevisionLabel to claim.revision.toString(),
-                    workloadWorkerLabel to workerId,
-                ),
+            labels = containerLabels(claim, workerId),
             onCreated = { id -> hook = stopOnShutdownHook(connector, id) },
             onStdout = {
               System.out.write(it)
@@ -383,6 +503,29 @@ class RunCommand : CliktCommand(name = "run") {
           connector.containers.remove(containerId, force = true)
         }
       }
+    }
+    Runtime.getRuntime().addShutdownHook(hook)
+    return hook
+  }
+
+  /**
+   * Beacon-path shutdown hook: the container teardown above, plus closing the metadata emulator.
+   * Same accepted boundary — a `kill -9` of this JVM can still leave a container behind, which
+   * `workload ps --reap` clears; the emulator dies with the process regardless.
+   */
+  private fun stopOnShutdownHook(
+      connector: DockerConnector,
+      containerId: String,
+      emulator: MetadataEmulator,
+  ): Thread {
+    val hook = Thread {
+      runCatching {
+        runBlocking {
+          connector.containers.stop(containerId, containerStopGrace)
+          connector.containers.remove(containerId, force = true)
+        }
+      }
+      runCatching { emulator.close() }
     }
     Runtime.getRuntime().addShutdownHook(hook)
     return hook
