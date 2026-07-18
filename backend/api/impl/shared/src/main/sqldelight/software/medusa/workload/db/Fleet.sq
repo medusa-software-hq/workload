@@ -52,6 +52,20 @@ CREATE TABLE worker_profile_grants (
     PRIMARY KEY (worker_id, profile_id)
 );
 
+-- Kept in sync with V7__create_enrollment_tokens.sql.
+CREATE TABLE enrollment_tokens (
+    enrollment_token_id uuid PRIMARY KEY,
+    token_hash          bytea NOT NULL UNIQUE,
+    note                text,
+    created_by          text NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL,
+    expires_at          TIMESTAMPTZ NOT NULL,
+    require_approval    boolean NOT NULL DEFAULT FALSE,
+    used_at             TIMESTAMPTZ,
+    used_by_worker_id   uuid,
+    revoked_at          TIMESTAMPTZ
+);
+
 insertWorker:
 INSERT INTO workers (worker_id, secret_hash, name, hostname, os, cli_version, status, confirmation_code, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
@@ -127,3 +141,32 @@ SELECT * FROM worker_profile_grants WHERE worker_id = ? AND profile_id = ?;
 
 selectGrantsByWorker:
 SELECT * FROM worker_profile_grants WHERE worker_id = ? ORDER BY profile_id;
+
+insertEnrollmentToken:
+INSERT INTO enrollment_tokens (enrollment_token_id, token_hash, note, created_by, created_at, expires_at, require_approval)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+selectEnrollmentTokenById:
+SELECT * FROM enrollment_tokens WHERE enrollment_token_id = ?;
+
+-- Outstanding = never redeemed, never revoked, not yet expired. Newest first.
+selectOutstandingEnrollmentTokens:
+SELECT * FROM enrollment_tokens
+WHERE used_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+ORDER BY created_at DESC;
+
+-- Revoke only an outstanding token; RETURNING lets the caller tell "revoked" from "already
+-- used/revoked or unknown" without a second read.
+revokeEnrollmentToken:
+UPDATE enrollment_tokens
+SET revoked_at = ?
+WHERE enrollment_token_id = ? AND used_at IS NULL AND revoked_at IS NULL
+RETURNING *;
+
+-- Atomic single-use burn: the conditional UPDATE is the race guard, so exactly one of N concurrent
+-- redemptions of the same token matches the row and gets it back via RETURNING; the rest get none.
+burnEnrollmentToken:
+UPDATE enrollment_tokens
+SET used_at = ?, used_by_worker_id = ?
+WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+RETURNING *;
