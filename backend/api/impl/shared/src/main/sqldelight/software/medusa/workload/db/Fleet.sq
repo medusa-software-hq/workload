@@ -15,7 +15,10 @@ CREATE TABLE workers (
     created_at        TIMESTAMPTZ NOT NULL,
     approved_at       TIMESTAMPTZ,
     approved_by       text,
-    last_seen_at      TIMESTAMPTZ
+    last_seen_at      TIMESTAMPTZ,
+    -- Added in V8__add_worker_registration_source.sql.
+    registered_via    text NOT NULL DEFAULT 'V1',
+    source_ip         text
 );
 
 CREATE TABLE profiles (
@@ -67,8 +70,8 @@ CREATE TABLE enrollment_tokens (
 );
 
 insertWorker:
-INSERT INTO workers (worker_id, secret_hash, name, hostname, os, cli_version, status, confirmation_code, created_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO workers (worker_id, secret_hash, name, hostname, os, cli_version, status, confirmation_code, created_at, registered_via, source_ip)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectWorkerById:
 SELECT * FROM workers WHERE worker_id = ?;

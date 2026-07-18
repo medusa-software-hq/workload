@@ -14,6 +14,25 @@ interface FleetStore {
 
   suspend fun createWorker(worker: NewWorker): Worker
 
+  /**
+   * Atomically redeems an enrollment token and registers a v2 worker in one step: burns the token
+   * (conditional on it being outstanding as of [now]) and, iff that succeeds, creates a worker with
+   * the given [secretHash] and metadata — `ACTIVE` when the token was minted without approval,
+   * `PENDING` when it required it. Returns the new worker, or null if the token was unknown,
+   * already used, revoked, or expired. The burn's conditional write is the race guard, so N
+   * concurrent redemptions of one token create at most one worker.
+   */
+  suspend fun registerWorkerWithEnrollmentToken(
+      tokenHash: SecretHash,
+      now: Instant,
+      secretHash: SecretHash,
+      name: String,
+      hostname: String?,
+      os: String?,
+      cliVersion: String?,
+      sourceIp: String,
+  ): Worker?
+
   suspend fun getWorker(workerId: WorkerId): Worker?
 
   suspend fun listWorkers(): List<Worker>

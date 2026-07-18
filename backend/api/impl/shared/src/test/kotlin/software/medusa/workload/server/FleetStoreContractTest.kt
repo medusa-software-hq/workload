@@ -608,6 +608,127 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
+  fun `createWorker records the worker as registered via v1`() = test { store ->
+    val worker = store.createWorker(newWorker())
+    assertEquals(RegisteredVia.V1, worker.registeredVia)
+    assertNull(worker.sourceIp)
+  }
+
+  @Test
+  fun `registerWorkerWithEnrollmentToken creates an ACTIVE v2 worker and burns the token`() =
+      test { store ->
+        val plaintext = "wle_auto-approve"
+        store.createEnrollmentToken(newEnrollmentToken(plaintext, requireApproval = false))
+        val now = java.time.Instant.now()
+
+        val worker =
+            store.registerWorkerWithEnrollmentToken(
+                tokenHash = hashEnrollmentToken(plaintext),
+                now = now,
+                secretHash = hashWorkerSecret("wlw_worker-secret"),
+                name = "kuba-mbp",
+                hostname = "kuba.local",
+                os = "macos",
+                cliVersion = "2.0.0",
+                sourceIp = "203.0.113.7",
+            )
+
+        assertNotNull(worker)
+        assertEquals(WorkerStatus.ACTIVE, worker.status)
+        assertEquals(RegisteredVia.V2, worker.registeredVia)
+        assertEquals("203.0.113.7", worker.sourceIp)
+        assertNull(worker.confirmationCode)
+        assertEquals(worker, store.getWorker(worker.workerId))
+
+        // The token is burnt — a second redemption creates nothing.
+        assertTrue(store.listOutstandingEnrollmentTokens(now).isEmpty())
+        assertNull(
+            store.registerWorkerWithEnrollmentToken(
+                hashEnrollmentToken(plaintext),
+                now,
+                hashWorkerSecret("wlw_second"),
+                "second",
+                null,
+                null,
+                null,
+                "203.0.113.9",
+            )
+        )
+      }
+
+  @Test
+  fun `registerWorkerWithEnrollmentToken creates a PENDING worker for a require_approval token`() =
+      test { store ->
+        val plaintext = "wle_needs-approval"
+        store.createEnrollmentToken(newEnrollmentToken(plaintext, requireApproval = true))
+
+        val worker =
+            store.registerWorkerWithEnrollmentToken(
+                hashEnrollmentToken(plaintext),
+                java.time.Instant.now(),
+                hashWorkerSecret("wlw_pending-secret"),
+                "needs-approval",
+                null,
+                null,
+                null,
+                "198.51.100.4",
+            )
+
+        assertNotNull(worker)
+        assertEquals(WorkerStatus.PENDING, worker.status)
+        assertEquals("198.51.100.4", worker.sourceIp)
+      }
+
+  @Test
+  fun `registerWorkerWithEnrollmentToken rejects an expired token`() = test { store ->
+    val plaintext = "wle_expired-registration"
+    store.createEnrollmentToken(
+        newEnrollmentToken(plaintext, expiresAt = java.time.Instant.now().minusSeconds(30))
+    )
+    assertNull(
+        store.registerWorkerWithEnrollmentToken(
+            hashEnrollmentToken(plaintext),
+            java.time.Instant.now(),
+            hashWorkerSecret("wlw_x"),
+            "x",
+            null,
+            null,
+            null,
+            "203.0.113.1",
+        )
+    )
+  }
+
+  @Test
+  fun `concurrent registrations with one token create exactly one worker`() = test { store ->
+    val plaintext = "wle_register-race"
+    store.createEnrollmentToken(newEnrollmentToken(plaintext))
+    val hash = hashEnrollmentToken(plaintext)
+    val now = java.time.Instant.now()
+
+    val results = coroutineScope {
+      (1..32)
+          .map {
+            async(Dispatchers.Default) {
+              store.registerWorkerWithEnrollmentToken(
+                  hash,
+                  now,
+                  hashWorkerSecret("wlw_secret-$it"),
+                  "worker-$it",
+                  null,
+                  null,
+                  null,
+                  "203.0.113.$it",
+              )
+            }
+          }
+          .awaitAll()
+    }
+
+    assertEquals(1, results.filterNotNull().size)
+  }
+
+  @Test
   fun `FleetStore exposes no way to mutate or delete an existing revision`() {
     val methodNames = FleetStore::class.java.methods.map { it.name.lowercase() }
     assertTrue(

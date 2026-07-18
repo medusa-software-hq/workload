@@ -34,6 +34,16 @@ enum class WorkerStatus {
   REVOKED,
 }
 
+/**
+ * Which registration plane a worker came through: [V1] open registration + confirmation code (M1),
+ * or [V2] one-time enrollment-token exchange (M4). Recorded so the console can show the fleet's
+ * migration state — the measure the A5 v1-retirement gate reads.
+ */
+enum class RegisteredVia {
+  V1,
+  V2,
+}
+
 /** A SHA-256 digest, compared in constant time — never the plaintext secret. */
 class SecretHash(
     val bytes: ByteArray,
@@ -57,6 +67,10 @@ data class Worker(
     val approvedAt: Instant?,
     val approvedBy: String?,
     val lastSeenAt: Instant?,
+    val registeredVia: RegisteredVia = RegisteredVia.V1,
+    // The source IP the worker registered from — recorded for v2 (the defense-in-depth signal on a
+    // require_approval pending row); null for v1 workers.
+    val sourceIp: String? = null,
 )
 
 data class NewWorker(
