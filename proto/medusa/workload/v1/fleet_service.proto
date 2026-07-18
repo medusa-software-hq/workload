@@ -33,6 +33,13 @@ service FleetService {
 
   rpc GrantProfile(GrantProfileRequest) returns (GrantProfileResponse);
   rpc RevokeProfileGrant(RevokeProfileGrantRequest) returns (RevokeProfileGrantResponse);
+
+  // Enrollment tokens (M4 Path A): an admin mints a one-time `wle_` token and hands it to a
+  // teammate, who exchanges it for a worker credential at registration. The plaintext is returned
+  // by CreateEnrollmentToken exactly once and never again — only its hash is stored.
+  rpc CreateEnrollmentToken(CreateEnrollmentTokenRequest) returns (CreateEnrollmentTokenResponse);
+  rpc ListEnrollmentTokens(ListEnrollmentTokensRequest) returns (ListEnrollmentTokensResponse);
+  rpc RevokeEnrollmentToken(RevokeEnrollmentTokenRequest) returns (RevokeEnrollmentTokenResponse);
 }
 
 enum WorkerStatus {
@@ -225,6 +232,46 @@ message VerifyProfileRequest {
 message VerifyProfileResponse {
   ProfileRevision revision = 1;
 }
+
+// An outstanding enrollment token as shown in the console. Never carries the plaintext token or its
+// hash — only the metadata needed to list, identify, and revoke it.
+message EnrollmentToken {
+  string enrollment_token_id = 1;
+  string note = 2;
+  string created_by = 3;
+  string created_at = 4;
+  string expires_at = 5;
+  bool require_approval = 6;
+}
+
+message CreateEnrollmentTokenRequest {
+  // Optional free-text label, e.g. "for Kuba's MBP".
+  string note = 1;
+  // Days until the token expires; the server applies a default (7) when unset or non-positive.
+  int32 expires_in_days = 2;
+  // When set, a worker registering with this token lands PENDING for admin approval instead of
+  // going straight to ACTIVE.
+  bool require_approval = 3;
+}
+
+message CreateEnrollmentTokenResponse {
+  // The plaintext `wle_` token — shown once, never retrievable again.
+  string token = 1;
+  EnrollmentToken enrollment_token = 2;
+}
+
+message ListEnrollmentTokensRequest {}
+
+message ListEnrollmentTokensResponse {
+  // Outstanding tokens only (never redeemed, never revoked, not expired), newest first.
+  repeated EnrollmentToken enrollment_tokens = 1;
+}
+
+message RevokeEnrollmentTokenRequest {
+  string enrollment_token_id = 1;
+}
+
+message RevokeEnrollmentTokenResponse {}
 
 message GrantProfileRequest {
   string worker_id = 1;

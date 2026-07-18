@@ -2,18 +2,26 @@ package software.medusa.workload.server
 
 import io.grpc.Status
 import io.grpc.StatusException
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
+import software.medusa.workload.tokenformat.TokenKind
+import software.medusa.workload.tokenformat.WorkloadToken
 import software.medusa.workload.v1.ApproveWorkerRequest
 import software.medusa.workload.v1.ApproveWorkerResponse
 import software.medusa.workload.v1.ArchiveProfileRequest
 import software.medusa.workload.v1.ArchiveProfileResponse
+import software.medusa.workload.v1.CreateEnrollmentTokenRequest
+import software.medusa.workload.v1.CreateEnrollmentTokenResponse
 import software.medusa.workload.v1.CreateProfileRequest
 import software.medusa.workload.v1.CreateProfileResponse
+import software.medusa.workload.v1.EnrollmentToken as EnrollmentTokenProto
 import software.medusa.workload.v1.FleetServiceGrpcKt
 import software.medusa.workload.v1.GrantProfileRequest
 import software.medusa.workload.v1.GrantProfileResponse
 import software.medusa.workload.v1.ImageStatus as ImageStatusProto
+import software.medusa.workload.v1.ListEnrollmentTokensRequest
+import software.medusa.workload.v1.ListEnrollmentTokensResponse
 import software.medusa.workload.v1.ListProfileRevisionsRequest
 import software.medusa.workload.v1.ListProfileRevisionsResponse
 import software.medusa.workload.v1.ListProfilesRequest
@@ -26,6 +34,8 @@ import software.medusa.workload.v1.RejectWorkerRequest
 import software.medusa.workload.v1.RejectWorkerResponse
 import software.medusa.workload.v1.ResolveImageRequest
 import software.medusa.workload.v1.ResolveImageResponse
+import software.medusa.workload.v1.RevokeEnrollmentTokenRequest
+import software.medusa.workload.v1.RevokeEnrollmentTokenResponse
 import software.medusa.workload.v1.RevokeProfileGrantRequest
 import software.medusa.workload.v1.RevokeProfileGrantResponse
 import software.medusa.workload.v1.RevokeWorkerRequest
@@ -105,6 +115,31 @@ private fun ProfileRevision.toProto(): ProfileRevisionProto =
         .setDockerImageDigest(dockerImageDigest.orEmpty())
         .setImageStatus(imageStatus.toProto())
         .build()
+
+private fun EnrollmentToken.toProto(): EnrollmentTokenProto =
+    EnrollmentTokenProto.newBuilder()
+        .setEnrollmentTokenId(id.value.toString())
+        .setNote(note.orEmpty())
+        .setCreatedBy(createdBy)
+        .setCreatedAt(createdAt.toString())
+        .setExpiresAt(expiresAt.toString())
+        .setRequireApproval(requireApproval)
+        .build()
+
+/**
+ * Default enrollment-token lifetime when the request leaves `expires_in_days` unset or
+ * non-positive.
+ */
+private const val defaultEnrollmentTokenTtlDays = 7L
+
+private fun parseEnrollmentTokenId(raw: String): EnrollmentTokenId =
+    try {
+      EnrollmentTokenId(UUID.fromString(raw))
+    } catch (e: IllegalArgumentException) {
+      throw StatusException(
+          Status.INVALID_ARGUMENT.withDescription("Invalid enrollment_token_id: '$raw'")
+      )
+    }
 
 private fun parseWorkerId(raw: String): WorkerId =
     try {
@@ -469,6 +504,53 @@ class FleetServiceImpl(
     return RevokeProfileGrantResponse.getDefaultInstance()
   }
 
+  override suspend fun createEnrollmentToken(
+      request: CreateEnrollmentTokenRequest
+  ): CreateEnrollmentTokenResponse {
+    val admin = currentAdminEmail()
+    val ttlDays =
+        if (request.expiresInDays > 0) request.expiresInDays.toLong()
+        else defaultEnrollmentTokenTtlDays
+    // The plaintext exists only here and in the response — only its hash is ever stored.
+    val plaintext = WorkloadToken.generate(TokenKind.ENROLLMENT)
+    val created =
+        fleetStore.createEnrollmentToken(
+            NewEnrollmentToken(
+                tokenHash = hashEnrollmentToken(plaintext),
+                note = request.note.ifBlank { null },
+                createdBy = admin,
+                expiresAt = Instant.now().plus(Duration.ofDays(ttlDays)),
+                requireApproval = request.requireApproval,
+            )
+        )
+    auditEnrollmentTokenChange("enrollment_token_created", created.id, created.expiresAt)
+    return CreateEnrollmentTokenResponse.newBuilder()
+        .setToken(plaintext)
+        .setEnrollmentToken(created.toProto())
+        .build()
+  }
+
+  override suspend fun listEnrollmentTokens(
+      request: ListEnrollmentTokensRequest
+  ): ListEnrollmentTokensResponse =
+      ListEnrollmentTokensResponse.newBuilder()
+          .addAllEnrollmentTokens(
+              fleetStore.listOutstandingEnrollmentTokens(Instant.now()).map { it.toProto() }
+          )
+          .build()
+
+  override suspend fun revokeEnrollmentToken(
+      request: RevokeEnrollmentTokenRequest
+  ): RevokeEnrollmentTokenResponse {
+    val id = parseEnrollmentTokenId(request.enrollmentTokenId)
+    // A null return means it was already used, already revoked, or never existed — all indistinct
+    // to the admin, and none of them leave anything to revoke.
+    fleetStore.revokeEnrollmentToken(id, Instant.now())
+        ?: throw notFound("enrollment token", request.enrollmentTokenId)
+    auditEnrollmentTokenChange("enrollment_token_revoked", id, expiresAt = null)
+    return RevokeEnrollmentTokenResponse.getDefaultInstance()
+  }
+
   /**
    * Dry-run verifies a revision's impersonation + secret access and records the result. This is the
    * part that legitimately changes over the life of a fixed revision (a grant is added or revoked),
@@ -594,6 +676,25 @@ class FleetServiceImpl(
             sourceIp = currentSourceIp(),
             profileId = profileId.value,
             revision = revision,
+            reason = "admin:${currentAdminEmail()}",
+            result = "success",
+        )
+    )
+  }
+
+  private fun auditEnrollmentTokenChange(
+      event: String,
+      id: EnrollmentTokenId,
+      expiresAt: Instant?,
+  ) {
+    audit(
+        AuditLogEntry(
+            event = event,
+            requestId = UUID.randomUUID().toString(),
+            timestamp = Instant.now().toString(),
+            sourceIp = currentSourceIp(),
+            expiresAt = expiresAt?.toString(),
+            enrollmentTokenId = id.value.toString(),
             reason = "admin:${currentAdminEmail()}",
             result = "success",
         )

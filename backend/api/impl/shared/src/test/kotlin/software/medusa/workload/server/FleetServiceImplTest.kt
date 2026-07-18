@@ -11,12 +11,17 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
+import software.medusa.workload.tokenformat.TokenKind
+import software.medusa.workload.tokenformat.WorkloadToken
 import software.medusa.workload.v1.ApproveWorkerRequest
+import software.medusa.workload.v1.CreateEnrollmentTokenRequest
 import software.medusa.workload.v1.CreateProfileRequest
 import software.medusa.workload.v1.FleetServiceGrpcKt
 import software.medusa.workload.v1.GrantProfileRequest
+import software.medusa.workload.v1.ListEnrollmentTokensRequest
 import software.medusa.workload.v1.ListProfilesRequest
 import software.medusa.workload.v1.ListWorkersRequest
+import software.medusa.workload.v1.RevokeEnrollmentTokenRequest
 import software.medusa.workload.v1.RevokeProfileGrantRequest
 import software.medusa.workload.v1.RevokeWorkerRequest
 import software.medusa.workload.v1.VerificationStatus
@@ -615,6 +620,92 @@ class FleetServiceImplTest {
     } finally {
       server.stop().join()
     }
+  }
+
+  @Test
+  fun `createEnrollmentToken returns a valid wle_ token once and stores only its hash`() =
+      runBlocking {
+        val response =
+            stub.createEnrollmentToken(
+                CreateEnrollmentTokenRequest.newBuilder()
+                    .setNote("for kuba's mbp")
+                    .setRequireApproval(true)
+                    .build()
+            )
+
+        // The plaintext is a well-formed enrollment token, returned exactly once here.
+        assertTrue(WorkloadToken.isValid(response.token, TokenKind.ENROLLMENT))
+        assertEquals("for kuba's mbp", response.enrollmentToken.note)
+        assertTrue(response.enrollmentToken.requireApproval)
+        assertTrue(response.enrollmentToken.createdBy.isNotBlank())
+
+        // The store holds only the hash; the token itself is not recoverable from it.
+        val stored = fleetStore.listOutstandingEnrollmentTokens(java.time.Instant.now()).single()
+        assertEquals(hashEnrollmentToken(response.token), stored.tokenHash)
+        assertEquals(response.enrollmentToken.enrollmentTokenId, stored.id.value.toString())
+      }
+
+  @Test
+  fun `createEnrollmentToken defaults to a 7-day expiry, honoring an explicit one`() = runBlocking {
+    val now = java.time.Instant.now()
+
+    val defaulted = stub.createEnrollmentToken(CreateEnrollmentTokenRequest.getDefaultInstance())
+    val defaultExpiry = java.time.Instant.parse(defaulted.enrollmentToken.expiresAt)
+    val defaultDays = java.time.Duration.between(now, defaultExpiry).toDays()
+    assertEquals(7L, defaultDays)
+
+    val explicit =
+        stub.createEnrollmentToken(
+            CreateEnrollmentTokenRequest.newBuilder().setExpiresInDays(2).build()
+        )
+    val explicitExpiry = java.time.Instant.parse(explicit.enrollmentToken.expiresAt)
+    assertEquals(2L, java.time.Duration.between(now, explicitExpiry).toDays())
+  }
+
+  @Test
+  fun `listEnrollmentTokens shows outstanding tokens and drops revoked ones`() = runBlocking {
+    val a =
+        stub.createEnrollmentToken(CreateEnrollmentTokenRequest.newBuilder().setNote("a").build())
+    val b =
+        stub.createEnrollmentToken(CreateEnrollmentTokenRequest.newBuilder().setNote("b").build())
+
+    val before =
+        stub
+            .listEnrollmentTokens(ListEnrollmentTokensRequest.getDefaultInstance())
+            .enrollmentTokensList
+            .map { it.enrollmentTokenId }
+    assertTrue(
+        before.containsAll(
+            listOf(a.enrollmentToken.enrollmentTokenId, b.enrollmentToken.enrollmentTokenId)
+        )
+    )
+
+    stub.revokeEnrollmentToken(
+        RevokeEnrollmentTokenRequest.newBuilder()
+            .setEnrollmentTokenId(a.enrollmentToken.enrollmentTokenId)
+            .build()
+    )
+
+    val after =
+        stub
+            .listEnrollmentTokens(ListEnrollmentTokensRequest.getDefaultInstance())
+            .enrollmentTokensList
+            .map { it.enrollmentTokenId }
+    assertTrue(a.enrollmentToken.enrollmentTokenId !in after)
+    assertTrue(b.enrollmentToken.enrollmentTokenId in after)
+  }
+
+  @Test
+  fun `revokeEnrollmentToken on an unknown id fails with NOT_FOUND`() = runBlocking {
+    val exception =
+        assertFailsWith<StatusException> {
+          stub.revokeEnrollmentToken(
+              RevokeEnrollmentTokenRequest.newBuilder()
+                  .setEnrollmentTokenId(java.util.UUID.randomUUID().toString())
+                  .build()
+          )
+        }
+    assertEquals(Status.Code.NOT_FOUND, exception.status.code)
   }
 
   private fun imageResolvingServer(resolver: ImageDigestResolver): Server =
