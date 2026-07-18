@@ -39,6 +39,8 @@ private fun Workers.toDomain(): Worker =
         approvedAt = approved_at?.toInstant(),
         approvedBy = approved_by,
         lastSeenAt = last_seen_at?.toInstant(),
+        registeredVia = RegisteredVia.valueOf(registered_via),
+        sourceIp = source_ip,
     )
 
 private fun Profiles.toDomain(): Profile =
@@ -104,8 +106,50 @@ class PostgresFleetStore(
             status = WorkerStatus.PENDING.name,
             confirmation_code = worker.confirmationCode,
             created_at = Instant.now().toOffsetDateTime(),
+            registered_via = RegisteredVia.V1.name,
+            source_ip = null,
         )
         database.fleetQueries.selectWorkerById(workerId).executeAsOne().toDomain()
+      }
+
+  override suspend fun registerWorkerWithEnrollmentToken(
+      tokenHash: SecretHash,
+      now: Instant,
+      secretHash: SecretHash,
+      name: String,
+      hostname: String?,
+      os: String?,
+      cliVersion: String?,
+      sourceIp: String,
+  ): Worker? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.transactionWithResult {
+          val workerId = UUID.randomUUID()
+          val burnt =
+              database.fleetQueries
+                  .burnEnrollmentToken(
+                      used_at = now.toOffsetDateTime(),
+                      used_by_worker_id = workerId,
+                      token_hash = tokenHash.bytes,
+                      expires_at = now.toOffsetDateTime(),
+                  )
+                  .executeAsOneOrNull() ?: return@transactionWithResult null
+          val status = if (burnt.require_approval) WorkerStatus.PENDING else WorkerStatus.ACTIVE
+          database.fleetQueries.insertWorker(
+              worker_id = workerId,
+              secret_hash = secretHash.bytes,
+              name = name,
+              hostname = hostname,
+              os = os,
+              cli_version = cliVersion,
+              status = status.name,
+              confirmation_code = null,
+              created_at = now.toOffsetDateTime(),
+              registered_via = RegisteredVia.V2.name,
+              source_ip = sourceIp,
+          )
+          database.fleetQueries.selectWorkerById(workerId).executeAsOne().toDomain()
+        }
       }
 
   override suspend fun getWorker(workerId: WorkerId): Worker? =

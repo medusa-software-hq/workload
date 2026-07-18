@@ -26,6 +26,43 @@ class InMemoryFleetStore : FleetStore {
             approvedAt = null,
             approvedBy = null,
             lastSeenAt = null,
+            registeredVia = RegisteredVia.V1,
+            sourceIp = null,
+        )
+    workers[created.workerId] = created
+    return created
+  }
+
+  override suspend fun registerWorkerWithEnrollmentToken(
+      tokenHash: SecretHash,
+      now: Instant,
+      secretHash: SecretHash,
+      name: String,
+      hostname: String?,
+      os: String?,
+      cliVersion: String?,
+      sourceIp: String,
+  ): Worker? {
+    // The burn is the serialization point: it atomically selects exactly one winner among
+    // concurrent redemptions of the same token, so only that caller goes on to create a worker.
+    val workerId = WorkerId(UUID.randomUUID())
+    val burnt = burnEnrollmentToken(tokenHash, workerId, now) ?: return null
+    val created =
+        Worker(
+            workerId = workerId,
+            secretHash = secretHash,
+            name = name,
+            hostname = hostname,
+            os = os,
+            cliVersion = cliVersion,
+            status = if (burnt.requireApproval) WorkerStatus.PENDING else WorkerStatus.ACTIVE,
+            confirmationCode = null,
+            createdAt = now,
+            approvedAt = null,
+            approvedBy = null,
+            lastSeenAt = null,
+            registeredVia = RegisteredVia.V2,
+            sourceIp = sourceIp,
         )
     workers[created.workerId] = created
     return created

@@ -14,7 +14,14 @@ class RegisterCommand : CliktCommand(name = "register") {
   private val name by option("--name", help = "Defaults to <user>-<hostname>")
   private val brokerUrl by
       option("--broker-url", envvar = "WORKER_BROKER_URL")
-          .prompt("Broker URL (e.g. https://api.example.com/<uuid>)")
+          .prompt("Broker URL (e.g. https://api.example.com)")
+  private val enrollmentToken by
+      option(
+              "--enrollment-token",
+              envvar = "WORKER_ENROLLMENT_TOKEN",
+              help = "One-time wle_ token an admin generated for you in the console",
+          )
+          .prompt("Enrollment token", hideInput = true)
   private val force by option("--force").flag(default = false)
 
   override fun run() {
@@ -30,9 +37,9 @@ class RegisterCommand : CliktCommand(name = "register") {
 
     val registered =
         try {
-          registerWorker(brokerUrl, workerName)
+          registerWorker(brokerUrl, workerName, enrollmentToken.trim())
         } catch (e: WorkerApiException) {
-          throw PrintMessage("Registration failed: ${e.message}", statusCode = 1, printError = true)
+          throw PrintMessage(registerErrorMessage(e), statusCode = 1, printError = true)
         }
 
     saveConfig(
@@ -46,10 +53,7 @@ class RegisterCommand : CliktCommand(name = "register") {
 
     echo("Registered as '$workerName'.")
     echo()
-    echo("Confirmation code: ${registered.confirmationCode}")
-    echo("Give this code to an admin to approve this worker in the console.")
-    echo()
-    echo("Waiting for approval (up to ${pollTimeoutSeconds / 60} minutes)...")
+    echo("Waiting for the worker to become active (up to ${pollTimeoutSeconds / 60} minutes)...")
 
     when (
         pollUntilDecided(
@@ -59,7 +63,7 @@ class RegisterCommand : CliktCommand(name = "register") {
             pollTimeoutSeconds,
         )
     ) {
-      PollOutcome.APPROVED -> echo("Approved.")
+      PollOutcome.APPROVED -> echo("Active.")
       PollOutcome.REJECTED ->
           throw PrintMessage(
               "Registration was rejected. Ask an admin for details, then run 'workload worker register --force' to try again.",
@@ -81,6 +85,19 @@ private fun defaultWorkerName(): String {
   val host = localHostname() ?: "unknown-host"
   return "$user-$host"
 }
+
+/**
+ * Turns a failed v2 registration into an actionable message. A 404 is deliberately ambiguous on the
+ * server side (the worker plane is unprobeable), so the CLI spells out both things it can mean.
+ */
+fun registerErrorMessage(e: WorkerApiException): String =
+    if (e.statusCode == 404) {
+      "Registration failed (404). That can mean a wrong --broker-url, or an enrollment token that " +
+          "is invalid, already used, or expired — the broker returns the same 404 for all of them. " +
+          "Check the URL, and ask an admin for a fresh token if you're unsure it's still good."
+    } else {
+      "Registration failed: ${e.message}"
+    }
 
 private enum class PollOutcome {
   APPROVED,

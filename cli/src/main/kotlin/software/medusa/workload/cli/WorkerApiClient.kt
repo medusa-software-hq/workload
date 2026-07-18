@@ -12,7 +12,6 @@ import kotlinx.serialization.json.Json
 data class RegisterWorkerResponse(
     val workerId: String,
     val workerSecret: String,
-    val confirmationCode: String,
 )
 
 @Serializable
@@ -63,12 +62,22 @@ class WorkerApiException(val statusCode: Int, val errorCode: String) :
 private val json = Json { ignoreUnknownKeys = true }
 private val httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
 
-/** Calls `POST <brokerBaseUrl>/worker/v1/registrations`. */
-fun registerWorker(brokerBaseUrl: String, name: String): RegisterWorkerResponse {
+/**
+ * Calls `POST <brokerBaseUrl>/worker/v2/registrations`, exchanging a one-time `wle_` enrollment
+ * token for a fresh worker credential (M4-A3). The token rides as the Bearer credential; the broker
+ * burns it and returns `{workerId, workerSecret}` (the secret is a `wlw_` token). A rejected,
+ * expired, burnt, or malformed token — or a wrong URL — comes back as a bare 404.
+ */
+fun registerWorker(
+    brokerBaseUrl: String,
+    name: String,
+    enrollmentToken: String,
+): RegisterWorkerResponse {
   val request =
       HttpRequest.newBuilder()
-          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v1/registrations"))
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/registrations"))
           .header("Content-Type", "application/json")
+          .header("Authorization", "Bearer $enrollmentToken")
           .timeout(Duration.ofSeconds(10))
           .POST(
               HttpRequest.BodyPublishers.ofString(
@@ -86,7 +95,7 @@ fun registerWorker(brokerBaseUrl: String, name: String): RegisterWorkerResponse 
   return json.decodeFromString(response.body())
 }
 
-/** Calls `GET <brokerBaseUrl>/worker/v1/registrations/self`. */
+/** Calls `GET <brokerBaseUrl>/worker/v2/registrations/self`. */
 fun fetchSelfStatus(
     brokerBaseUrl: String,
     workerId: String,
@@ -94,7 +103,7 @@ fun fetchSelfStatus(
 ): SelfStatusResponse {
   val request =
       HttpRequest.newBuilder()
-          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v1/registrations/self"))
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/registrations/self"))
           .header("Authorization", "Bearer $workerId.$workerSecret")
           .timeout(Duration.ofSeconds(10))
           .GET()
@@ -107,7 +116,7 @@ fun fetchSelfStatus(
   return json.decodeFromString(response.body())
 }
 
-/** Calls `POST <brokerBaseUrl>/worker/v1/token`. */
+/** Calls `POST <brokerBaseUrl>/worker/v2/token`. */
 fun claimToken(
     brokerBaseUrl: String,
     workerId: String,
@@ -116,7 +125,7 @@ fun claimToken(
 ): TokenClaimResponse {
   val request =
       HttpRequest.newBuilder()
-          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v1/token"))
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/token"))
           .header("Authorization", "Bearer $workerId.$workerSecret")
           .header("Content-Type", "application/json")
           .timeout(Duration.ofSeconds(10))
@@ -132,7 +141,7 @@ fun claimToken(
   return json.decodeFromString(response.body())
 }
 
-/** Calls `POST <brokerBaseUrl>/worker/v1/claim`: the token plus the revision's env payload. */
+/** Calls `POST <brokerBaseUrl>/worker/v2/claim`: the token plus the revision's env payload. */
 fun claimWorkload(
     brokerBaseUrl: String,
     workerId: String,
@@ -141,7 +150,7 @@ fun claimWorkload(
 ): WorkerClaimResponse {
   val request =
       HttpRequest.newBuilder()
-          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v1/claim"))
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/claim"))
           .header("Authorization", "Bearer $workerId.$workerSecret")
           .header("Content-Type", "application/json")
           .timeout(Duration.ofSeconds(10))

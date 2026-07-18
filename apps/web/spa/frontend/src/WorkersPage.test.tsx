@@ -53,6 +53,8 @@ function fakeWorker(overrides: Partial<Worker> = {}): Worker {
     approvedBy: '',
     lastSeenAt: '',
     grantedProfileIds: [],
+    registeredVia: 'v1',
+    sourceIp: '',
     ...overrides,
   } as Worker;
 }
@@ -109,6 +111,39 @@ test('shows a pending worker with its confirmation code', async () => {
   expect(await screen.findByText('jakub-mbp')).toBeInTheDocument();
   expect(screen.getByText('4913')).toBeInTheDocument();
   expect(screen.getByText('No active workers.')).toBeInTheDocument();
+});
+
+test('a v2 pending worker shows its source IP instead of a confirmation code', async () => {
+  listWorkers.mockResolvedValue({
+    workers: [
+      fakeWorker({
+        status: WorkerStatus.PENDING,
+        confirmationCode: '',
+        registeredVia: 'v2',
+        sourceIp: '203.0.113.7',
+      }),
+    ],
+  });
+  render(<WorkersPage token="tok" />);
+
+  expect(await screen.findByText('203.0.113.7')).toBeInTheDocument();
+  expect(screen.queryByText('4913')).not.toBeInTheDocument();
+});
+
+test('an active v2 worker is badged v2', async () => {
+  listWorkers.mockResolvedValue({
+    workers: [
+      fakeWorker({
+        status: WorkerStatus.ACTIVE,
+        confirmationCode: '',
+        registeredVia: 'v2',
+      }),
+    ],
+  });
+  render(<WorkersPage token="tok" />);
+
+  expect(await screen.findByText('jakub-mbp')).toBeInTheDocument();
+  expect(screen.getByText('v2')).toBeInTheDocument();
 });
 
 test('does not show a confirmation code for an active worker', async () => {

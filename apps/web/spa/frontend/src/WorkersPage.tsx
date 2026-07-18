@@ -324,6 +324,7 @@ export function WorkersPage({ token }: { token: string }) {
                 <Table.Th>OS</Table.Th>
                 <Table.Th>Requested at</Table.Th>
                 <Table.Th>Confirmation code</Table.Th>
+                <Table.Th>Source IP</Table.Th>
                 <Table.Th />
               </Table.Tr>
             </Table.Thead>
@@ -335,10 +336,17 @@ export function WorkersPage({ token }: { token: string }) {
                   <Table.Td>{worker.os || '—'}</Table.Td>
                   <Table.Td>{formatDate(worker.createdAt)}</Table.Td>
                   <Table.Td>
-                    <Text size="xl" fw={700} ff="monospace">
-                      {worker.confirmationCode}
-                    </Text>
+                    {worker.confirmationCode ? (
+                      <Text size="xl" fw={700} ff="monospace">
+                        {worker.confirmationCode}
+                      </Text>
+                    ) : (
+                      <Text c="dimmed">—</Text>
+                    )}
                   </Table.Td>
+                  {/* For a v2 (enrollment-token) pending worker the source IP is the check: does it
+                      match where your invitee actually is? v1 workers show no IP. */}
+                  <Table.Td ff="monospace">{worker.sourceIp || '—'}</Table.Td>
                   <Table.Td>
                     <Group gap="xs">
                       <Button
@@ -374,6 +382,7 @@ export function WorkersPage({ token }: { token: string }) {
               <Table.Tr>
                 <Table.Th>Name</Table.Th>
                 <Table.Th>Hostname</Table.Th>
+                <Table.Th>Via</Table.Th>
                 <Table.Th>Last seen</Table.Th>
                 <Table.Th>Granted profiles</Table.Th>
                 <Table.Th />
@@ -384,6 +393,11 @@ export function WorkersPage({ token }: { token: string }) {
                 <Table.Tr key={worker.workerId}>
                   <Table.Td>{worker.name}</Table.Td>
                   <Table.Td>{worker.hostname || '—'}</Table.Td>
+                  <Table.Td>
+                    <Badge variant="light" color={worker.registeredVia === 'v2' ? 'teal' : 'gray'}>
+                      {worker.registeredVia || 'v1'}
+                    </Badge>
+                  </Table.Td>
                   <Table.Td>{worker.lastSeenAt ? formatDate(worker.lastSeenAt) : 'Never'}</Table.Td>
                   <Table.Td>
                     {worker.grantedProfileIds.length === 0 ? (

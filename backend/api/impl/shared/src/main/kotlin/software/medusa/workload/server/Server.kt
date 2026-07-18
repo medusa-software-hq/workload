@@ -26,7 +26,8 @@ internal data class WorkerPlaneRoute(
 // A fresh, headers-only HttpResponse per call: HttpResponse.of(HttpStatus) synthesizes a text
 // body ("404 Not Found"), which fails the "no body" requirement; HttpResponse instances are also
 // single-use streams and must not be shared across requests.
-private fun bareNotFound(): HttpResponse = HttpResponse.of(ResponseHeaders.of(HttpStatus.NOT_FOUND))
+internal fun bareNotFound(): HttpResponse =
+    HttpResponse.of(ResponseHeaders.of(HttpStatus.NOT_FOUND))
 
 /**
  * Wraps every route so worker-plane requests (path contains `/worker/v1/`) are gated by
@@ -66,6 +67,7 @@ fun buildServer(
     workerClaimService: HttpService? = null,
     registrationService: HttpService? = null,
     selfStatusService: HttpService? = null,
+    v2RegistrationService: HttpService? = null,
 ): Server {
   val cors =
       CorsService.builderForOriginRegex(originRegex)
@@ -141,6 +143,27 @@ fun buildServer(
                 }
                 .decorate(auth),
         )
+
+        // The v2 worker plane is bare-hostname by design: the wle_/wlw_ token format is the filter
+        // now, so v2 is deliberately NOT behind the UUID path prefix (matchWorkerApiPath keys on
+        // "/worker/v1/", so "/worker/v2/..." falls through the prefix decorator to these routes).
+        // Only registration differs between the planes (the enrollment-token exchange); token,
+        // claim, and self-status reuse the very same services as v1 — they authenticate a worker by
+        // its stored secret hash and don't care which plane minted it (a v2 worker's secret is just
+        // a wlw_ token). This is what lets the CLI store the broker URL bare and speak v2 for
+        // everything.
+        v2RegistrationService?.let {
+          route().methods(HttpMethod.POST).path("/worker/v2/registrations").build(it)
+        }
+        throttledWorkerTokenBroker?.let {
+          route().methods(HttpMethod.POST).path("/worker/v2/token").build(it)
+        }
+        throttledWorkerClaimService?.let {
+          route().methods(HttpMethod.POST).path("/worker/v2/claim").build(it)
+        }
+        selfStatusService?.let {
+          route().methods(HttpMethod.GET).path("/worker/v2/registrations/self").build(it)
+        }
 
         serviceUnder("/", grpcService.decorate(auth).decorate(cors))
 

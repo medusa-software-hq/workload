@@ -89,6 +89,8 @@ private fun Worker.toProto(grantedProfileIds: List<ProfileId>): WorkerProto =
         .setApprovedBy(approvedBy.orEmpty())
         .setLastSeenAt(lastSeenAt?.toString().orEmpty())
         .addAllGrantedProfileIds(grantedProfileIds.map { it.value })
+        .setRegisteredVia(registeredVia.name.lowercase())
+        .setSourceIp(sourceIp.orEmpty())
         .build()
 
 private fun Profile.toProto(): ProfileProto =
