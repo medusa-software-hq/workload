@@ -89,6 +89,12 @@ message Worker {
   // Empty until M2 adds worker heartbeats.
   string last_seen_at = 11;
   repeated string granted_profile_ids = 12;
+  // Which registration plane the worker came through: "v1" (open registration + confirmation code)
+  // or "v2" (enrollment-token exchange). The console shows this; it's the M4-A5 v1-retirement gate.
+  string registered_via = 13;
+  // The source IP the worker registered from — recorded for v2 (shown on a require_approval pending
+  // row as a defense-in-depth signal); empty for v1.
+  string source_ip = 14;
 }
 
 message ListWorkersRequest {}
