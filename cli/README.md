@@ -10,7 +10,7 @@ Worker operations live under the `workload worker` group.
 
 | Command | What it does |
 | --- | --- |
-| `workload worker register` | Registers this machine; an admin approves it in the console. |
+| `workload worker register` | Registers this machine by redeeming a one-time enrollment token (`--enrollment-token`, or prompted) an admin generated in the console. |
 | `workload worker status` | Shows this worker's status and granted profiles. |
 | `workload worker token -p <profile>` | Prints a brokered access token for a profile. |
 | `workload worker exec -p <profile> -- <cmd>` | Runs a **local command** with the profile's env injected. |
