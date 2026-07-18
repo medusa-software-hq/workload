@@ -101,9 +101,17 @@ class MetadataEmulator(
 ) : AutoCloseable {
   private val server = HttpServer.create(bindAddress, 0)
 
-  /** The `host:port` a workload points at via `GCE_METADATA_HOST` — known only after [start]. */
+  /**
+   * The `host:port` of the bind address (e.g. `127.0.0.1:49812` for a loopback bind) — the pointer
+   * `exec` hands a workload. For a wildcard bind this reports `0.0.0.0`, which a *container* can't
+   * dial; `run` uses [port] with the reachable gateway IP instead.
+   */
   val hostPort: String
     get() = "${server.address.address.hostAddress}:${server.address.port}"
+
+  /** The bound port — known only after [start]. `run` advertises it against the network gateway. */
+  val port: Int
+    get() = server.address.port
 
   init {
     server.createContext("/") { exchange -> handle(exchange) }
@@ -284,6 +292,44 @@ fun projectIdFromServiceAccount(email: String): String? {
   val project = email.substringAfter('@', "").removeSuffix(suffix)
   return project.ifEmpty { null }
 }
+
+/**
+ * The non-secret env vars that point a workload's Google tooling at the emulator at [hostPort]
+ * instead of the real GCE metadata server. These *replace* the injected access-token vars — what
+ * `docker inspect` / `ps` now shows is an address, not a credential. All three name the same
+ * `host:port`: `GCE_METADATA_HOST` (google-auth java/python/node/go), `GCE_METADATA_IP` (some libs'
+ * detection probe), `GCE_METADATA_ROOT` (gcloud).
+ */
+fun metadataPointerEnv(hostPort: String): Map<String, String> =
+    mapOf(
+        "GCE_METADATA_HOST" to hostPort,
+        "GCE_METADATA_IP" to hostPort,
+        "GCE_METADATA_ROOT" to hostPort,
+    )
+
+/**
+ * The host's primary outbound IPv4 address — the one a container reaches the host at (its bridge
+ * traffic to this address is delivered locally, source-NAT'd to it). Found via a connected UDP
+ * socket, which sends nothing but makes the OS pick the source address of the default route. Falls
+ * back to the loopback host address if there's no usable route (e.g. offline), which at least keeps
+ * `exec` working.
+ */
+fun hostPrimaryAddress(): InetAddress =
+    java.net.DatagramSocket().use { socket ->
+      socket.connect(InetSocketAddress("8.8.8.8", 9))
+      socket.localAddress.takeUnless { it.isAnyLocalAddress } ?: InetAddress.getLocalHost()
+    }
+
+/**
+ * The peer predicate `run` uses: admit a private-range source only. A container reaches the
+ * host-bound emulator either as its own bridge IP or (after Docker's SNAT to the host's primary IP)
+ * as that host address — both site-local; a public source never is. This, the required
+ * `Metadata-Flavor` header, and the random ephemeral port are the guard. It is weaker than the
+ * design's per-container check: on modern Docker a container can't reach a host-side listener on a
+ * per-run network at all, so per-run-network isolation needs the sidecar variant (future work). See
+ * the M4-B3 run wiring.
+ */
+fun isTrustedRunPeer(addr: InetAddress): Boolean = addr.isSiteLocalAddress
 
 /** Builds the production [TokenClaimer] that re-claims from the broker for [profileId]. */
 fun brokerTokenClaimer(config: WorkloadConfig, profileId: String): TokenClaimer = TokenClaimer {

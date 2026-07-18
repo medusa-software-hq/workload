@@ -16,6 +16,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.serialization.json.Json
@@ -147,6 +148,16 @@ class MetadataEmulatorTest {
     assertEquals("my-project", projectIdFromServiceAccount("x@my-project.iam.gserviceaccount.com"))
     assertNull(projectIdFromServiceAccount("123-compute@developer.gserviceaccount.com"))
     assertNull(projectIdFromServiceAccount("not-an-email"))
+  }
+
+  @Test
+  fun `run peer check admits private-range sources and rejects public ones`() {
+    // A container's own bridge IP, and the host's primary IP after Docker's SNAT, are site-local.
+    assertTrue(isTrustedRunPeer(InetAddress.getByName("172.18.0.2")))
+    assertTrue(isTrustedRunPeer(InetAddress.getByName("192.168.64.4")))
+    assertTrue(isTrustedRunPeer(InetAddress.getByName("10.1.2.3")))
+    // A public source (or loopback, which the run path never uses) is not admitted.
+    assertFalse(isTrustedRunPeer(InetAddress.getByName("8.8.8.8")))
   }
 }
 
