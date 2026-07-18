@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import software.medusa.workload.db.Enrollment_tokens
 import software.medusa.workload.db.Profile_revisions
 import software.medusa.workload.db.Profiles
 import software.medusa.workload.db.Worker_profile_grants
@@ -71,6 +72,20 @@ private fun Worker_profile_grants.toDomain(): Grant =
         profileId = ProfileId(profile_id),
         grantedAt = granted_at.toInstant(),
         grantedBy = granted_by,
+    )
+
+private fun Enrollment_tokens.toDomain(): EnrollmentToken =
+    EnrollmentToken(
+        id = EnrollmentTokenId(enrollment_token_id),
+        tokenHash = SecretHash(token_hash),
+        note = note,
+        createdBy = created_by,
+        createdAt = created_at.toInstant(),
+        expiresAt = expires_at.toInstant(),
+        requireApproval = require_approval,
+        usedAt = used_at?.toInstant(),
+        usedByWorkerId = used_by_worker_id?.let { WorkerId(it) },
+        revokedAt = revoked_at?.toInstant(),
     )
 
 class PostgresFleetStore(
@@ -300,5 +315,56 @@ class PostgresFleetStore(
         database.fleetQueries.selectGrantsByWorker(workerId.value).executeAsList().map {
           ProfileId(it.profile_id)
         }
+      }
+
+  override suspend fun createEnrollmentToken(token: NewEnrollmentToken): EnrollmentToken =
+      withContext(Dispatchers.IO) {
+        val id = UUID.randomUUID()
+        database.fleetQueries.insertEnrollmentToken(
+            enrollment_token_id = id,
+            token_hash = token.tokenHash.bytes,
+            note = token.note,
+            created_by = token.createdBy,
+            created_at = Instant.now().toOffsetDateTime(),
+            expires_at = token.expiresAt.toOffsetDateTime(),
+            require_approval = token.requireApproval,
+        )
+        database.fleetQueries.selectEnrollmentTokenById(id).executeAsOne().toDomain()
+      }
+
+  override suspend fun listOutstandingEnrollmentTokens(now: Instant): List<EnrollmentToken> =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries
+            .selectOutstandingEnrollmentTokens(now.toOffsetDateTime())
+            .executeAsList()
+            .map { it.toDomain() }
+      }
+
+  override suspend fun revokeEnrollmentToken(
+      id: EnrollmentTokenId,
+      now: Instant,
+  ): EnrollmentToken? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries
+            .revokeEnrollmentToken(now.toOffsetDateTime(), id.value)
+            .executeAsOneOrNull()
+            ?.toDomain()
+      }
+
+  override suspend fun burnEnrollmentToken(
+      tokenHash: SecretHash,
+      workerId: WorkerId,
+      now: Instant,
+  ): EnrollmentToken? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries
+            .burnEnrollmentToken(
+                used_at = now.toOffsetDateTime(),
+                used_by_worker_id = workerId.value,
+                token_hash = tokenHash.bytes,
+                expires_at = now.toOffsetDateTime(),
+            )
+            .executeAsOneOrNull()
+            ?.toDomain()
       }
 }

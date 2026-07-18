@@ -30,6 +30,7 @@ dependencies {
   api(libs.nimbus.jose.jwt)
   api(libs.protobuf.kotlin)
   api(libs.slf4j.api)
+  implementation(project(":libraries:token-format"))
   implementation(libs.flyway.core)
   implementation(libs.sqldelight.jdbc.driver)
   runtimeOnly(libs.flyway.database.postgresql)

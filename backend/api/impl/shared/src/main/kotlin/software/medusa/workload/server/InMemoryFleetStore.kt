@@ -9,6 +9,7 @@ class InMemoryFleetStore : FleetStore {
   private val profiles = ConcurrentHashMap<ProfileId, Profile>()
   private val revisions = ConcurrentHashMap<ProfileId, MutableList<ProfileRevision>>()
   private val grants = ConcurrentHashMap<Pair<WorkerId, ProfileId>, Grant>()
+  private val enrollmentTokens = ConcurrentHashMap<EnrollmentTokenId, EnrollmentToken>()
 
   override suspend fun createWorker(worker: NewWorker): Worker {
     val created =
@@ -183,4 +184,63 @@ class InMemoryFleetStore : FleetStore {
 
   override suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId> =
       grants.keys.filter { it.first == workerId }.map { it.second }.sortedBy { it.value }
+
+  override suspend fun createEnrollmentToken(token: NewEnrollmentToken): EnrollmentToken {
+    val created =
+        EnrollmentToken(
+            id = EnrollmentTokenId(UUID.randomUUID()),
+            tokenHash = token.tokenHash,
+            note = token.note,
+            createdBy = token.createdBy,
+            createdAt = Instant.now(),
+            expiresAt = token.expiresAt,
+            requireApproval = token.requireApproval,
+            usedAt = null,
+            usedByWorkerId = null,
+            revokedAt = null,
+        )
+    enrollmentTokens[created.id] = created
+    return created
+  }
+
+  override suspend fun listOutstandingEnrollmentTokens(now: Instant): List<EnrollmentToken> =
+      enrollmentTokens.values
+          .filter { it.usedAt == null && it.revokedAt == null && it.expiresAt.isAfter(now) }
+          .sortedByDescending { it.createdAt }
+
+  override suspend fun revokeEnrollmentToken(
+      id: EnrollmentTokenId,
+      now: Instant,
+  ): EnrollmentToken? {
+    var revoked: EnrollmentToken? = null
+    enrollmentTokens.computeIfPresent(id) { _, token ->
+      if (token.usedAt == null && token.revokedAt == null) {
+        token.copy(revokedAt = now).also { revoked = it }
+      } else {
+        token
+      }
+    }
+    return revoked
+  }
+
+  override suspend fun burnEnrollmentToken(
+      tokenHash: SecretHash,
+      workerId: WorkerId,
+      now: Instant,
+  ): EnrollmentToken? {
+    // Find the row by hash, then burn it atomically under its key: computeIfPresent applies the
+    // remap for a given key atomically, so concurrent redemptions of one token serialize and only
+    // the first (which still sees it outstanding) sets `burned`.
+    val id =
+        enrollmentTokens.entries.firstOrNull { it.value.tokenHash == tokenHash }?.key ?: return null
+    var burned: EnrollmentToken? = null
+    enrollmentTokens.computeIfPresent(id) { _, token ->
+      if (token.usedAt == null && token.revokedAt == null && token.expiresAt.isAfter(now)) {
+        token.copy(usedAt = now, usedByWorkerId = workerId).also { burned = it }
+      } else {
+        token
+      }
+    }
+    return burned
+  }
 }

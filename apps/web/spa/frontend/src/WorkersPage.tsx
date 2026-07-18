@@ -6,19 +6,24 @@ import {
   Button,
   Checkbox,
   CloseButton,
+  Code,
+  CopyButton,
   Group,
   Loader,
   Modal,
+  NumberInput,
   Select,
   Stack,
   Table,
   Text,
+  TextInput,
   Title,
 } from '@mantine/core';
 import { useDisclosure } from '@mantine/hooks';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import {
+  type EnrollmentToken,
   FleetService,
   WorkerStatus,
   type Profile,
@@ -46,6 +51,7 @@ export function WorkersPage({ token }: { token: string }) {
   const { handleUnauthorized } = useAuth();
   const [workers, setWorkers] = useState<Worker[] | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [enrollmentTokens, setEnrollmentTokens] = useState<EnrollmentToken[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState(false);
 
@@ -65,12 +71,14 @@ export function WorkersPage({ token }: { token: string }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [workersResponse, profilesResponse] = await Promise.all([
+      const [workersResponse, profilesResponse, tokensResponse] = await Promise.all([
         client.listWorkers({}, { headers }),
         client.listProfiles({}, { headers }),
+        client.listEnrollmentTokens({}, { headers }),
       ]);
       setWorkers(workersResponse.workers);
       setProfiles(profilesResponse.profiles);
+      setEnrollmentTokens(tokensResponse.enrollmentTokens);
       setError(null);
     } catch (err: unknown) {
       handleError(err);
@@ -98,6 +106,63 @@ export function WorkersPage({ token }: { token: string }) {
       ),
     [workers]
   );
+
+  // "New worker" enrollment-token flow. `mintedToken` holds the just-created plaintext token; it is
+  // shown exactly once in the dialog and cleared when the dialog closes — the token is never fetched
+  // or displayed again (only its metadata is, in the outstanding list).
+  const [newWorkerOpen, { open: openNewWorker, close: closeNewWorker }] = useDisclosure(false);
+  const [newTokenNote, setNewTokenNote] = useState('');
+  const [newTokenExpiryDays, setNewTokenExpiryDays] = useState<number>(7);
+  const [newTokenRequireApproval, setNewTokenRequireApproval] = useState(false);
+  const [mintedToken, setMintedToken] = useState<string | null>(null);
+  const [creatingToken, setCreatingToken] = useState(false);
+  const [tokenToRevoke, setTokenToRevoke] = useState<EnrollmentToken | null>(null);
+
+  function resetNewWorkerForm() {
+    setNewTokenNote('');
+    setNewTokenExpiryDays(7);
+    setNewTokenRequireApproval(false);
+    setMintedToken(null);
+    setCreatingToken(false);
+  }
+
+  function dismissNewWorker() {
+    closeNewWorker();
+    resetNewWorkerForm();
+  }
+
+  async function submitCreateToken() {
+    setCreatingToken(true);
+    try {
+      const response = await client.createEnrollmentToken(
+        {
+          note: newTokenNote.trim(),
+          expiresInDays: newTokenExpiryDays,
+          requireApproval: newTokenRequireApproval,
+        },
+        { headers }
+      );
+      setMintedToken(response.token);
+      await refresh();
+    } catch (err: unknown) {
+      handleError(err);
+      toast.error(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreatingToken(false);
+    }
+  }
+
+  async function submitRevokeToken(tokenId: string) {
+    try {
+      await client.revokeEnrollmentToken({ enrollmentTokenId: tokenId }, { headers });
+      toast.success('Enrollment token revoked');
+      setTokenToRevoke(null);
+      await refresh();
+    } catch (err: unknown) {
+      handleError(err);
+      toast.error(err instanceof Error ? err.message : String(err));
+    }
+  }
 
   const [pendingAction, setPendingAction] = useState<PendingAction | null>(null);
   const [activeAction, setActiveAction] = useState<ActiveAction | null>(null);
@@ -179,6 +244,63 @@ export function WorkersPage({ token }: { token: string }) {
           {error}
         </Alert>
       )}
+
+      <Stack gap="sm">
+        <Group justify="space-between" align="center">
+          <Title order={2}>Enrollment tokens</Title>
+          <Button onClick={openNewWorker}>New worker</Button>
+        </Group>
+        <Text c="dimmed" size="sm">
+          Mint a one-time token and hand it to a teammate. They register with it once, and it's
+          burnt — no open registration, no confirmation code.
+        </Text>
+
+        {enrollmentTokens.length === 0 ? (
+          <Text c="dimmed">No outstanding enrollment tokens.</Text>
+        ) : (
+          <Table striped withTableBorder>
+            <Table.Thead>
+              <Table.Tr>
+                <Table.Th>Note</Table.Th>
+                <Table.Th>Created by</Table.Th>
+                <Table.Th>Expires</Table.Th>
+                <Table.Th>Approval</Table.Th>
+                <Table.Th />
+              </Table.Tr>
+            </Table.Thead>
+            <Table.Tbody>
+              {enrollmentTokens.map((enrollmentToken) => (
+                <Table.Tr key={enrollmentToken.enrollmentTokenId}>
+                  <Table.Td>{enrollmentToken.note || '—'}</Table.Td>
+                  <Table.Td>{enrollmentToken.createdBy}</Table.Td>
+                  <Table.Td>{formatDate(enrollmentToken.expiresAt)}</Table.Td>
+                  <Table.Td>
+                    {enrollmentToken.requireApproval ? (
+                      <Badge variant="light" color="orange">
+                        Required
+                      </Badge>
+                    ) : (
+                      <Text c="dimmed" size="sm">
+                        Auto
+                      </Text>
+                    )}
+                  </Table.Td>
+                  <Table.Td>
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      color="red"
+                      onClick={() => setTokenToRevoke(enrollmentToken)}
+                    >
+                      Revoke
+                    </Button>
+                  </Table.Td>
+                </Table.Tr>
+              ))}
+            </Table.Tbody>
+          </Table>
+        )}
+      </Stack>
 
       <Stack gap="sm">
         <Title order={2}>Pending approval</Title>
@@ -370,6 +492,102 @@ export function WorkersPage({ token }: { token: string }) {
                 onClick={() => void submitPendingAction(pendingAction)}
               >
                 {pendingAction.kind === 'approve' ? 'Approve' : 'Reject'}
+              </Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
+
+      <Modal
+        opened={newWorkerOpen}
+        onClose={dismissNewWorker}
+        title={mintedToken === null ? 'New worker' : 'Enrollment token created'}
+        closeOnClickOutside={mintedToken === null}
+      >
+        {mintedToken === null ? (
+          <Stack gap="md">
+            <Text size="sm">
+              Generates a one-time enrollment token to hand to the teammate setting up this worker.
+            </Text>
+            <TextInput
+              label="Note"
+              placeholder="e.g. for Kuba's MBP"
+              value={newTokenNote}
+              onChange={(event) => setNewTokenNote(event.currentTarget.value)}
+            />
+            <NumberInput
+              label="Expires in (days)"
+              min={1}
+              max={365}
+              value={newTokenExpiryDays}
+              onChange={(value) => setNewTokenExpiryDays(typeof value === 'number' ? value : 7)}
+            />
+            <Checkbox
+              label="Require admin approval after registration"
+              checked={newTokenRequireApproval}
+              onChange={(event) => setNewTokenRequireApproval(event.currentTarget.checked)}
+            />
+            <Group justify="flex-end">
+              <Button variant="default" onClick={dismissNewWorker}>
+                Cancel
+              </Button>
+              <Button loading={creatingToken} onClick={() => void submitCreateToken()}>
+                Create token
+              </Button>
+            </Group>
+          </Stack>
+        ) : (
+          <Stack gap="md">
+            <Alert color="orange" title="Copy this token now">
+              This is the only time the token is shown. It won't be displayed again — if you lose
+              it, revoke it and create a new one.
+            </Alert>
+            <Code block data-testid="minted-token">
+              {mintedToken}
+            </Code>
+            <Group justify="flex-end">
+              <CopyButton value={mintedToken}>
+                {({ copied, copy }) => (
+                  <Button variant="light" onClick={copy}>
+                    {copied ? 'Copied' : 'Copy token'}
+                  </Button>
+                )}
+              </CopyButton>
+              <Button onClick={dismissNewWorker}>Done</Button>
+            </Group>
+          </Stack>
+        )}
+      </Modal>
+
+      <Modal
+        opened={tokenToRevoke !== null}
+        onClose={() => setTokenToRevoke(null)}
+        title="Revoke enrollment token"
+      >
+        {tokenToRevoke && (
+          <Stack gap="md">
+            <Text>
+              Revoke the enrollment token
+              {tokenToRevoke.note ? (
+                <>
+                  {' '}
+                  <strong>{tokenToRevoke.note}</strong>
+                </>
+              ) : (
+                ''
+              )}
+              ? It can no longer be redeemed, and any teammate still holding it will have to be
+              given a new one.
+            </Text>
+            <Group justify="flex-end">
+              <Button variant="default" onClick={() => setTokenToRevoke(null)}>
+                Cancel
+              </Button>
+              <Button
+                color="red"
+                onClick={() => void submitRevokeToken(tokenToRevoke.enrollmentTokenId)}
+              >
+                Revoke
               </Button>
             </Group>
           </Stack>

@@ -29,6 +29,8 @@ internal data class AuditLogEntry(
     val revision: Int? = null,
     val targetServiceAccount: String? = null,
     val expiresAt: String? = null,
+    // The surrogate id of an enrollment token (not the token or its hash — safe to log).
+    val enrollmentTokenId: String? = null,
     val reason: String? = null,
 )
 
