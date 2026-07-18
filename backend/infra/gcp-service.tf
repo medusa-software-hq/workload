@@ -16,6 +16,16 @@ resource "google_cloud_run_v2_service" "primary" {
   template {
     service_account = google_service_account.primary_service_sa.email
 
+    # Hard ceiling on concurrently-billable instances. This is a deliberate
+    # bills-over-availability trade (see backend/infra/README.md): the worst an
+    # abusive spike can do is run the cap hot and degrade service, never
+    # generate an open-ended bill. With the default per-instance concurrency
+    # this still serves hundreds of simultaneous requests — ample for an
+    # in-house fleet plus the admin console. Bump it consciously, not reflexively.
+    scaling {
+      max_instance_count = 3
+    }
+
     containers {
       # Initial placeholder; CI/CD will deploy the real image from Artifact Registry.
       image = "us-docker.pkg.dev/cloudrun/container/hello"
