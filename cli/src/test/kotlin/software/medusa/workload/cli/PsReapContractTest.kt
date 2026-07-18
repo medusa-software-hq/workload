@@ -50,6 +50,9 @@ class PsReapContractTest {
           for (c in connector.containers.list(labels = mapOf(workloadProfileLabel to runToken))) {
             runCatching { connector.containers.remove(c.id, force = true) }
           }
+          for (n in connector.networks.list(labels = mapOf(workloadNetworkLabel to runToken))) {
+            runCatching { connector.networks.remove(n.id) }
+          }
         }
       }
     }
@@ -124,6 +127,24 @@ class PsReapContractTest {
     assertTrue(
         connector.containers.list(labelKeys = listOf(workloadProfileLabel)).none { it.id == id }
     )
+  }
+
+  @Test
+  fun `reaping removes a labeled network orphaned by a hard kill`() = withConnector { connector ->
+    // What a SIGKILLed `workload run` can now also leave behind: its per-run bridge network.
+    val net =
+        connector.networks.create(
+            name = "ms-workload-net-$runToken",
+            labels = mapOf(workloadNetworkLabel to runToken),
+        )
+
+    // `workload ps --reap` finds workload networks by the label key alone, like it does containers.
+    val listed = connector.networks.list(labelKeys = listOf(workloadNetworkLabel))
+    assertTrue(listed.any { it.id == net.id }, "the orphaned network should be listed by its label")
+
+    connector.networks.remove(net.id)
+    val after = connector.networks.list(labelKeys = listOf(workloadNetworkLabel))
+    assertTrue(after.none { it.id == net.id }, "the network should be gone after a reap")
   }
 
   @Test

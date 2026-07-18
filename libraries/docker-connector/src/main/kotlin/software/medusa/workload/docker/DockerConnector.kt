@@ -43,6 +43,9 @@ class DockerConnector(
   /** Container lifecycle endpoints (create/start/wait/stop/remove/list/inspect). */
   val containers: ContainerApi = ContainerApi(this)
 
+  /** Network lifecycle endpoints (create/inspect/remove/list) for per-run bridges (M4-B2). */
+  val networks: NetworkApi = NetworkApi(this)
+
   /** Container log streaming (stdout/stderr demux, follow mode). */
   val logs: LogApi = LogApi(this, containers)
 

@@ -27,6 +27,9 @@ class ContainerApi internal constructor(private val engine: DockerEngine) {
    * `POST /containers/create`. [env] entries are `KEY=VALUE` strings passed in the body only.
    * [labels] identify the container for later `list`/cleanup (workload uses `ms-workload.*`).
    * [autoRemove] (default `true`) sets `HostConfig.AutoRemove` so the container is reaped on exit.
+   * [extraHosts] maps to `--add-host` (`hostname:ip`, or `hostname:host-gateway`) and [networkMode]
+   * to `--network` — how `workload run` publishes `metadata.google.internal` and joins the
+   * container to its per-run bridge (M4-B2). Both omitted from the body when null/empty.
    */
   suspend fun create(
       image: String,
@@ -36,6 +39,8 @@ class ContainerApi internal constructor(private val engine: DockerEngine) {
       autoRemove: Boolean = true,
       tty: Boolean = false,
       name: String? = null,
+      extraHosts: List<String> = emptyList(),
+      networkMode: String? = null,
   ): ContainerCreateResponse {
     val body =
         engine.json.encodeToString(
@@ -45,7 +50,12 @@ class ContainerApi internal constructor(private val engine: DockerEngine) {
                 env = env,
                 labels = labels,
                 tty = tty,
-                hostConfig = HostConfig(autoRemove = autoRemove),
+                hostConfig =
+                    HostConfig(
+                        autoRemove = autoRemove,
+                        extraHosts = extraHosts.ifEmpty { null },
+                        networkMode = networkMode,
+                    ),
             )
         )
     val query = if (name != null) "?" + queryOf("name" to name) else ""

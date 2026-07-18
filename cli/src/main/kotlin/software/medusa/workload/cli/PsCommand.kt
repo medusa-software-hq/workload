@@ -169,5 +169,41 @@ class PsCommand : CliktCommand(name = "ps") {
       )
     }
     echo("Reaped $reaped of ${containers.size}.", err = true)
+
+    // Containers are gone now, so any per-run bridge network they held is detachable. Sweep the
+    // ones a hard-killed `workload run` orphaned (a live run's network still has its container, so
+    // the daemon refuses removal — we let that fail quietly rather than kill an in-flight run).
+    reapNetworks(connector)
+  }
+
+  private fun reapNetworks(connector: DockerConnector) {
+    val networks =
+        runCatching {
+              runBlocking { connector.networks.list(labelKeys = listOf(workloadNetworkLabel)) }
+            }
+            .getOrElse {
+              return
+            }
+    if (networks.isEmpty()) return
+
+    var removed = 0
+    for (network in networks) {
+      runCatching { runBlocking { connector.networks.remove(network.id) } }
+          .fold(
+              onSuccess = {
+                removed++
+                echo("Reaped network ${network.name ?: network.id.take(12)}", err = true)
+              },
+              onFailure = { e ->
+                // Typically "network has active endpoints" — a still-running run owns it. Expected.
+                val reason = (e as? DockerConnectorException)?.message ?: e.toString()
+                echo(
+                    "Left network ${network.name ?: network.id.take(12)} (in use?): $reason",
+                    err = true,
+                )
+              },
+          )
+    }
+    echo("Reaped $removed of ${networks.size} network(s).", err = true)
   }
 }
