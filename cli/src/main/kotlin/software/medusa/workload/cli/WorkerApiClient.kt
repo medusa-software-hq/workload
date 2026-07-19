@@ -1,8 +1,10 @@
 package software.medusa.workload.cli
 
+import java.io.IOException
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.net.http.HttpResponse.BodyHandlers
 import java.time.Duration
 import kotlinx.serialization.Serializable
@@ -59,8 +61,35 @@ data class WorkerClaimResponse(
 class WorkerApiException(val statusCode: Int, val errorCode: String) :
     Exception("Request failed with status $statusCode: $errorCode")
 
+/**
+ * The broker couldn't be reached at all — DNS didn't resolve, the connection was refused, or it
+ * timed out. Extends [IOException] so the registration poll's transient-retry loop still treats a
+ * momentary blip as retryable, while the initial call surfaces it as a clean message (no stack
+ * trace) — see the top-level handler in `main`.
+ */
+class BrokerUnreachableException(val brokerHost: String, cause: Throwable) :
+    IOException(
+        "Couldn't reach the broker at $brokerHost (${cause.message ?: cause::class.simpleName}). " +
+            "Check the URL is the broker's base — e.g. https://api-xxxx.a.run.app, with no " +
+            "/worker/... path — and your network connection.",
+        cause,
+    )
+
 private val json = Json { ignoreUnknownKeys = true }
 private val httpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build()
+
+/**
+ * Sends [request], translating a failure to even reach the host into [BrokerUnreachableException].
+ */
+private fun send(request: HttpRequest): HttpResponse<String> =
+    try {
+      httpClient.send(request, BodyHandlers.ofString())
+    } catch (e: IOException) {
+      throw BrokerUnreachableException("${request.uri().scheme}://${request.uri().authority}", e)
+    } catch (e: InterruptedException) {
+      Thread.currentThread().interrupt()
+      throw BrokerUnreachableException("${request.uri().scheme}://${request.uri().authority}", e)
+    }
 
 /**
  * Calls `POST <brokerBaseUrl>/worker/v2/registrations`, exchanging a one-time `wle_` enrollment
@@ -88,7 +117,7 @@ fun registerWorker(
           )
           .build()
 
-  val response = httpClient.send(request, BodyHandlers.ofString())
+  val response = send(request)
   if (response.statusCode() != 200) {
     throw WorkerApiException(response.statusCode(), errorReason(response.body()))
   }
@@ -109,7 +138,7 @@ fun fetchSelfStatus(
           .GET()
           .build()
 
-  val response = httpClient.send(request, BodyHandlers.ofString())
+  val response = send(request)
   if (response.statusCode() != 200) {
     throw WorkerApiException(response.statusCode(), errorReason(response.body()))
   }
@@ -134,7 +163,7 @@ fun claimToken(
           )
           .build()
 
-  val response = httpClient.send(request, BodyHandlers.ofString())
+  val response = send(request)
   if (response.statusCode() != 200) {
     throw WorkerApiException(response.statusCode(), errorReason(response.body()))
   }
@@ -159,7 +188,7 @@ fun claimWorkload(
           )
           .build()
 
-  val response = httpClient.send(request, BodyHandlers.ofString())
+  val response = send(request)
   if (response.statusCode() != 200) {
     throw WorkerApiException(response.statusCode(), errorReason(response.body()))
   }
