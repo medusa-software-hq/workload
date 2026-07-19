@@ -51,9 +51,26 @@ data class WorkerClaimResponse(
     val image: ClaimImage? = null,
 )
 
+@Serializable
+data class WorkerIdTokenClaimResponse(
+    val idToken: String,
+    val expiresAt: String,
+    val serviceAccount: String,
+    val profileId: String,
+    val revision: Int,
+    val audience: String,
+)
+
 @Serializable private data class RegisterWorkerRequest(val name: String, val hostname: String?)
 
 @Serializable private data class TokenClaimRequest(val profileId: String)
+
+@Serializable
+private data class IdTokenClaimRequest(
+    val profileId: String,
+    val audience: String,
+    val includeEmail: Boolean,
+)
 
 @Serializable private data class WorkerErrorResponse(val error: String)
 
@@ -164,6 +181,35 @@ fun claimToken(
           .build()
 
   val response = send(request)
+  if (response.statusCode() != 200) {
+    throw WorkerApiException(response.statusCode(), errorReason(response.body()))
+  }
+  return json.decodeFromString(response.body())
+}
+
+/** Calls `POST <brokerBaseUrl>/worker/v1/id-token`: an audience-bound OIDC ID token for the SA. */
+fun claimIdToken(
+    brokerBaseUrl: String,
+    workerId: String,
+    workerSecret: String,
+    profileId: String,
+    audience: String,
+    includeEmail: Boolean,
+): WorkerIdTokenClaimResponse {
+  val request =
+      HttpRequest.newBuilder()
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v1/id-token"))
+          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Content-Type", "application/json")
+          .timeout(Duration.ofSeconds(10))
+          .POST(
+              HttpRequest.BodyPublishers.ofString(
+                  json.encodeToString(IdTokenClaimRequest(profileId, audience, includeEmail))
+              )
+          )
+          .build()
+
+  val response = httpClient.send(request, BodyHandlers.ofString())
   if (response.statusCode() != 200) {
     throw WorkerApiException(response.statusCode(), errorReason(response.body()))
   }

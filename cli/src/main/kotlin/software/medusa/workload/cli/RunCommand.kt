@@ -406,6 +406,7 @@ class RunCommand : CliktCommand(name = "run") {
             RefreshingTokenCache(brokerTokenClaimer(config, profileId)),
             InetSocketAddress(primary, 0),
             ::isTrustedRunPeer,
+            idTokenClaimer = brokerIdTokenClaimer(config, profileId),
         )
     emulator.start()
     val metadataAddress = "${primary.hostAddress}:${emulator.port}"
