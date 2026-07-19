@@ -1,0 +1,29 @@
+# The M4-A6 Cloudflare front door for the workload broker. Deployed by the manual
+# "Deploy front door" workflow (.github/workflows/deploy-front-door.yml). See src/index.js and
+# plan/m4/design/00-enrollment-tokens.md § Edge & cost protection.
+
+name = "workload-front-door"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+
+# Cloudflare account "My Cloudflare Account" (discovered via the API during the A6 spike). Not a
+# secret — it's an account identifier.
+account_id = "b703ded0019355a0913800063af2a5f5"
+
+# Bind the Worker directly to the API hostname as a custom domain: Cloudflare manages its DNS record
+# and TLS certificate. Proxies to the run.app origin below.
+routes = [
+  { pattern = "api.workload-baseline.medusa.software", custom_domain = true },
+]
+
+[vars]
+# The broker's Cloud Run origin. Public today; IAM-locked (--no-allow-unauthenticated) at the A6
+# cutover, after which only requests carrying the Worker-minted X-Serverless-Authorization pass
+# Google's front end.
+ORIGIN_URL = "https://api-s5hue5meiq-ew.a.run.app"
+# Audience for the invoker-SA ID token — the Cloud Run service URL.
+TARGET_AUDIENCE = "https://api-s5hue5meiq-ew.a.run.app"
+
+# INVOKER_SA_KEY (the front-door-invoker SA key JSON) is a *secret*, not set here — it's pushed by
+# the rotation workflow (A6.3/A7). Until it exists the Worker proxies without the platform header,
+# which is fine while the broker is still public.

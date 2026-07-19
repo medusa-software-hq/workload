@@ -1,0 +1,30 @@
+name: Deploy front door
+
+# Manual for now (the front door is being rolled out; see M4-A6). Deploys the Cloudflare Worker in
+# apps/front-door and, via its wrangler custom-domain route, stands up
+# api.workload-baseline.medusa.software in front of the broker. Additive while the broker is still
+# public — the new hostname works alongside the run.app URL. Switch to a push trigger on
+# apps/front-door/** once the front door is the primary path (post-cutover).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy front-door Worker
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Deploy the Worker
+        working-directory: apps/front-door
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: npx --yes wrangler@4 deploy
