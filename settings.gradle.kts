@@ -14,6 +14,10 @@ rootProject.name = "workload"
 // that module (and its subprojects) — which is what each module's Taskfile relies on.
 include(":cli")
 
+// A tiny Kotlin app packaged as the hand-test container image (images/hello-workload) — an ordinary
+// google-cloud-storage client that proves the Beacon path end to end from inside a `workload run`.
+include(":images:hello-workload")
+
 include(":libraries:docker-connector")
 
 include(":libraries:token-format")

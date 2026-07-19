@@ -1,16 +1,14 @@
-# A deliberately non-trivial "hello" image: it proves the whole workload path actually worked,
-# rather than just exiting 0 like busybox does.
+# The demo/diagnostic image the manual end-to-end test runs. It's an ordinary Kotlin/JVM app that
+# reads a GCS object with google-cloud-storage — no auth code of its own; the credential comes from
+# the metadata server the CLI runs (M4 Beacon), via ADC. See src/ and the README.
 #
-# Multi-arch matters here (see the publish workflow's `platforms`): this runs on developer Macs and
-# on the arm64 Ubuntu VM, not on Cloud Run — so unlike the SPA image, amd64-only would be useless.
-FROM alpine:3.21
+# The fat jar is built by Gradle *before* this image (the publish workflow runs
+# `./gradlew :images:hello-workload:shadowJar`) and is architecture-neutral, so a single jar serves
+# every platform; only the JRE base is multi-arch. Multi-arch matters here (unlike the SPA image):
+# this runs on developer Macs and the arm64 Ubuntu VM, not on Cloud Run.
+FROM eclipse-temurin:21-jre
 
-# coreutils: sha256sum. curl: asking Google who the brokered token belongs to.
-RUN apk add --no-cache coreutils curl
+COPY build/libs/hello-workload.jar /app/hello-workload.jar
 
-COPY hello.sh /usr/local/bin/hello-workload
-RUN chmod +x /usr/local/bin/hello-workload
-
-# No CMD args: `workload run` never overrides the image's command — the profile's image decides
-# what runs — so everything is driven by env vars instead.
-ENTRYPOINT ["/usr/local/bin/hello-workload"]
+# No CMD/args: `workload run` never overrides the image's command — the profile's env drives it.
+ENTRYPOINT ["java", "-jar", "/app/hello-workload.jar"]

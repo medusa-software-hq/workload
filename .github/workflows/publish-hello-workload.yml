@@ -41,6 +41,16 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker "${{ vars.IT_REGISTRY_HOSTNAME }}" --quiet
 
+      # The image is a Kotlin/JVM app. Build its fat jar here, once: it's architecture-neutral, so
+      # the multi-arch Docker build below just copies the same jar onto each arch's JRE base.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build the hello-workload fat jar
+        run: ./gradlew :images:hello-workload:shadowJar
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
 
