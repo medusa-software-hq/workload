@@ -19,6 +19,7 @@ fun main() {
           impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
           imageDigestResolver = AlwaysResolvedImageDigestResolver,
           workerTokenBroker = WorkerTokenBrokerService(fleetStore, FakeTokenMinter),
+          workerIdTokenBroker = WorkerIdTokenBrokerService(fleetStore, FakeTokenMinter),
           workerClaimService = WorkerClaimService(fleetStore, FakeTokenMinter),
           registrationService = RegistrationService(fleetStore),
           selfStatusService = SelfStatusService(fleetStore),

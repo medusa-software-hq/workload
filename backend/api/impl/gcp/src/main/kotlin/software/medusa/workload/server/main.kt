@@ -67,6 +67,7 @@ fun main() {
           tokenMinter = tokenMinter,
           tokenLifetimeSeconds = tokenLifetimeSeconds,
       )
+  val workerIdTokenBroker = WorkerIdTokenBrokerService(fleetStore, tokenMinter)
 
   buildServer(
           originRegex = corsOriginRegex,
@@ -77,6 +78,7 @@ fun main() {
           impersonationVerifier = IamImpersonationVerifier(iamCredentialsClient),
           imageDigestResolver = GcpImageDigestResolver(iamCredentialsClient),
           workerTokenBroker = workerTokenBroker,
+          workerIdTokenBroker = workerIdTokenBroker,
           workerClaimService = workerClaimService,
           registrationService = RegistrationService(fleetStore),
           selfStatusService = SelfStatusService(fleetStore),

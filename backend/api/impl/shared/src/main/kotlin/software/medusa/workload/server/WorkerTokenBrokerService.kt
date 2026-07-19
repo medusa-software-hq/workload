@@ -12,7 +12,17 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 
-@Serializable internal data class TokenClaimRequest(val profileId: String)
+/**
+ * The worker-plane claim body. [audience]/[includeEmail] are used only by the ID-token endpoint
+ * (`/worker/{v1,v2}/id-token`); `/token` and `/claim` ignore them, so the shared resolver parses
+ * one shape for all three.
+ */
+@Serializable
+internal data class TokenClaimRequest(
+    val profileId: String,
+    val audience: String? = null,
+    val includeEmail: Boolean = false,
+)
 
 @Serializable
 internal data class WorkerTokenResponse(

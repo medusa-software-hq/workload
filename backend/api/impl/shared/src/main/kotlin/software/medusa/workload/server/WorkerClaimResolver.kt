@@ -12,6 +12,9 @@ internal data class ResolvedClaim(
     val workerId: WorkerId,
     val profileId: ProfileId,
     val revision: ProfileRevision,
+    /** ID-token endpoint only: the caller-chosen audience and whether to embed the SA email. */
+    val audience: String? = null,
+    val includeEmail: Boolean = false,
 )
 
 internal sealed interface ClaimOutcome {
@@ -196,7 +199,15 @@ internal class WorkerClaimResolver(
       )
     }
 
-    return ClaimOutcome.Allowed(ResolvedClaim(workerId, profileId, revision))
+    return ClaimOutcome.Allowed(
+        ResolvedClaim(
+            workerId,
+            profileId,
+            revision,
+            audience = request.audience,
+            includeEmail = request.includeEmail,
+        )
+    )
   }
 
   private fun unauthorized(): HttpResponse =
