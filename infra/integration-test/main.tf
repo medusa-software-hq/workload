@@ -76,6 +76,7 @@ resource "google_project_service" "apis" {
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "secretmanager.googleapis.com",
+    "storage.googleapis.com",
   ])
 
   project            = var.gcp_project_id
@@ -205,6 +206,43 @@ locals {
   hand_test_demo_secret_value = "hello-workload-demo-secret-value"
 }
 
+# A sample GCS object for the hand test to *fetch from inside the container*, using nothing but
+# `gcloud storage` and the brokered credential the metadata server serves — the way any real
+# workload reads a bucket. Where the secret proves worker-side resolution (M2), this proves the
+# in-container, GCE-native path end to end: metadata server -> ADC -> Storage API -> a live object.
+# Bucket name is derived from the (globally-unique) project id; content is a committed non-secret
+# value so the run can verify it by fingerprint.
+resource "google_storage_bucket" "hand_test_probe" {
+  project                     = var.gcp_project_id
+  name                        = "${var.gcp_project_id}-hello-probe"
+  location                    = module.common.gcp_primary_location
+  uniform_bucket_level_access = true
+  force_destroy               = true
+
+  depends_on = [google_project_service.apis["storage.googleapis.com"]]
+}
+
+resource "google_storage_bucket_object" "hand_test_probe" {
+  bucket  = google_storage_bucket.hand_test_probe.name
+  name    = "hello.txt"
+  content = local.hand_test_probe_object_content
+}
+
+locals {
+  # sha256 of this is what hello-workload prints for the fetched object — same verify-by-fingerprint
+  # idea as the secret, but for a resource the container reads itself.
+  hand_test_probe_object_content = "hello from a real GCS object, fetched via the metadata server\n"
+}
+
+# The hand-test SA can read that object (and only that). Direct grant rather than through the
+# impersonation module — the module covers registry + secrets; this is the one bucket the fixture
+# needs, and an explicit member reads clearer than a new module input for a throwaway fixture.
+resource "google_storage_bucket_iam_member" "hand_test_can_read_probe" {
+  bucket = google_storage_bucket.hand_test_probe.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.hand_test.email}"
+}
+
 module "hand_test_impersonation" {
   source = "../modules/workload-impersonation"
 
@@ -298,9 +336,16 @@ output "hand_test_profile_inputs" {
     secret_env_var = {
       DEMO_SECRET = "${google_secret_manager_secret.hand_test_demo.id}/versions/latest"
     }
-    # hello-workload prints a sha256 prefix per env var; these are what a correct run must show.
+    # Plain (non-secret) env. HELLO_PROBE_GCS tells the image which object to fetch with
+    # `gcloud storage` — the in-container, metadata-server-authenticated resource read.
+    env_var = {
+      HELLO_PROBE_GCS = "gs://${google_storage_bucket.hand_test_probe.name}/${google_storage_bucket_object.hand_test_probe.name}"
+    }
+    # hello-workload prints a sha256 prefix per env var + for the fetched object; these are what a
+    # correct run must show.
     expected_fingerprints = {
-      DEMO_SECRET = substr(sha256(local.hand_test_demo_secret_value), 0, 12)
+      DEMO_SECRET     = substr(sha256(local.hand_test_demo_secret_value), 0, 12)
+      HELLO_PROBE_GCS = substr(sha256(local.hand_test_probe_object_content), 0, 12)
     }
   }
 }
