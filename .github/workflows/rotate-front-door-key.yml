@@ -1,0 +1,76 @@
+name: Rotate front-door invoker key
+
+# Mints (or rotates) the front-door-invoker service-account key and pushes it straight into the
+# Cloudflare Worker's INVOKER_SA_KEY secret, so the front door can attach X-Serverless-Authorization
+# (M4-A6.3, and the ongoing A7 rotation). The key is created on the runner via WIF and handed only to
+# the Worker secret — it never touches a laptop and is never printed. Manual for now; A7 adds a
+# schedule and an end-to-end probe once the front door is the primary path.
+#
+# The CI identity may create/delete keys for *only* this SA (resource-level grant in
+# backend/infra/gcp-front-door-invoker.tf).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  NO_COLOR: 1
+  WORKER_NAME: workload-front-door
+  CF_ACCOUNT: b703ded0019355a0913800063af2a5f5
+  CF_API: https://api.cloudflare.com/client/v4
+
+jobs:
+  rotate:
+    name: Rotate the invoker key
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Mint a new key and push it to the Worker secret
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SA: front-door-invoker@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+        run: |
+          set -euo pipefail
+          umask 077
+          gcloud iam service-accounts keys create /tmp/key.json \
+            --iam-account="$SA" --project="${{ vars.GCP_PROJECT_ID }}"
+          NEW_KEY_ID=$(jq -r .private_key_id /tmp/key.json)
+          echo "Minted key $NEW_KEY_ID"
+
+          # Build the request body with jq so the multi-line key JSON is safely escaped; never echo it.
+          jq -n --arg text "$(cat /tmp/key.json)" \
+            '{name:"INVOKER_SA_KEY", text:$text, type:"secret_text"}' > /tmp/payload.json
+          result=$(curl -sS -X PUT \
+            "$CF_API/accounts/$CF_ACCOUNT/workers/scripts/$WORKER_NAME/secrets" \
+            -H "Authorization: Bearer $CF_TOKEN" -H "Content-Type: application/json" \
+            --data @/tmp/payload.json | jq -r '.success')
+          rm -f /tmp/key.json /tmp/payload.json
+          test "$result" = "true" || { echo "Pushing the Worker secret failed"; exit 1; }
+          echo "Pushed the new key to the Worker's INVOKER_SA_KEY secret."
+          echo "NEW_KEY_ID=$NEW_KEY_ID" >> "$GITHUB_ENV"
+
+      - name: Delete older user-managed keys
+        env:
+          SA: front-door-invoker@${{ vars.GCP_PROJECT_ID }}.iam.gserviceaccount.com
+        run: |
+          set -euo pipefail
+          # Only user-managed keys — never touch the Google-managed system keys. Keep the one just
+          # pushed to the Worker; drop the rest (the Worker only ever uses the key in its secret).
+          keys=$(gcloud iam service-accounts keys list --iam-account="$SA" --managed-by=user --format='value(name)')
+          for key in $keys; do
+            id="${key##*/}"
+            if [ "$id" != "$NEW_KEY_ID" ]; then
+              echo "Deleting old key $id"
+              gcloud iam service-accounts keys delete "$id" --iam-account="$SA" --quiet || true
+            fi
+          done

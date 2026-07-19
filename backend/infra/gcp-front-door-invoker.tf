@@ -27,3 +27,18 @@ output "front_door_invoker_sa_email" {
   description = "Email of the SA the front-door Worker impersonates to mint its X-Serverless-Authorization token."
   value       = google_service_account.front_door_invoker.email
 }
+
+# Let the CI/CD identity mint and delete keys for *this SA only* — the resource-level grant the
+# anode-rotation workflow (rotate-front-door-key.yml) needs to rotate the Worker's key. Same pattern
+# as the impersonation module: the marginal power is "can mint front-door-invoker keys", and CI can
+# already deploy the backend, which is strictly stronger. See design 00 § anode rotation.
+variable "ci_service_account_email" {
+  description = "Email of the CI/CD service account (vars.GCP_CICD_SA_EMAIL) that rotates the front-door invoker key."
+  type        = string
+}
+
+resource "google_service_account_iam_member" "ci_rotates_front_door_key" {
+  service_account_id = google_service_account.front_door_invoker.name
+  role               = "roles/iam.serviceAccountKeyAdmin"
+  member             = "serviceAccount:${var.ci_service_account_email}"
+}
