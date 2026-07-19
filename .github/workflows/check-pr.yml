@@ -58,3 +58,7 @@ jobs:
   check-token-format:
     name: token-format
     uses: ./.github/workflows/check-token-format.yml
+
+  check-front-door-refresher:
+    name: front-door-refresher
+    uses: ./.github/workflows/check-front-door-refresher.yml
