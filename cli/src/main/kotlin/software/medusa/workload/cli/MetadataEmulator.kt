@@ -32,6 +32,15 @@ fun interface TokenClaimer {
 }
 
 /**
+ * One call to the broker's ID-token endpoint for a caller-chosen [audience]. Returns the raw OIDC
+ * JWT the metadata `identity` endpoint serves. Injectable for offline testing; when absent, the
+ * emulator 404s `identity` as before.
+ */
+fun interface IdTokenClaimer {
+  fun claim(audience: String, includeEmail: Boolean): String
+}
+
+/**
  * Caches a [BrokeredToken] and re-claims it when it nears expiry — the emulation of a metadata
  * server's "mint on demand" behaviour. Refresh is **single-flight**: concurrent callers that arrive
  * while the cache is cold (or stale) share one broker call rather than each firing their own.
@@ -98,6 +107,7 @@ class MetadataEmulator(
     private val tokenCache: RefreshingTokenCache,
     bindAddress: InetSocketAddress,
     private val peerAllowed: (InetAddress) -> Boolean,
+    private val idTokenClaimer: IdTokenClaimer? = null,
 ) : AutoCloseable {
   private val server = HttpServer.create(bindAddress, 0)
 
@@ -183,7 +193,7 @@ class MetadataEmulator(
       "$SA_DEFAULT/email" -> serveWithToken(exchange) { it.serviceAccountEmail }
       "$SA_DEFAULT/scopes" -> respond(exchange, 200, "text/plain", "$CLOUD_PLATFORM_SCOPE\n")
       "$SA_DEFAULT/aliases" -> respond(exchange, 200, "text/plain", "default\n")
-      "$SA_DEFAULT/identity" -> serveIdentityUnsupported(exchange)
+      "$SA_DEFAULT/identity" -> serveIdentity(exchange)
       "$INSTANCE/universe/universe-domain" -> respond(exchange, 200, "text/plain", "googleapis.com")
       "$PROJECT/project-id" -> serveProjectId(exchange)
       "$PROJECT/numeric-project-id" -> serveNumericProjectIdUnsupported(exchange)
@@ -242,12 +252,40 @@ class MetadataEmulator(
     block(token)
   }
 
-  private fun serveIdentityUnsupported(exchange: HttpExchange) {
-    log.warn(
-        "metadata: identity (ID-token) endpoint requested but unsupported — the broker mints " +
-            "access tokens only; serving 404 (see M4 design note 02, ID-token brokering)",
-    )
-    respond(exchange, 404, "text/plain", "")
+  /**
+   * `…/service-accounts/default/identity?audience=…&format=[standard|full]` — an OIDC ID token for
+   * the profile's target SA, bound to the caller-chosen audience, exactly as GCE serves it (raw
+   * JWT, `text/plain`). `format=full` embeds the SA email. A missing audience is a 400, as on GCE.
+   * When no [idTokenClaimer] is wired (the broker can't mint ID tokens), this 404s as before.
+   */
+  private fun serveIdentity(exchange: HttpExchange) {
+    val claimer = idTokenClaimer
+    if (claimer == null) {
+      log.warn(
+          "metadata: identity (ID-token) endpoint requested but no ID-token claimer is wired; " +
+              "serving 404 (see M4 design note 02, ID-token brokering)",
+      )
+      respond(exchange, 404, "text/plain", "")
+      return
+    }
+
+    val params = parseQuery(exchange.requestURI.rawQuery)
+    val audience = params["audience"]
+    if (audience.isNullOrBlank()) {
+      respond(exchange, 400, "text/plain", "non-empty audience parameter required\n")
+      return
+    }
+    val includeEmail = params["format"].equals("full", ignoreCase = true)
+
+    try {
+      respond(exchange, 200, "text/plain", claimer.claim(audience, includeEmail))
+    } catch (e: WorkerApiException) {
+      log.warn("metadata: broker refused ID-token claim ({}); serving 500", e.errorCode)
+      respond(exchange, 500, "text/plain", "ID-token claim failed: ${e.errorCode}\n")
+    } catch (e: IOException) {
+      log.warn("metadata: broker unreachable for ID-token claim ({}); serving 500", e.message)
+      respond(exchange, 500, "text/plain", "ID-token claim failed\n")
+    }
   }
 
   private fun serveNumericProjectIdUnsupported(exchange: HttpExchange) {
@@ -340,3 +378,17 @@ fun brokerTokenClaimer(config: WorkloadConfig, profileId: String): TokenClaimer 
       serviceAccountEmail = claim.serviceAccount,
   )
 }
+
+/** Builds the production [IdTokenClaimer] that claims audience-bound ID tokens from the broker. */
+fun brokerIdTokenClaimer(config: WorkloadConfig, profileId: String): IdTokenClaimer =
+    IdTokenClaimer { audience, includeEmail ->
+      claimIdToken(
+              config.brokerBaseUrl,
+              config.workerId,
+              config.workerSecret,
+              profileId,
+              audience,
+              includeEmail,
+          )
+          .idToken
+    }

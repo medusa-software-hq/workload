@@ -36,11 +36,13 @@ private fun emulator(
     refreshSkew: Duration = Duration.ofMinutes(2),
     clock: Clock = Clock.systemUTC(),
     peerAllowed: (InetAddress) -> Boolean = { it.isLoopbackAddress },
+    idTokenClaimer: IdTokenClaimer? = null,
 ): MetadataEmulator =
     MetadataEmulator(
             RefreshingTokenCache(claimer, refreshSkew, clock),
             InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
             peerAllowed,
+            idTokenClaimer,
         )
         .also { it.start() }
 
@@ -112,11 +114,55 @@ class MetadataEmulatorTest {
   }
 
   @Test
-  fun `identity endpoint is a deliberate 404 until ID-token brokering lands`() {
+  fun `identity endpoint 404s when no ID-token claimer is wired`() {
     emulator({ token() }).use { emu ->
       assertEquals(
           404,
+          get(emu, "/computeMetadata/v1/instance/service-accounts/default/identity?audience=x")
+              .statusCode(),
+      )
+    }
+  }
+
+  @Test
+  fun `identity endpoint serves the ID token for the requested audience`() {
+    val claimer = IdTokenClaimer { audience, includeEmail ->
+      "jwt-for-$audience-email=$includeEmail"
+    }
+    emulator({ token() }, idTokenClaimer = claimer).use { emu ->
+      val standard =
+          get(emu, "/computeMetadata/v1/instance/service-accounts/default/identity?audience=flow")
+      assertEquals(200, standard.statusCode())
+      assertEquals("jwt-for-flow-email=false", standard.body())
+
+      val full =
+          get(
+              emu,
+              "/computeMetadata/v1/instance/service-accounts/default/identity?audience=flow&format=full",
+          )
+      assertEquals("jwt-for-flow-email=true", full.body())
+    }
+  }
+
+  @Test
+  fun `identity endpoint requires an audience`() {
+    val claimer = IdTokenClaimer { _, _ -> "jwt" }
+    emulator({ token() }, idTokenClaimer = claimer).use { emu ->
+      assertEquals(
+          400,
           get(emu, "/computeMetadata/v1/instance/service-accounts/default/identity").statusCode(),
+      )
+    }
+  }
+
+  @Test
+  fun `identity endpoint 500s when the broker refuses the ID-token claim`() {
+    val claimer = IdTokenClaimer { _, _ -> throw WorkerApiException(403, "not_granted") }
+    emulator({ token() }, idTokenClaimer = claimer).use { emu ->
+      assertEquals(
+          500,
+          get(emu, "/computeMetadata/v1/instance/service-accounts/default/identity?audience=x")
+              .statusCode(),
       )
     }
   }

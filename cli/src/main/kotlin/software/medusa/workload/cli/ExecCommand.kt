@@ -127,6 +127,7 @@ class ExecCommand : CliktCommand(name = "exec") {
             RefreshingTokenCache(brokerTokenClaimer(config, profileId)),
             InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
             InetAddress::isLoopbackAddress,
+            idTokenClaimer = brokerIdTokenClaimer(config, profileId),
         )
     emulator.start()
     echo("Metadata:    http://${emulator.hostPort} (tokens refresh automatically)", err = true)
