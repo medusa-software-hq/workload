@@ -24,6 +24,7 @@ ORIGIN_URL = "https://api-s5hue5meiq-ew.a.run.app"
 # Audience for the invoker-SA ID token — the Cloud Run service URL.
 TARGET_AUDIENCE = "https://api-s5hue5meiq-ew.a.run.app"
 
-# INVOKER_SA_KEY (the front-door-invoker SA key JSON) is a *secret*, not set here — it's pushed by
-# the rotation workflow (A6.3/A7). Until it exists the Worker proxies without the platform header,
-# which is fine while the broker is still public.
+# INVOKER_ID_TOKEN (a short-lived Google ID token for front-door-invoker) is a *secret*, not set
+# here — it's minted and pushed by the refresh-front-door-token workflow via impersonation and
+# rotated on a cron (the org disables SA keys, so the front door is keyless). Until it exists the
+# Worker proxies without the platform header, which is fine while the broker is still public.

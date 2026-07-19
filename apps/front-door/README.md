@@ -9,17 +9,19 @@ origin.
 
 - Forwards the request unchanged to the `run.app` origin, **preserving the
   client's `Authorization`** header (the worker/admin bearer).
-- When the `INVOKER_SA_KEY` secret is present, mints a short-lived Google **ID
-  token** for the `front-door-invoker` service account (audience = the origin,
-  cached ~55 min in-isolate) and attaches it as **`X-Serverless-Authorization`**.
-  That lets the broker run `--no-allow-unauthenticated`: Google's front end
-  admits only Worker-vetted traffic and rejects direct `run.app` hits for free.
-  The two auth headers coexist — verified in
-  [`plan/m4/findings/front-door.md`](../../../plan/m4/design/00-enrollment-tokens.md).
+- When the `INVOKER_ID_TOKEN` secret is present, attaches it as
+  **`X-Serverless-Authorization`**. That lets the broker run
+  `--no-allow-unauthenticated`: Google's front end admits only Worker-vetted
+  traffic and rejects direct `run.app` hits for free. The two auth headers
+  coexist — verified in
+  [`plan/m4/findings/front-door.md`](../../../plan/m4/findings/front-door.md).
 
-Before the key exists (or if minting fails) it simply proxies without the
-platform header — harmless while the broker is still public, a clean 403 once
-it's locked.
+**Keyless by design.** The org disables service-account keys, so there's no key
+in the Worker. `INVOKER_ID_TOKEN` is a short-lived (~1 h) Google ID token for
+`front-door-invoker`, minted by the **Refresh front-door token** workflow via
+impersonation and rotated on a cron with generous overlap. If it's missing or
+stale the Worker just proxies without the platform header — harmless while the
+broker is still public, a clean 403 once it's locked.
 
 ## Deploy
 
@@ -30,9 +32,10 @@ until the cutover re-points the SPA and the fleet.
 
 ## Secrets / vars
 
-- `INVOKER_SA_KEY` (secret) — the `front-door-invoker` SA key JSON. **Never set by
-  hand**; pushed by the rotation workflow (A6.3/A7), which mints it via WIF so the
-  key never touches a laptop.
+- `INVOKER_ID_TOKEN` (secret) — a short-lived Google ID token for
+  `front-door-invoker`. **Never set by hand**; minted and pushed by the **Refresh
+  front-door token** workflow (`.github/workflows/refresh-front-door-token.yml`)
+  via impersonation (WIF), rotated on a cron. Keyless — no SA key exists.
 - `ORIGIN_URL` / `TARGET_AUDIENCE` (vars in `wrangler.toml`) — the broker's run.app
   URL.
 

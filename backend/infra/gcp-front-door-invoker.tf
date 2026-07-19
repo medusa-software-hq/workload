@@ -28,17 +28,19 @@ output "front_door_invoker_sa_email" {
   value       = google_service_account.front_door_invoker.email
 }
 
-# Let the CI/CD identity mint and delete keys for *this SA only* — the resource-level grant the
-# anode-rotation workflow (rotate-front-door-key.yml) needs to rotate the Worker's key. Same pattern
-# as the impersonation module: the marginal power is "can mint front-door-invoker keys", and CI can
-# already deploy the backend, which is strictly stronger. See design 00 § anode rotation.
+# Let the CI/CD identity mint short-lived *ID tokens* for this SA (impersonation) — the resource-level
+# grant the token-refresh workflow (refresh-front-door-token.yml) needs. The org disables
+# service-account *keys* (constraints/iam.disableServiceAccountKeyCreation), so the front door is
+# keyless: no key ever exists, only a 1-hour ID token the Worker attaches, refreshed on a cron. The
+# marginal power here is "can mint front-door-invoker ID tokens" (audience-bound, run.invoker only),
+# and CI can already deploy the backend, which is strictly stronger. See design 00 § anode rotation.
 variable "ci_service_account_email" {
-  description = "Email of the CI/CD service account (vars.GCP_CICD_SA_EMAIL) that rotates the front-door invoker key."
+  description = "Email of the CI/CD service account (vars.GCP_CICD_SA_EMAIL) that mints the front-door invoker ID token."
   type        = string
 }
 
-resource "google_service_account_iam_member" "ci_rotates_front_door_key" {
+resource "google_service_account_iam_member" "ci_mints_front_door_token" {
   service_account_id = google_service_account.front_door_invoker.name
-  role               = "roles/iam.serviceAccountKeyAdmin"
+  role               = "roles/iam.serviceAccountOpenIdTokenCreator"
   member             = "serviceAccount:${var.ci_service_account_email}"
 }
