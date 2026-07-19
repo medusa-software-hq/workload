@@ -110,6 +110,7 @@ fun buildServer(
     impersonationVerifier: ImpersonationVerifier,
     imageDigestResolver: ImageDigestResolver,
     workerTokenBroker: HttpService? = null,
+    workerIdTokenBroker: HttpService? = null,
     workerClaimService: HttpService? = null,
     registrationService: HttpService? = null,
     selfStatusService: HttpService? = null,
@@ -148,6 +149,10 @@ fun buildServer(
       workerTokenBroker?.decorate(
           ThrottlingService.newDecorator(ThrottlingStrategy.rateLimiting(workerTokenBrokerQps))
       )
+  val throttledWorkerIdTokenBroker =
+      workerIdTokenBroker?.decorate(
+          ThrottlingService.newDecorator(ThrottlingStrategy.rateLimiting(workerTokenBrokerQps))
+      )
   val throttledWorkerClaimService =
       workerClaimService?.decorate(
           ThrottlingService.newDecorator(ThrottlingStrategy.rateLimiting(workerTokenBrokerQps))
@@ -157,6 +162,9 @@ fun buildServer(
       buildMap<WorkerPlaneRoute, HttpService> {
         throttledWorkerTokenBroker?.let {
           put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/token"), it)
+        }
+        throttledWorkerIdTokenBroker?.let {
+          put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/id-token"), it)
         }
         throttledWorkerClaimService?.let {
           put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/claim"), it)
@@ -208,6 +216,12 @@ fun buildServer(
           route()
               .methods(HttpMethod.POST)
               .path("/worker/v2/token")
+              .build(it.decorate(v2WorkerCredentialDrop))
+        }
+        throttledWorkerIdTokenBroker?.let {
+          route()
+              .methods(HttpMethod.POST)
+              .path("/worker/v2/id-token")
               .build(it.decorate(v2WorkerCredentialDrop))
         }
         throttledWorkerClaimService?.let {
