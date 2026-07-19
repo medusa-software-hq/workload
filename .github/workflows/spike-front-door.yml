@@ -1,0 +1,155 @@
+name: Spike - front door
+
+# Manual only, throwaway. Verifies the two load-bearing assumptions of the M4-A6 Cloudflare
+# front-door design against real GCP, without touching the production `api` service or its DNS:
+#
+#   1. Cloud Run consumes `X-Serverless-Authorization` for platform IAM while passing the app's own
+#      `Authorization` header through untouched (so edge auth and app auth can coexist).
+#   2. A direct, un-authenticated hit on a `--no-allow-unauthenticated` service is rejected at
+#      Google's front end *before the container runs* (no app log ⇒ no billable instance time).
+#
+# It deploys a short-lived, IAM-locked echo service (spike-*), probes it, and deletes everything in a
+# final always() step. Findings get written up in plan/m4/findings/front-door.md, then this workflow
+# is removed. See M4 design 00-enrollment-tokens.md § Edge & cost protection, layer 2.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  NO_COLOR: 1
+  SERVICE_NAME: spike-front-door-echo
+
+jobs:
+  spike:
+    name: Front-door spike
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify Docker daemon is available
+        run: docker version
+
+      # Cloud Run only serves images from Artifact Registry / GCR, so re-tag a public echo image into
+      # this project's AR (same push pattern as the registry-auth integration test).
+      - name: Stage the echo image in Artifact Registry
+        run: |
+          set -euo pipefail
+          IMAGE="${{ vars.GCP_AR_REPO_ENDPOINT }}/spike-echo:${{ github.run_id }}"
+          gcloud auth configure-docker "${{ vars.GCP_AR_REPO_HOSTNAME }}" --quiet
+          docker pull ealen/echo-server:latest
+          docker tag ealen/echo-server:latest "$IMAGE"
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+      - name: Deploy a throwaway IAM-locked echo service
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$SERVICE_NAME" \
+            --image="$IMAGE" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ vars.GCP_PRIMARY_LOCATION }}" \
+            --platform=managed \
+            --no-allow-unauthenticated \
+            --max-instances=1 \
+            --quiet
+          URL=$(gcloud run services describe "$SERVICE_NAME" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ vars.GCP_PRIMARY_LOCATION }}" \
+            --format='value(status.url)')
+          echo "URL=$URL" >> "$GITHUB_ENV"
+          echo "Echo service URL: $URL"
+
+      - name: Grant the CI SA run.invoker on the echo service
+        run: |
+          set -euo pipefail
+          gcloud run services add-iam-policy-binding "$SERVICE_NAME" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ vars.GCP_PRIMARY_LOCATION }}" \
+            --member="serviceAccount:${{ vars.GCP_CICD_SA_EMAIL }}" \
+            --role="roles/run.invoker" \
+            --quiet
+
+      # ---- Claim 2: a direct un-authenticated hit is rejected at Google's edge ----
+      - name: 'Claim 2 — direct un-authenticated hit → 403'
+        run: |
+          set -euo pipefail
+          MARKER="reject-${{ github.run_id }}-$RANDOM"
+          echo "REJECT_MARKER=$MARKER" >> "$GITHUB_ENV"
+          CODE=$(curl -sS -o /tmp/reject.body -w '%{http_code}' "$URL/?probe=$MARKER" || true)
+          echo "Un-authenticated status: $CODE (expect 401 or 403 from Google's front end)"
+          echo "--- body ---"; cat /tmp/reject.body || true; echo
+          case "$CODE" in
+            401|403) echo "PASS: rejected at the edge" ;;
+            *) echo "FAIL: expected 401/403, got $CODE"; exit 1 ;;
+          esac
+
+      # ---- Claim 1: X-Serverless-Authorization passes IAM; Authorization passes through ----
+      - name: 'Claim 1 - header coexistence'
+        run: |
+          set -euo pipefail
+          echo "Minting an ID token for the CI SA (audience = the service URL)..."
+          ID_TOKEN=$(gcloud auth print-identity-token --audiences="$URL")
+          APP_MARKER="app-authz-${{ github.run_id }}-$RANDOM"
+          echo "COEXIST_MARKER=coexist-${{ github.run_id }}" >> "$GITHUB_ENV"
+          CODE=$(curl -sS -o /tmp/ok.json -w '%{http_code}' \
+            -H "X-Serverless-Authorization: Bearer $ID_TOKEN" \
+            -H "Authorization: Bearer $APP_MARKER" \
+            "$URL/?probe=coexist-${{ github.run_id }}")
+          echo "Authenticated status: $CODE (expect 200)"
+          echo "--- echo body ---"; cat /tmp/ok.json; echo
+          test "$CODE" = "200" || { echo "FAIL: expected 200"; exit 1; }
+          if grep -q "$APP_MARKER" /tmp/ok.json; then
+            echo "PASS: the app-level Authorization header reached the container intact"
+          else
+            echo "FAIL: the Authorization header did not pass through to the app"; exit 1
+          fi
+          if grep -qi "x-serverless-authorization" /tmp/ok.json; then
+            echo "NOTE: x-serverless-authorization was ALSO forwarded to the app (Google did not strip it)"
+          else
+            echo "PASS: x-serverless-authorization was consumed by Google, not forwarded"
+          fi
+
+      # ---- Supporting evidence for Claim 2: the rejected request produced no container log ----
+      - name: 'Evidence - no container log on reject'
+        env:
+          GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+        run: |
+          set -euo pipefail
+          echo "Waiting for logs to flush..."
+          sleep 25
+          BASE="resource.type=cloud_run_revision"
+          BASE="$BASE AND resource.labels.service_name=$SERVICE_NAME"
+          BASE="$BASE AND logName:\"stdout\""
+          read_logs() {
+            gcloud logging read "$BASE AND \"$1\"" \
+              --project="$GCP_PROJECT_ID" --freshness=15m --format='value(textPayload)'
+          }
+          echo "== stdout lines mentioning the REJECTED marker ($REJECT_MARKER) — expect 0 =="
+          read_logs "$REJECT_MARKER" | tee /tmp/reject_logs.txt || true
+          echo "count: $(grep -c . /tmp/reject_logs.txt || echo 0)"
+          echo
+          echo "== stdout lines mentioning the AUTHENTICATED marker ($COEXIST_MARKER) — expect >= 1 =="
+          read_logs "$COEXIST_MARKER" | tee /tmp/ok_logs.txt || true
+          echo "count: $(grep -c . /tmp/ok_logs.txt || echo 0)"
+
+      - name: Cleanup (always)
+        if: always()
+        run: |
+          echo "Deleting throwaway resources..."
+          gcloud run services delete "$SERVICE_NAME" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ vars.GCP_PRIMARY_LOCATION }}" --quiet || true
+          if [ -n "${IMAGE:-}" ]; then
+            gcloud artifacts docker images delete "$IMAGE" --delete-tags --quiet || true
+          fi
+          echo "Cleanup done."
