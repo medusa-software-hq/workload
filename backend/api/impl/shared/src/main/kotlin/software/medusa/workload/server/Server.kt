@@ -19,43 +19,11 @@ import software.medusa.workload.tokenformat.WorkloadToken
 
 private const val workerTokenBrokerQps = 5.0
 
-/** A worker-plane HTTP route: an exact path (relative to the worker prefix) plus method. */
-internal data class WorkerPlaneRoute(
-    val method: HttpMethod,
-    val path: String,
-)
-
 // A fresh, headers-only HttpResponse per call: HttpResponse.of(HttpStatus) synthesizes a text
 // body ("404 Not Found"), which fails the "no body" requirement; HttpResponse instances are also
 // single-use streams and must not be shared across requests.
 internal fun bareNotFound(): HttpResponse =
     HttpResponse.of(ResponseHeaders.of(HttpStatus.NOT_FOUND))
-
-/**
- * Wraps every route so worker-plane requests (path contains `/worker/v1/`) are gated by
- * [workerApiPathPrefix] before they reach any service. A wrong/missing prefix is internet
- * background noise (bot scanners): it gets a bare 404 (no body) counted in
- * [RejectedWorkerRequestCounter], never an audit-log line. Everything else (gRPC, `/health`) passes
- * through untouched — the prefix is anti-noise hygiene, not a security boundary. A correctly
- * prefixed request for a path/method not in [workerPlaneRoutes] is a plain 404, not counted as
- * rejected noise (it's not a wrong-prefix bot hit).
- */
-private fun workerApiPathPrefixDecorator(
-    workerApiPathPrefix: String,
-    workerPlaneRoutes: Map<WorkerPlaneRoute, HttpService>,
-): DecoratingHttpServiceFunction = DecoratingHttpServiceFunction { delegate, ctx, req ->
-  when (val match = matchWorkerApiPath(ctx.path(), workerApiPathPrefix)) {
-    WorkerApiPathMatch.NotWorkerPath -> delegate.serve(ctx, req)
-    WorkerApiPathMatch.PrefixMismatch -> {
-      RejectedWorkerRequestCounter.increment()
-      bareNotFound()
-    }
-    is WorkerApiPathMatch.Matched -> {
-      val route = WorkerPlaneRoute(ctx.method(), match.remainder)
-      workerPlaneRoutes[route]?.serve(ctx, req) ?: bareNotFound()
-    }
-  }
-}
 
 /**
  * Parse-and-drop for `/worker/v2/registrations`: a request whose Bearer credential isn't a
@@ -104,7 +72,6 @@ private val v2WorkerCredentialDrop: DecoratingHttpServiceFunction =
 fun buildServer(
     originRegex: String,
     port: Int,
-    workerApiPathPrefix: String,
     auth: DecoratingHttpServiceFunction,
     fleetStore: FleetStore,
     impersonationVerifier: ImpersonationVerifier,
@@ -112,7 +79,6 @@ fun buildServer(
     workerTokenBroker: HttpService? = null,
     workerIdTokenBroker: HttpService? = null,
     workerClaimService: HttpService? = null,
-    registrationService: HttpService? = null,
     selfStatusService: HttpService? = null,
     v2RegistrationService: HttpService? = null,
 ): Server {
@@ -158,25 +124,6 @@ fun buildServer(
           ThrottlingService.newDecorator(ThrottlingStrategy.rateLimiting(workerTokenBrokerQps))
       )
 
-  val workerPlaneRoutes =
-      buildMap<WorkerPlaneRoute, HttpService> {
-        throttledWorkerTokenBroker?.let {
-          put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/token"), it)
-        }
-        throttledWorkerIdTokenBroker?.let {
-          put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/id-token"), it)
-        }
-        throttledWorkerClaimService?.let {
-          put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/claim"), it)
-        }
-        registrationService?.let {
-          put(WorkerPlaneRoute(HttpMethod.POST, "/worker/v1/registrations"), it)
-        }
-        selfStatusService?.let {
-          put(WorkerPlaneRoute(HttpMethod.GET, "/worker/v1/registrations/self"), it)
-        }
-      }
-
   return Server.builder()
       .apply {
         http(port)
@@ -185,7 +132,7 @@ fun buildServer(
         service("/health", HealthCheckService.of())
 
         // Rejected-worker-request count, for the anti-bot-noise metric — see
-        // RejectedWorkerRequestCounter. Not behind the prefix: it's operational, not worker-plane.
+        // RejectedWorkerRequestCounter.
         service(
             "/internal/metrics",
             HttpService { _, _ ->
@@ -198,14 +145,11 @@ fun buildServer(
                 .decorate(auth),
         )
 
-        // The v2 worker plane is bare-hostname by design: the wle_/wlw_ token format is the filter
-        // now, so v2 is deliberately NOT behind the UUID path prefix (matchWorkerApiPath keys on
-        // "/worker/v1/", so "/worker/v2/..." falls through the prefix decorator to these routes).
-        // Only registration differs between the planes (the enrollment-token exchange); token,
-        // claim, and self-status reuse the very same services as v1 — they authenticate a worker by
-        // its stored secret hash and don't care which plane minted it (a v2 worker's secret is just
-        // a wlw_ token). This is what lets the CLI store the broker URL bare and speak v2 for
-        // everything.
+        // The worker plane is bare-hostname by design: the wle_/wlw_ token format is the filter, so
+        // the endpoints sit directly on the hostname with no path-prefix guard. Only registration
+        // has a plane-specific handler (the enrollment-token exchange); token, claim, and
+        // self-status authenticate a worker by its stored secret hash. This is what lets the CLI
+        // store the broker URL bare and speak the worker API for everything.
         v2RegistrationService?.let {
           route()
               .methods(HttpMethod.POST)
@@ -238,8 +182,6 @@ fun buildServer(
         }
 
         serviceUnder("/", grpcService.decorate(auth).decorate(cors))
-
-        decorator(workerApiPathPrefixDecorator(workerApiPathPrefix, workerPlaneRoutes))
       }
       .build()
 }

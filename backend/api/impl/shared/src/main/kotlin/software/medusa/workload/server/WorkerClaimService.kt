@@ -28,7 +28,7 @@ internal data class WorkerClaimResponse(
 )
 
 /**
- * Implements `POST /worker/v1/claim`: like `/worker/v1/token`, but the response also carries the
+ * Implements `POST /worker/v2/claim`: like `/worker/v2/token`, but the response also carries the
  * granted revision's env var payload — the foundation `workload exec` (M2 path A) and later
  * `workload run` build on. Secret **references only** ever cross the broker; values are resolved
  * worker-side, directly against Secret Manager, using the minted impersonated token.

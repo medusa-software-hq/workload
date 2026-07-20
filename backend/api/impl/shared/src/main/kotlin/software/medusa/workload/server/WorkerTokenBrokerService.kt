@@ -34,10 +34,10 @@ internal data class WorkerTokenResponse(
 )
 
 /**
- * Implements `POST /worker/v1/token`: a worker (authenticated as `Bearer
+ * Implements `POST /worker/v2/token`: a worker (authenticated as `Bearer
  * <workerId>.<workerSecret>`) claims a short-lived GCP access token impersonating the target
  * service account of a profile granted to it. Identity-only — for the token plus the revision's
- * full env/secret payload, see [WorkerClaimService] (`/worker/v1/claim`).
+ * full env/secret payload, see [WorkerClaimService] (`/worker/v2/claim`).
  *
  * Never logs the worker secret, the Authorization header, or the minted access token.
  */

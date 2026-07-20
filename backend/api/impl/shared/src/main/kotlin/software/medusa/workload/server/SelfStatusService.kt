@@ -22,7 +22,7 @@ internal data class SelfStatusResponse(
 )
 
 /**
- * Implements `GET /worker/v1/registrations/self`: a worker polling its own approval status,
+ * Implements `GET /worker/v2/registrations/self`: a worker polling its own approval status,
  * authenticated with `Bearer <workerId>.<workerSecret>` (accepted while `pending` or `active`).
  *
  * Failed auth (wrong/missing token, unknown worker, wrong secret, or a worker in a status other

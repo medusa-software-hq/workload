@@ -81,16 +81,18 @@ message Worker {
   string os = 4;
   string cli_version = 5;
   WorkerStatus status = 6;
-  // Only set while status is PENDING.
-  string confirmation_code = 7;
+  // Field 7 was confirmation_code, dropped in M4-A5 with the retired v1 open-registration plane.
+  reserved 7;
+  reserved "confirmation_code";
   string created_at = 8;
   string approved_at = 9;
   string approved_by = 10;
   // Empty until M2 adds worker heartbeats.
   string last_seen_at = 11;
   repeated string granted_profile_ids = 12;
-  // Which registration plane the worker came through: "v1" (open registration + confirmation code)
-  // or "v2" (enrollment-token exchange). The console shows this; it's the M4-A5 v1-retirement gate.
+  // Which registration plane the worker came through: "v1" (the retired open-registration plane) or
+  // "v2" (enrollment-token exchange, now the only way to register). Shown in the console; retained
+  // so pre-M4 workers keep an accurate provenance.
   string registered_via = 13;
   // The source IP the worker registered from — recorded for v2 (shown on a require_approval pending
   // row as a defense-in-depth signal); empty for v1.

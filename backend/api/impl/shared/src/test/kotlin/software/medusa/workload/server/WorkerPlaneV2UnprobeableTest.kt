@@ -16,8 +16,6 @@ import kotlinx.serialization.encodeToString
 import software.medusa.workload.tokenformat.TokenKind
 import software.medusa.workload.tokenformat.WorkloadToken
 
-private const val probePrefix = "test-prefix"
-
 /** Counts how often the auth path touches the store, to prove parse-and-drop happens before it. */
 private class CountingFleetStore(private val delegate: FleetStore) : FleetStore by delegate {
   val getWorkerCalls = AtomicInteger(0)
@@ -29,9 +27,8 @@ private class CountingFleetStore(private val delegate: FleetStore) : FleetStore 
 }
 
 /**
- * M4-A4: the v2 worker plane is unprobeable — every unauthenticated/garbage request is a bare 404,
- * malformed credentials never reach the store, and a resolver auth failure is a 404 too — while v1
- * keeps its 401s.
+ * M4-A4: the worker plane is unprobeable — every unauthenticated/garbage request is a bare 404,
+ * malformed credentials never reach the store, and a resolver auth failure is a 404 too.
  */
 class WorkerPlaneV2UnprobeableTest {
 
@@ -46,7 +43,6 @@ class WorkerPlaneV2UnprobeableTest {
         buildServer(
             originRegex = """http://localhost(:\d+)?""",
             port = 0,
-            workerApiPathPrefix = probePrefix,
             auth = NoOpAuthDecorator,
             fleetStore = store,
             impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
@@ -130,19 +126,5 @@ class WorkerPlaneV2UnprobeableTest {
     // everything.
     assertEquals(HttpStatus.NOT_FOUND, response.status())
     assertEquals("", response.contentUtf8())
-  }
-
-  @Test
-  fun `the v1 token endpoint still returns its 401, untouched`() {
-    val response =
-        post(
-            "/$probePrefix/worker/v1/token",
-            "${UUID.randomUUID()}.${WorkloadToken.generate(TokenKind.WORKER)}",
-        )
-    assertEquals(HttpStatus.UNAUTHORIZED, response.status())
-    assertEquals(
-        WorkerErrorResponse("unauthorized"),
-        workerJson.decodeFromString<WorkerErrorResponse>(response.contentUtf8()),
-    )
   }
 }

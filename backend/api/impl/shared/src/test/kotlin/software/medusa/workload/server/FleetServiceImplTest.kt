@@ -28,8 +28,6 @@ import software.medusa.workload.v1.VerificationStatus
 import software.medusa.workload.v1.VerifyProfileRequest
 import software.medusa.workload.v1.WorkerStatus
 
-private const val prefix = "test-prefix"
-
 /** Full lifecycle exercised via gRPC, per story 04's acceptance criteria. */
 class FleetServiceImplTest {
 
@@ -44,7 +42,6 @@ class FleetServiceImplTest {
         buildServer(
             originRegex = """http://localhost(:\d+)?""",
             port = 0,
-            workerApiPathPrefix = prefix,
             auth = NoOpAuthDecorator,
             fleetStore = fleetStore,
             impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
@@ -68,7 +65,7 @@ class FleetServiceImplTest {
       runBlocking {
         // register (HTTP, story 03) — not gRPC, so drive it directly through the store like the
         // registration endpoint does.
-        val secret = generateWorkerSecret()
+        val secret = WorkloadToken.generate(TokenKind.WORKER)
         val worker =
             fleetStore.createWorker(
                 NewWorker(
@@ -77,15 +74,13 @@ class FleetServiceImplTest {
                     hostname = "jakub.local",
                     os = "macos",
                     cliVersion = "1.0.0",
-                    confirmationCode = generateConfirmationCode(),
                 )
             )
 
-        // list pending — confirmation code visible.
+        // list pending.
         val pending = stub.listWorkers(ListWorkersRequest.getDefaultInstance()).workersList
         val pendingEntry = pending.single { it.workerId == worker.workerId.value.toString() }
         assertEquals(WorkerStatus.WORKER_STATUS_PENDING, pendingEntry.status)
-        assertEquals(worker.confirmationCode, pendingEntry.confirmationCode)
 
         // approve.
         val approved =
@@ -95,13 +90,6 @@ class FleetServiceImplTest {
                 )
                 .worker
         assertEquals(WorkerStatus.WORKER_STATUS_ACTIVE, approved.status)
-
-        // confirmation code no longer surfaced once active.
-        val activeEntry =
-            stub.listWorkers(ListWorkersRequest.getDefaultInstance()).workersList.single {
-              it.workerId == worker.workerId.value.toString()
-            }
-        assertEquals("", activeEntry.confirmationCode)
 
         // create profile (implicitly verified).
         val created =
@@ -159,12 +147,11 @@ class FleetServiceImplTest {
         val worker =
             fleetStore.createWorker(
                 NewWorker(
-                    secretHash = hashWorkerSecret(generateWorkerSecret()),
+                    secretHash = hashWorkerSecret(WorkloadToken.generate(TokenKind.WORKER)),
                     name = "worker-1",
                     hostname = null,
                     os = null,
                     cliVersion = null,
-                    confirmationCode = generateConfirmationCode(),
                 )
             )
         fleetStore.approveWorker(worker.workerId, approvedBy = "admin@example.com")
@@ -185,12 +172,11 @@ class FleetServiceImplTest {
     val worker =
         fleetStore.createWorker(
             NewWorker(
-                secretHash = hashWorkerSecret(generateWorkerSecret()),
+                secretHash = hashWorkerSecret(WorkloadToken.generate(TokenKind.WORKER)),
                 name = "worker-1",
                 hostname = null,
                 os = null,
                 cliVersion = null,
-                confirmationCode = generateConfirmationCode(),
             )
         )
 
@@ -307,7 +293,6 @@ class FleetServiceImplTest {
             buildServer(
                 originRegex = """http://localhost(:\d+)?""",
                 port = 0,
-                workerApiPathPrefix = prefix,
                 auth = NoOpAuthDecorator,
                 fleetStore = InMemoryFleetStore(),
                 impersonationVerifier = SecretInaccessibleVerifier,
@@ -712,7 +697,6 @@ class FleetServiceImplTest {
       buildServer(
           originRegex = """http://localhost(:\d+)?""",
           port = 0,
-          workerApiPathPrefix = prefix,
           auth = NoOpAuthDecorator,
           fleetStore = InMemoryFleetStore(),
           impersonationVerifier = AlwaysVerifiedImpersonationVerifier,

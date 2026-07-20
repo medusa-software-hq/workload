@@ -1,28 +1,16 @@
 package software.medusa.workload.server
 
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
+import software.medusa.workload.tokenformat.TokenKind
+import software.medusa.workload.tokenformat.WorkloadToken
 
 class WorkerSecretsTest {
 
   @Test
-  fun `generateWorkerSecret produces 32 bytes of entropy, url-safe encoded`() {
-    val secret = generateWorkerSecret()
-    val decoded = java.util.Base64.getUrlDecoder().decode(secret)
-    assertEquals(32, decoded.size)
-  }
-
-  @Test
-  fun `generateWorkerSecret does not repeat`() {
-    assertNotEquals(generateWorkerSecret(), generateWorkerSecret())
-  }
-
-  @Test
   fun `hashWorkerSecret is deterministic and never equals the plaintext`() {
-    val secret = generateWorkerSecret()
+    val secret = WorkloadToken.generate(TokenKind.WORKER)
     val hash1 = hashWorkerSecret(secret)
     val hash2 = hashWorkerSecret(secret)
     assertTrue(hash1 == hash2)
@@ -31,10 +19,10 @@ class WorkerSecretsTest {
 
   @Test
   fun `verifyWorkerSecret accepts the matching secret and rejects everything else`() {
-    val secret = generateWorkerSecret()
+    val secret = WorkloadToken.generate(TokenKind.WORKER)
     val hash = hashWorkerSecret(secret)
     assertTrue(verifyWorkerSecret(secret, hash))
-    assertFalse(verifyWorkerSecret(generateWorkerSecret(), hash))
+    assertFalse(verifyWorkerSecret(WorkloadToken.generate(TokenKind.WORKER), hash))
     assertFalse(verifyWorkerSecret("", hash))
   }
 }

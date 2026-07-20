@@ -14,7 +14,6 @@ import kotlin.test.BeforeTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.decodeFromString
@@ -22,7 +21,6 @@ import kotlinx.serialization.encodeToString
 import software.medusa.workload.tokenformat.TokenKind
 import software.medusa.workload.tokenformat.WorkloadToken
 
-private const val v2Prefix = "test-prefix"
 private const val v2RegistrationsPath = "/worker/v2/registrations"
 private const val v2TokenPath = "/worker/v2/token"
 private const val v2SelfPath = "/worker/v2/registrations/self"
@@ -43,7 +41,6 @@ class RegistrationV2EndpointTest {
         buildServer(
             originRegex = """http://localhost(:\d+)?""",
             port = 0,
-            workerApiPathPrefix = v2Prefix,
             auth = NoOpAuthDecorator,
             fleetStore = fleetStore,
             impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
@@ -224,6 +221,5 @@ class RegistrationV2EndpointTest {
     assertNotNull(worker)
     assertEquals(WorkerStatus.PENDING, worker.status)
     assertEquals("127.0.0.1", worker.sourceIp)
-    assertNull(worker.confirmationCode)
   }
 }

@@ -24,7 +24,7 @@ internal sealed interface ClaimOutcome {
 }
 
 /**
- * The auth/authorization pipeline shared by `/worker/v1/token` and `/worker/v1/claim`: parses the
+ * The auth/authorization pipeline shared by `/worker/v2/token` and `/worker/v2/claim`: parses the
  * `Bearer <workerId>.<workerSecret>` credentials, checks the worker is active, parses the
  * `{profileId}` body, and checks the profile exists/isn't archived/is granted/has a verified
  * revision. Every denial is audit-logged with [auditEventPrefix]; callers audit their own success
