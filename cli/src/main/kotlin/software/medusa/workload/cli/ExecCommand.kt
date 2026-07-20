@@ -78,7 +78,7 @@ class ExecCommand : CliktCommand(name = "exec") {
     val config = loadConfigOrFail()
     val claim =
         try {
-          claimWorkload(config.brokerBaseUrl, config.workerId, config.workerSecret, profileId)
+          claimWorkload(BuildConfig.apiBaseUrl, config.workerId, config.workerSecret, profileId)
         } catch (e: WorkerApiException) {
           throw PrintMessage(
               tokenClaimErrorMessage(e, profileId),

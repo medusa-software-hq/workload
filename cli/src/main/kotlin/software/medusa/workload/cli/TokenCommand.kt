@@ -13,7 +13,7 @@ class TokenCommand : CliktCommand(name = "token") {
     val config = loadConfigOrFail()
     val token =
         try {
-          claimToken(config.brokerBaseUrl, config.workerId, config.workerSecret, profileId)
+          claimToken(BuildConfig.apiBaseUrl, config.workerId, config.workerSecret, profileId)
         } catch (e: WorkerApiException) {
           throw PrintMessage(
               tokenClaimErrorMessage(e, profileId),

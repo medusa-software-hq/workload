@@ -102,14 +102,14 @@ class AdminJwtTest {
   }
 }
 
-class AdminConfigResolveTest {
+class BuildConfigResolveTest {
   @Test
   fun `env overrides baked overrides default, and blanks are skipped`() {
-    assertEquals("env", AdminConfig.resolve("env", "baked", "default"))
-    assertEquals("baked", AdminConfig.resolve(null, "baked", "default"))
-    assertEquals("baked", AdminConfig.resolve("  ", "baked", "default"))
-    assertEquals("default", AdminConfig.resolve(null, "", "default"))
-    assertNull(AdminConfig.resolve(null, null, null))
+    assertEquals("env", BuildConfig.resolve("env", "baked", "default"))
+    assertEquals("baked", BuildConfig.resolve(null, "baked", "default"))
+    assertEquals("baked", BuildConfig.resolve("  ", "baked", "default"))
+    assertEquals("default", BuildConfig.resolve(null, "", "default"))
+    assertNull(BuildConfig.resolve(null, null, null))
   }
 }
 
