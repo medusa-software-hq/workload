@@ -28,19 +28,18 @@ output "front_door_invoker_sa_email" {
   value       = google_service_account.front_door_invoker.email
 }
 
-# Let the CI/CD identity mint short-lived *ID tokens* for this SA (impersonation) — the resource-level
-# grant the token-refresh workflow (refresh-front-door-token.yml) needs. The org disables
-# service-account *keys* (constraints/iam.disableServiceAccountKeyCreation), so the front door is
-# keyless: no key ever exists, only a 1-hour ID token the Worker attaches, refreshed on a cron. The
-# marginal power here is "can mint front-door-invoker ID tokens" (audience-bound, run.invoker only),
-# and CI can already deploy the backend, which is strictly stronger. See design 00 § anode rotation.
+# Let the CI/CD identity deploy the refresher Cloud Run job *as* this SA (actAs). The job runs as
+# front-door-invoker and self-mints that SA's ID token from the metadata server — keyless, no
+# impersonation grant needed (the org disables SA keys anyway; the front door only ever holds a
+# short-lived ID token). CI can already deploy the backend, so granting it actAs on this one SA is
+# strictly weaker. See design 00 § anode rotation and backend/front-door-refresher.
 variable "ci_service_account_email" {
-  description = "Email of the CI/CD service account (vars.GCP_CICD_SA_EMAIL) that mints the front-door invoker ID token."
+  description = "Email of the CI/CD service account (vars.GCP_CICD_SA_EMAIL) that deploys the front-door refresher job as this SA."
   type        = string
 }
 
-resource "google_service_account_iam_member" "ci_mints_front_door_token" {
+resource "google_service_account_iam_member" "ci_deploys_front_door_job" {
   service_account_id = google_service_account.front_door_invoker.name
-  role               = "roles/iam.serviceAccountOpenIdTokenCreator"
+  role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${var.ci_service_account_email}"
 }
