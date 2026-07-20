@@ -34,6 +34,12 @@ locals {
   # the CLI mint ID tokens with this as their audience; the API accepts it alongside the SPA client.
   # https://console.cloud.google.com/auth/clients/852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com?project=ms-auth-284371d2
   cli_client_id = "852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com"
+
+  # Where operational alerts (Cloud Monitoring, the hand-made budget alert) are delivered. A Google
+  # Group, not an individual — durable across people, no single-person dependency for a load-bearing
+  # alert. Hand-created in the Workspace admin console (Terraform/CI lacks group-admin rights). A
+  # single shared address across envs — not a per-env value; staging failures reach the same humans.
+  alert_notification_email = "alerts@medusa.software"
 }
 
 output "organization_domain" {
@@ -98,4 +104,8 @@ output "google_client_id" {
 
 output "cli_client_id" {
   value = local.cli_client_id
+}
+
+output "alert_notification_email" {
+  value = local.alert_notification_email
 }
