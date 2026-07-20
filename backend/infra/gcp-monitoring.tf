@@ -14,6 +14,15 @@
 # 20-min staleness window trips after a single fully-missed run while still leaving ~40 min of runway
 # before the token actually expires — alert first, outage later.
 
+# Nothing used Cloud Monitoring in this project before, so its API is off by default and the resources
+# below can't be created until it's on. disable_on_destroy=false: never tear the API back down on a
+# destroy — once monitoring exists, other things come to lean on it.
+resource "google_project_service" "monitoring" {
+  project            = var.gcp_project_id
+  service            = "monitoring.googleapis.com"
+  disable_on_destroy = false
+}
+
 resource "google_monitoring_notification_channel" "team_email" {
   project      = var.gcp_project_id
   display_name = "Team email"
@@ -22,6 +31,8 @@ resource "google_monitoring_notification_channel" "team_email" {
   labels = {
     email_address = module.common.alert_notification_email
   }
+
+  depends_on = [google_project_service.monitoring]
 }
 
 resource "google_monitoring_alert_policy" "front_door_refresher_failed" {
