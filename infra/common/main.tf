@@ -20,6 +20,12 @@ locals {
   project_base_name = "workload"
   project_variant   = "baseline"
 
+  # The stable public hostnames. The web app lives at <project>-<variant>.<domain>; the API's
+  # front-door (M4-A6) is api.<web host>. Both are deterministic — unlike Cloud Run's generated
+  # run.app URL — so API_URL can be computed instead of set by hand.
+  web_host_name = "${local.project_base_name}-${local.project_variant}.${local.organization_domain}"
+  api_host_name = "api.${local.web_host_name}"
+
   # Google OAuth 2.0 client ID — the console SPA's Web client.
   # https://console.cloud.google.com/auth/clients/852264381191-gi3hrcfbkn6mm43qh26b6hl1hmjvlo7a.apps.googleusercontent.com?project=ms-auth-284371d2
   google_client_id = "852264381191-gi3hrcfbkn6mm43qh26b6hl1hmjvlo7a.apps.googleusercontent.com"
@@ -76,6 +82,14 @@ output "project_base_name" {
 
 output "project_variant" {
   value = local.project_variant
+}
+
+output "web_host_name" {
+  value = local.web_host_name
+}
+
+output "api_host_name" {
+  value = local.api_host_name
 }
 
 output "google_client_id" {

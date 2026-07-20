@@ -46,13 +46,9 @@ resource "github_actions_variable" "gcp_api_url" {
   repository    = data.github_repository.this.name
   variable_name = module.common.gh_api_url_var_name
 
-  # Managed manually (for now):
-  # https://github.com/medusa-software-hq/workload/settings/variables/actions/API_URL
-  value = "https://example.com/placeholder"
-
-  lifecycle {
-    ignore_changes = [value]
-  }
+  # The stable front-door hostname (M4-A6). Computed now that it no longer depends on Cloud Run's
+  # generated run.app URL — which is why this used to be set by hand.
+  value = "https://${module.common.api_host_name}"
 }
 
 # Consumed by the web frontend build (baked into the JS bundle).
