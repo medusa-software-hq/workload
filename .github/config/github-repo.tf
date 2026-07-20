@@ -4,7 +4,9 @@
 resource "github_repository" "this" {
   name        = module.common.gh_repo_name
   description = "Variant: ${module.common.project_variant}"
-  visibility  = "private"
+
+  # The repository is temporarily public
+  visibility = "public"
 
   is_template = false
 
