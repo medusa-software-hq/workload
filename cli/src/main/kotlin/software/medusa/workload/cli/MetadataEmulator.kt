@@ -17,7 +17,7 @@ import org.slf4j.LoggerFactory
 
 /**
  * A brokered access token as the emulator serves it: the bearer value, the moment it expires, and
- * the target service account it impersonates (all three come from a single `/worker/v1/token`
+ * the target service account it impersonates (all three come from a single `/worker/v2/token`
  * claim).
  */
 data class BrokeredToken(
@@ -371,7 +371,7 @@ fun isTrustedRunPeer(addr: InetAddress): Boolean = addr.isSiteLocalAddress
 
 /** Builds the production [TokenClaimer] that re-claims from the broker for [profileId]. */
 fun brokerTokenClaimer(config: WorkloadConfig, profileId: String): TokenClaimer = TokenClaimer {
-  val claim = claimToken(config.brokerBaseUrl, config.workerId, config.workerSecret, profileId)
+  val claim = claimToken(BuildConfig.apiBaseUrl, config.workerId, config.workerSecret, profileId)
   BrokeredToken(
       accessToken = claim.accessToken,
       expiresAt = Instant.parse(claim.expiresAt),
@@ -383,7 +383,7 @@ fun brokerTokenClaimer(config: WorkloadConfig, profileId: String): TokenClaimer 
 fun brokerIdTokenClaimer(config: WorkloadConfig, profileId: String): IdTokenClaimer =
     IdTokenClaimer { audience, includeEmail ->
       claimIdToken(
-              config.brokerBaseUrl,
+              BuildConfig.apiBaseUrl,
               config.workerId,
               config.workerSecret,
               profileId,

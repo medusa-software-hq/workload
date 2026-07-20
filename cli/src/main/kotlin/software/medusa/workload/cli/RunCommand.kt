@@ -270,7 +270,7 @@ class RunCommand : CliktCommand(name = "run") {
 
       val claim =
           try {
-            claimWorkload(config.brokerBaseUrl, config.workerId, config.workerSecret, profileId)
+            claimWorkload(BuildConfig.apiBaseUrl, config.workerId, config.workerSecret, profileId)
           } catch (e: WorkerApiException) {
             throw PrintMessage(
                 tokenClaimErrorMessage(e, profileId),
@@ -281,7 +281,7 @@ class RunCommand : CliktCommand(name = "run") {
             // An unreachable/misconfigured broker surfaces as a raw transport error; don't let it
             // reach the operator as a stack trace.
             throw PrintMessage(
-                "Cannot reach the broker at ${config.brokerBaseUrl}: ${e.javaClass.simpleName}" +
+                "Cannot reach the broker at ${BuildConfig.apiBaseUrl}: ${e.javaClass.simpleName}" +
                     (e.message?.let { ": $it" } ?: "") +
                     "\nCheck your network, or re-run 'workload worker register' if the broker URL changed.",
                 statusCode = 1,

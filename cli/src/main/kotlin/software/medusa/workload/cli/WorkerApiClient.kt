@@ -187,7 +187,7 @@ fun claimToken(
   return json.decodeFromString(response.body())
 }
 
-/** Calls `POST <brokerBaseUrl>/worker/v1/id-token`: an audience-bound OIDC ID token for the SA. */
+/** Calls `POST <brokerBaseUrl>/worker/v2/id-token`: an audience-bound OIDC ID token for the SA. */
 fun claimIdToken(
     brokerBaseUrl: String,
     workerId: String,
@@ -198,7 +198,7 @@ fun claimIdToken(
 ): WorkerIdTokenClaimResponse {
   val request =
       HttpRequest.newBuilder()
-          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v1/id-token"))
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/id-token"))
           .header("Authorization", "Bearer $workerId.$workerSecret")
           .header("Content-Type", "application/json")
           .timeout(Duration.ofSeconds(10))
