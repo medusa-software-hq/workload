@@ -46,7 +46,10 @@ env (values are never printed — compare the fingerprint):
   DEMO_SECRET                   32  f7c3c22a2ca0
   MODE                           5  4bb24efc9641
 
-exiting with 0
+worker: up (startup OK). Heartbeating every 30s; running until stopped — a worker doesn't exit on its own.
+heartbeat #1  t=30s  gcs=OK  idtoken=OK 3f2a1c9d0b71
+heartbeat #2  t=60s  gcs=OK  idtoken=OK 3f2a1c9d0b71
+…                                                     (Ctrl-C / `docker stop` to end)
 ```
 
 That single run demonstrates the whole chain: the profile's plain env arrived, a
@@ -57,6 +60,14 @@ was minted** as the profile's target service account — using nothing but the
 standard library and the metadata server. Both the GCS read and the ID token's
 `email`/`aud` claims are the identity proof: only that SA is granted `objectViewer`
 on the bucket, and the ID token names it.
+
+**It behaves like a worker — it does not exit on its own.** After the one-time
+proofs it stays up and heartbeats (re-reading GCS and re-minting the ID token each
+beat), so a long run visibly keeps working as the emulator refreshes tokens
+underneath. Stop it with Ctrl-C or `docker stop`; `HELLO_MAX_SECONDS` bounds it for
+automated runs, and `HELLO_EXIT_CODE` exits immediately after the proofs. This also
+makes it a living fixture: it would have caught the `workload run` bug where a
+container living past ~15s was torn down — the heartbeats would simply have stopped.
 
 > The ID-token step needs `ComputeEngineCredentials` (i.e. the metadata path), so
 > it only matches inside a `workload run` container. Run it on a dev machine with
@@ -72,7 +83,9 @@ env vars.
 | --- | --- |
 | `HELLO_PROBE_GCS` | `gs://bucket/object` to read — the live-resource proof. Unset ⇒ the read is skipped. |
 | `HELLO_IDTOKEN_AUDIENCE` | Audience for the ID-token proof (default `https://hello-workload.example.test`). |
-| `HELLO_EXIT_CODE` | Exit with this instead of 0/1 — makes exit-code passthrough testable by hand. |
+| `HELLO_HEARTBEAT_SECONDS` | Seconds between heartbeats (default 30). |
+| `HELLO_MAX_SECONDS` | Stop (exit 0/1) after this many seconds — for bounded/automated runs. Unset ⇒ runs until stopped. |
+| `HELLO_EXIT_CODE` | Exit immediately after the one-time proofs with this code — bypasses worker mode; exit-code passthrough testable by hand. |
 | `HELLO_FINGERPRINT_CHARS` | Fingerprint length (default 12). |
 
 `infra/integration-test` provisions the bucket + object, grants the hand-test SA
