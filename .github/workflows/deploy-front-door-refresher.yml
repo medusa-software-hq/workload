@@ -1,0 +1,67 @@
+name: Deploy front-door refresher
+
+# Builds the front-door-refresher jib image and updates the Cloud Run job's image (the job, its
+# schedule, and its config are managed by Terraform in backend/infra). Fires on changes to the
+# module; dispatch manually for the first rollout.
+on:
+  push:
+    branches: ["trunk/*"]
+    paths:
+      - "backend/front-door-refresher/**"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+  NO_COLOR: 1
+
+  IMAGE_REF: ${{ vars.GCP_AR_REPO_ENDPOINT }}/front-door-refresher/${{ github.sha }}
+  SERVICE_PATH: backend/front-door-refresher
+
+jobs:
+  deploy-job:
+    name: Deploy refresher job
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_AR_REPO_HOSTNAME }} --quiet
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and push image
+        working-directory: ${{ env.SERVICE_PATH }}
+        run: |
+          ../../gradlew jib \
+            -Pjib.imageRef=${{ env.IMAGE_REF }} \
+            -Pjib.imageTag=${{ github.sha }} \
+            --stacktrace --info
+
+      - name: Update the Cloud Run job image
+        run: |
+          gcloud run jobs update front-door-refresher \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --image=${{ env.IMAGE_REF }} \
+            --quiet
