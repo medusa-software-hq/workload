@@ -98,14 +98,12 @@ resource "google_cloud_run_v2_service" "primary" {
   }
 }
 
-# Allow unauthenticated (public) access — no auth for now.
-resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
-  project  = google_cloud_run_v2_service.primary.project
-  location = google_cloud_run_v2_service.primary.location
-  name     = google_cloud_run_v2_service.primary.name
-  role     = "roles/run.invoker"
-  member   = "allUsers"
-}
+# IAM-locked origin (M4-A6 cutover): the broker no longer allows unauthenticated access. Only
+# identities holding roles/run.invoker on this service may reach it past Google's front end — i.e.
+# the Cloudflare front-door Worker, which attaches an X-Serverless-Authorization ID token for
+# front-door-invoker (see gcp-front-door-invoker.tf). Every other caller — a direct run.app hit, a
+# worker still pointed at the old origin — is rejected at Google's edge for free (no instance start).
+# Rollback is re-adding an allUsers roles/run.invoker binding here and re-applying.
 
 output "cloud_run_primary_service_url" {
   value = google_cloud_run_v2_service.primary.uri
