@@ -105,6 +105,41 @@ private data class UpdateProfileRequest(
     val dockerImage: String,
 )
 
+/**
+ * An outstanding enrollment token as FleetService lists it (proto3 JSON — camelCase). Never carries
+ * the plaintext token or its hash — only the metadata to list, identify, and revoke it.
+ */
+@Serializable
+data class AdminEnrollmentToken(
+    val enrollmentTokenId: String = "",
+    val note: String = "",
+    val createdBy: String = "",
+    val createdAt: String = "",
+    val expiresAt: String = "",
+    val requireApproval: Boolean = false,
+)
+
+@Serializable
+private data class CreateEnrollmentTokenRequest(
+    val note: String,
+    val expiresInDays: Int,
+    val requireApproval: Boolean,
+)
+
+/** Response of CreateEnrollmentToken: the plaintext `wle_` token (shown once) plus its metadata. */
+@Serializable
+data class CreateEnrollmentTokenResult(
+    val token: String = "",
+    val enrollmentToken: AdminEnrollmentToken = AdminEnrollmentToken(),
+)
+
+@Serializable
+internal data class ListEnrollmentTokensResponse(
+    val enrollmentTokens: List<AdminEnrollmentToken> = emptyList()
+)
+
+@Serializable private data class RevokeEnrollmentTokenRequest(val enrollmentTokenId: String)
+
 @Serializable private data class WorkerIdRequest(val workerId: String)
 
 @Serializable private data class ProfileIdRequest(val profileId: String)
@@ -205,6 +240,37 @@ class AdminApiClient(
 
   fun revokeProfileGrant(workerId: String, profileId: String) {
     post("RevokeProfileGrant", apiJson.encodeToString(GrantRequest(workerId, profileId)))
+  }
+
+  /**
+   * Mints a one-time `wle_` enrollment token. [expiresInDays] <= 0 lets the server apply its
+   * default (7); the returned [CreateEnrollmentTokenResult.token] is shown once and never
+   * retrievable again.
+   */
+  fun createEnrollmentToken(
+      note: String,
+      expiresInDays: Int,
+      requireApproval: Boolean,
+  ): CreateEnrollmentTokenResult =
+      apiJson.decodeFromString(
+          post(
+              "CreateEnrollmentToken",
+              apiJson.encodeToString(
+                  CreateEnrollmentTokenRequest(note, expiresInDays, requireApproval)
+              ),
+          )
+      )
+
+  fun listEnrollmentTokens(): List<AdminEnrollmentToken> =
+      apiJson
+          .decodeFromString<ListEnrollmentTokensResponse>(post("ListEnrollmentTokens", "{}"))
+          .enrollmentTokens
+
+  fun revokeEnrollmentToken(enrollmentTokenId: String) {
+    post(
+        "RevokeEnrollmentToken",
+        apiJson.encodeToString(RevokeEnrollmentTokenRequest(enrollmentTokenId)),
+    )
   }
 
   private fun worker(method: String, workerId: String): AdminWorker =

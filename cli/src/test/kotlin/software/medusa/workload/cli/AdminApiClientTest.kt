@@ -165,4 +165,56 @@ class AdminApiClientTest {
     assertEquals("sa@x", revisions[0].targetServiceAccount)
     assertEquals(mapOf("K" to "V"), revisions[0].envVars)
   }
+
+  @Test
+  fun `createEnrollmentToken posts the note, expiry, and approval flag and parses the token`() {
+    val api =
+        StubApi(
+            200,
+            """{"token":"wle_abc123","enrollmentToken":{"enrollmentTokenId":"et-1","note":"for Kuba's MBP","createdBy":"admin@medusa.software","expiresAt":"2026-07-26","requireApproval":true}}""",
+        )
+    stub = api
+    val result =
+        AdminApiClient(api.baseUrl, idTokenProvider = { "t" })
+            .createEnrollmentToken(
+                note = "for Kuba's MBP",
+                expiresInDays = 7,
+                requireApproval = true,
+            )
+
+    assertEquals("/medusa.workload.v1.FleetService/CreateEnrollmentToken", api.lastPath)
+    assertEquals(
+        """{"note":"for Kuba's MBP","expiresInDays":7,"requireApproval":true}""",
+        api.lastBody,
+    )
+    assertEquals("wle_abc123", result.token)
+    assertEquals("et-1", result.enrollmentToken.enrollmentTokenId)
+    assertTrue(result.enrollmentToken.requireApproval)
+  }
+
+  @Test
+  fun `listEnrollmentTokens parses outstanding tokens`() {
+    val api =
+        StubApi(
+            200,
+            """{"enrollmentTokens":[{"enrollmentTokenId":"et-1","note":"laptop","createdBy":"admin@x","expiresAt":"2026-07-26","requireApproval":false}]}""",
+        )
+    stub = api
+    val tokens = AdminApiClient(api.baseUrl, idTokenProvider = { "t" }).listEnrollmentTokens()
+
+    assertEquals("{}", api.lastBody)
+    assertEquals(1, tokens.size)
+    assertEquals("et-1", tokens[0].enrollmentTokenId)
+    assertEquals("laptop", tokens[0].note)
+  }
+
+  @Test
+  fun `revokeEnrollmentToken posts the token id`() {
+    val api = StubApi(200, "{}")
+    stub = api
+    AdminApiClient(api.baseUrl, idTokenProvider = { "t" }).revokeEnrollmentToken("et-9")
+
+    assertEquals("/medusa.workload.v1.FleetService/RevokeEnrollmentToken", api.lastPath)
+    assertEquals("""{"enrollmentTokenId":"et-9"}""", api.lastBody)
+  }
 }

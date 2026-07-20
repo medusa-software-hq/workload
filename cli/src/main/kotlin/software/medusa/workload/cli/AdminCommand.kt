@@ -329,6 +329,70 @@ private fun CliktCommand.echoWorker(worker: AdminWorker, verb: String) {
 }
 
 // ---------------------------------------------------------------------------
+// enrollment
+// ---------------------------------------------------------------------------
+
+class AdminEnrollmentCommand : NoOpCliktCommand(name = "enrollment") {
+  override fun help(context: Context) =
+      "Mint and manage one-time worker enrollment tokens (the M4 v2 registration front door)."
+}
+
+class AdminEnrollmentCreateCommand : CliktCommand(name = "create") {
+  private val note by
+      option("--note", help = "Free-text label recorded with the token, e.g. \"for Kuba's MBP\".")
+  private val expiresInDays by
+      option("--expires-in-days", help = "Days until the token expires (server default: 7).").int()
+  private val requireApproval by
+      option(
+              "--require-approval",
+              help = "Land the worker PENDING for admin approval instead of straight to ACTIVE.",
+          )
+          .flag()
+
+  override fun help(context: Context) =
+      "Mint a one-time wle_ enrollment token. The token is printed once to stdout — hand it to the " +
+          "teammate, who runs 'workload worker register' with it. It cannot be retrieved again."
+
+  override fun run() {
+    val result = runAdmin {
+      adminClient().createEnrollmentToken(note ?: "", expiresInDays ?: 0, requireApproval)
+    }
+    // The token goes to stdout alone (so it can be piped/copied); everything else is context on
+    // stderr — the same split as 'workload worker token'.
+    echo(result.token)
+    val token = result.enrollmentToken
+    echo("Enrollment token: ${token.enrollmentTokenId}", err = true)
+    echo("Expires:          ${formatTimestamp(token.expiresAt)}", err = true)
+    echo(
+        "On registration:  ${if (token.requireApproval) "worker lands PENDING (needs approval)" else "worker becomes ACTIVE immediately"}",
+        err = true,
+    )
+    echo("Shown once — it is not retrievable again. Hand it to the teammate over chat.", err = true)
+  }
+}
+
+class AdminEnrollmentListCommand : CliktCommand(name = "list") {
+  override fun help(context: Context) =
+      "List outstanding (unused, unexpired, unrevoked) enrollment tokens."
+
+  override fun run() {
+    echo(formatEnrollmentTokenTable(runAdmin { adminClient().listEnrollmentTokens() }))
+  }
+}
+
+class AdminEnrollmentRevokeCommand : CliktCommand(name = "revoke") {
+  private val enrollmentTokenId by argument(name = "enrollment-token-id")
+
+  override fun help(context: Context) =
+      "Revoke an outstanding enrollment token so it can no longer be redeemed."
+
+  override fun run() {
+    runAdmin { adminClient().revokeEnrollmentToken(enrollmentTokenId) }
+    echo("Revoked enrollment token $enrollmentTokenId.")
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Formatting
 // ---------------------------------------------------------------------------
 
@@ -350,6 +414,22 @@ internal fun formatProfileTable(profiles: List<AdminProfile>): String {
             it.latestRevision.toString(),
             if (it.archived) "archived" else "active",
             formatTimestamp(it.createdAt),
+        )
+      },
+  )
+}
+
+internal fun formatEnrollmentTokenTable(tokens: List<AdminEnrollmentToken>): String {
+  if (tokens.isEmpty()) return "No outstanding enrollment tokens."
+  return renderTable(
+      listOf("TOKEN ID", "NOTE", "CREATED BY", "EXPIRES", "APPROVAL"),
+      tokens.map {
+        listOf(
+            it.enrollmentTokenId,
+            it.note.ifBlank { "-" },
+            it.createdBy.ifBlank { "-" },
+            formatTimestamp(it.expiresAt),
+            if (it.requireApproval) "required" else "auto",
         )
       },
   )
