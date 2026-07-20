@@ -1,8 +1,12 @@
 package software.medusa.workload.hello
 
+import com.google.auth.oauth2.GoogleCredentials
+import com.google.auth.oauth2.IdTokenCredentials
+import com.google.auth.oauth2.IdTokenProvider
 import com.google.cloud.storage.BlobId
 import com.google.cloud.storage.StorageOptions
 import java.security.MessageDigest
+import java.util.Base64
 import kotlin.system.exitProcess
 
 /**
@@ -13,8 +17,13 @@ import kotlin.system.exitProcess
  * and refreshes them on its own. That's the whole point of the test: a normal Google-library app,
  * oblivious to the broker and to refresh, "just works" — exactly as it would on a real GCE VM.
  *
+ * It also mints an **ID token** the same way a hosted Flow worker does — `IdTokenCredentials` over
+ * ADC — so one run proves both metadata paths a workload uses: the access-token path (GCS) and the
+ * `identity` path (audience-bound OIDC token).
+ *
  * Config (all from the profile's env, since `workload run` never overrides the image's command):
  * - `HELLO_PROBE_GCS` `gs://bucket/object` to read (the real-resource proof). Required to read.
+ * - `HELLO_IDTOKEN_AUDIENCE` audience for the ID-token proof (default a placeholder URL).
  * - `HELLO_FINGERPRINT_CHARS` sha256 prefix length (default 12).
  * - `HELLO_EXIT_CODE` exit with this instead of 0 — makes exit-code passthrough testable by hand.
  */
@@ -23,20 +32,23 @@ fun main() {
   println("arch:  ${System.getProperty("os.arch")}")
 
   val readOk = reportGcsRead()
+  val idTokenOk = reportIdToken()
   reportEnvironment()
 
-  // A failed read is a failed test: surface it as a non-zero exit unless the profile forces one.
+  // A failed read or ID-token mint is a failed test: surface it as a non-zero exit unless forced.
   val forced = System.getenv("HELLO_EXIT_CODE")?.toIntOrNull()
-  val exit = forced ?: if (readOk) 0 else 1
+  val exit = forced ?: if (readOk && idTokenOk) 0 else 1
   println()
   println("exiting with $exit")
   exitProcess(exit)
 }
 
+private const val defaultAudience = "https://hello-workload.example.test"
+
 private fun banner() {
   val line = "=".repeat(46)
   println(line)
-  println(" hello-workload (Kotlin + google-cloud-storage)")
+  println(" hello-workload (Kotlin + google-auth: GCS + ID token)")
   println(line)
 }
 
@@ -76,6 +88,65 @@ private fun reportGcsRead(): Boolean {
     println("  (${e.javaClass.simpleName}) — the brokered credential couldn't read $uri.")
     false
   }
+}
+
+/**
+ * Mints an audience-bound OIDC **ID token** via `IdTokenCredentials` over ADC — byte-for-byte the
+ * path a hosted Flow worker uses (`GoogleCredentials.getApplicationDefault() as IdTokenProvider`,
+ * with `INCLUDE_EMAIL` + `FORMAT_FULL` so the SA email survives the compute-engine metadata path).
+ * Prints the token's claims (never the token) — proving the `identity` endpoint works end to end,
+ * with real google-auth, in a container. Returns true on success.
+ */
+private fun reportIdToken(): Boolean {
+  println()
+  val audience = System.getenv("HELLO_IDTOKEN_AUDIENCE")?.ifBlank { null } ?: defaultAudience
+  return try {
+    val provider = GoogleCredentials.getApplicationDefault() as? IdTokenProvider
+    if (provider == null) {
+      println("idtoken: ADC did not resolve to an IdTokenProvider — can't mint an ID token.")
+      return false
+    }
+    val credentials =
+        IdTokenCredentials.newBuilder()
+            .setIdTokenProvider(provider)
+            .setTargetAudience(audience)
+            .setOptions(
+                listOf(IdTokenProvider.Option.INCLUDE_EMAIL, IdTokenProvider.Option.FORMAT_FULL),
+            )
+            .build()
+    credentials.refresh()
+    val jwt = credentials.idToken.tokenValue
+
+    println("idtoken: MINTED via IdTokenCredentials — the same path a hosted Flow worker uses.")
+    println("  audience: ${jwtClaim(jwt, "aud") ?: "(missing!)"}")
+    println(
+        "  email:    ${jwtClaim(jwt, "email") ?: "(none — INCLUDE_EMAIL/FORMAT_FULL didn't add it)"}"
+    )
+    println("  issuer:   ${jwtClaim(jwt, "iss") ?: "(unknown)"}")
+    println("  token fingerprint: ${fingerprint(jwt.toByteArray())}")
+
+    if (jwtClaim(jwt, "aud") != audience) {
+      println("  MISMATCH — aud is not the audience we requested ($audience).")
+      return false
+    }
+    true
+  } catch (e: Exception) {
+    println("idtoken: MINT FAILED — ${e.message}")
+    println(
+        "  (${e.javaClass.simpleName}) — the metadata identity endpoint or the ADC ID-token path " +
+            "failed. This is the path a Flow worker's credential minting takes.",
+    )
+    false
+  }
+}
+
+/** A single top-level string claim from a JWT's payload, or null. Never logs the token itself. */
+private fun jwtClaim(jwt: String, name: String): String? {
+  val parts = jwt.split(".")
+  if (parts.size < 2) return null
+  val payload =
+      runCatching { String(Base64.getUrlDecoder().decode(parts[1])) }.getOrNull() ?: return null
+  return Regex("\"$name\"\\s*:\\s*\"([^\"]*)\"").find(payload)?.groupValues?.get(1)
 }
 
 /**
