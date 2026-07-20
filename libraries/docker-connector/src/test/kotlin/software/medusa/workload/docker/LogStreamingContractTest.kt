@@ -102,6 +102,35 @@ class LogStreamingContractTest {
   }
 
   @Test
+  fun `follow survives a container that outlives Armeria's default response timeout`() =
+      withConnector { connector ->
+        // Regression guard: the daemon WebClient's response timeout must be disabled, or a
+        // `logs?follow=1` stream (which never "completes" until exit) is aborted at Armeria's 15s
+        // default — which tore down every `workload run` container that ran longer than that. This
+        // container runs ~20s; the follow must stream all of it and then complete cleanly.
+        val created =
+            connector.containers.create(
+                image = BUSYBOX,
+                cmd =
+                    listOf(
+                        "sh",
+                        "-c",
+                        "i=0; while [ \$i -lt 10 ]; do echo line-\$i; i=\$((i+1)); sleep 2; done",
+                    ),
+                labels = labels(),
+                autoRemove = false,
+            )
+        connector.containers.start(created.id)
+        val text = connector.logs.logs(created.id, follow = true).toList().textOf(LogStream.STDOUT)
+        // First and last lines span ~20s (> the 15s default) — proves the stream wasn't cut at 15s.
+        assertTrue(text.contains("line-0"), "should stream from the start")
+        assertTrue(
+            text.contains("line-9"),
+            "should stream past the 15s mark to the container's exit",
+        )
+      }
+
+  @Test
   fun `per-stream ordering holds under heavy interleaved output`() = withConnector { connector ->
     val n = 400
     val created =
