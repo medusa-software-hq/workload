@@ -106,6 +106,17 @@ resource "google_project_iam_member" "cicd_sa_project_iam_admin" {
   member  = "serviceAccount:${google_service_account.cicd_sa.email}"
 }
 
+# Grant CI/CD SA Monitoring editor (manage the front-door refresher's alert policies + notification
+# channel — backend/infra/gcp-monitoring.tf). NB: the `infra` root has no apply workflow (it
+# bootstraps this very SA); it's applied by hand, so this binding was also granted by hand once to
+# unblock the backend apply — `gcloud projects add-iam-policy-binding <project> --member=... --role=
+# roles/monitoring.editor`. Kept here so the next hand-apply reconciles it.
+resource "google_project_iam_member" "cicd_sa_monitoring_editor" {
+  project = local.gcp_project_id
+  role    = "roles/monitoring.editor"
+  member  = "serviceAccount:${google_service_account.cicd_sa.email}"
+}
+
 # Allow the CI/CD SA to push images to Artifact Registry.
 resource "google_artifact_registry_repository_iam_member" "registry_ci_writer" {
   project    = google_project.gcp_project.project_id
