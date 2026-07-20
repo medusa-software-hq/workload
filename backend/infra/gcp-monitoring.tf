@@ -13,15 +13,12 @@
 # Both notify the shared team email (infra/common). Cadence is 15 min against a 60-min token, so the
 # 20-min staleness window trips after a single fully-missed run while still leaving ~40 min of runway
 # before the token actually expires — alert first, outage later.
-
-# Nothing used Cloud Monitoring in this project before, so its API is off by default and the resources
-# below can't be created until it's on. disable_on_destroy=false: never tear the API back down on a
-# destroy — once monitoring exists, other things come to lean on it.
-resource "google_project_service" "monitoring" {
-  project            = var.gcp_project_id
-  service            = "monitoring.googleapis.com"
-  disable_on_destroy = false
-}
+#
+# NB: monitoring.googleapis.com must be enabled on the project for the resources below to apply. Like
+# this project's other Google APIs (run, secretmanager, …) it is enabled out-of-band, NOT via a
+# google_project_service resource here — the CI/Terraform identity lacks serviceusage.services.enable,
+# so managing it in-config just 403s. It was enabled by hand once (`gcloud services enable
+# monitoring.googleapis.com --project <id>`); see backend/infra/README.md.
 
 resource "google_monitoring_notification_channel" "team_email" {
   project      = var.gcp_project_id
@@ -31,8 +28,6 @@ resource "google_monitoring_notification_channel" "team_email" {
   labels = {
     email_address = module.common.alert_notification_email
   }
-
-  depends_on = [google_project_service.monitoring]
 }
 
 resource "google_monitoring_alert_policy" "front_door_refresher_failed" {

@@ -69,6 +69,13 @@ Terraform/CI lacks group-admin rights):
 The notification channel targets a **Google Group**, not an individual, so the
 alert survives people coming and going.
 
+**One-time hand step:** `monitoring.googleapis.com` must be enabled on the
+project. Like this project's other Google APIs it is enabled out-of-band, not via
+a `google_project_service` resource — the CI/Terraform identity lacks
+`serviceusage.services.enable`, so managing it in-config only 403s. Enable it once
+with `gcloud services enable monitoring.googleapis.com --project <project-id>`
+(done for `baseline`; redo per new env in M5-02).
+
 ### Verifying the alerts (hand-test)
 
 Neither policy can be exercised in CI — both need real job telemetry over real
