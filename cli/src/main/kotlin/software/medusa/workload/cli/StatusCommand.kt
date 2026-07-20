@@ -15,7 +15,7 @@ class StatusCommand : CliktCommand(name = "status") {
 
     val status =
         try {
-          fetchSelfStatus(config.brokerBaseUrl, config.workerId, config.workerSecret)
+          fetchSelfStatus(BuildConfig.apiBaseUrl, config.workerId, config.workerSecret)
         } catch (e: WorkerApiException) {
           throw PrintMessage(
               "Status poll failed: ${e.message}. The worker may have been rejected or revoked.",

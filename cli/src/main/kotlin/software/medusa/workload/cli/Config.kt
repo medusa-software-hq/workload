@@ -14,9 +14,11 @@ private val json = Json {
   prettyPrint = true
 }
 
+// No broker URL here: the CLI talks to the one backend endpoint ([BuildConfig.apiBaseUrl]), not a
+// per-worker "broker". Old configs carrying a `brokerBaseUrl` still load (unknown keys are
+// ignored).
 @Serializable
 data class WorkloadConfig(
-    val brokerBaseUrl: String,
     val workerId: String,
     val workerSecret: String,
     val workerName: String,

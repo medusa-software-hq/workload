@@ -44,7 +44,6 @@ class ConfigTest {
   fun `saveConfig round-trips through loadConfig`() {
     val config =
         WorkloadConfig(
-            brokerBaseUrl = "https://api.example.com/uuid-prefix",
             workerId = "44456e85-4e62-406d-9b86-cc95d33f5e54",
             workerSecret = "top-secret",
             workerName = "jakub-mbp",
@@ -59,7 +58,6 @@ class ConfigTest {
   fun `saveConfig sets 0700 on the directory and 0600 on the file`() {
     val config =
         WorkloadConfig(
-            brokerBaseUrl = "https://api.example.com/uuid-prefix",
             workerId = "44456e85-4e62-406d-9b86-cc95d33f5e54",
             workerSecret = "top-secret",
             workerName = "jakub-mbp",
@@ -81,12 +79,11 @@ class ConfigTest {
   fun `saveConfig overwrites an existing config`() {
     val first =
         WorkloadConfig(
-            brokerBaseUrl = "https://api.example.com/first",
             workerId = "44456e85-4e62-406d-9b86-cc95d33f5e54",
             workerSecret = "first-secret",
             workerName = "worker-1",
         )
-    val second = first.copy(brokerBaseUrl = "https://api.example.com/second")
+    val second = first.copy(workerName = "worker-2")
 
     saveConfig(first, dir = tempDir)
     saveConfig(second, dir = tempDir)
@@ -98,7 +95,6 @@ class ConfigTest {
   fun `deleteConfig removes the config file`() {
     val config =
         WorkloadConfig(
-            brokerBaseUrl = "https://api.example.com/uuid-prefix",
             workerId = "44456e85-4e62-406d-9b86-cc95d33f5e54",
             workerSecret = "top-secret",
             workerName = "jakub-mbp",

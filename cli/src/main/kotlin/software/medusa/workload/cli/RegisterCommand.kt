@@ -12,9 +12,6 @@ private const val pollIntervalMaxSeconds = 15L
 
 class RegisterCommand : CliktCommand(name = "register") {
   private val name by option("--name", help = "Defaults to <user>-<hostname>")
-  private val brokerUrl by
-      option("--broker-url", envvar = "WORKER_BROKER_URL")
-          .prompt("Broker URL (e.g. https://api.example.com)")
   private val enrollmentToken by
       option(
               "--enrollment-token",
@@ -34,17 +31,17 @@ class RegisterCommand : CliktCommand(name = "register") {
     }
 
     val workerName = name ?: defaultWorkerName()
+    val apiBaseUrl = BuildConfig.apiBaseUrl
 
     val registered =
         try {
-          registerWorker(brokerUrl, workerName, enrollmentToken.trim())
+          registerWorker(apiBaseUrl, workerName, enrollmentToken.trim())
         } catch (e: WorkerApiException) {
           throw PrintMessage(registerErrorMessage(e), statusCode = 1, printError = true)
         }
 
     saveConfig(
         WorkloadConfig(
-            brokerBaseUrl = brokerUrl,
             workerId = registered.workerId,
             workerSecret = registered.workerSecret,
             workerName = workerName,
@@ -57,7 +54,7 @@ class RegisterCommand : CliktCommand(name = "register") {
 
     when (
         pollUntilDecided(
-            brokerUrl,
+            apiBaseUrl,
             registered.workerId,
             registered.workerSecret,
             pollTimeoutSeconds,
@@ -92,9 +89,9 @@ private fun defaultWorkerName(): String {
  */
 fun registerErrorMessage(e: WorkerApiException): String =
     if (e.statusCode == 404) {
-      "Registration failed (404). That can mean a wrong --broker-url, or an enrollment token that " +
-          "is invalid, already used, or expired — the broker returns the same 404 for all of them. " +
-          "Check the URL, and ask an admin for a fresh token if you're unsure it's still good."
+      "Registration failed (404). That usually means an enrollment token that is invalid, already " +
+          "used, or expired — the broker returns the same 404 for all of them. Ask an admin for a " +
+          "fresh token if you're unsure it's still good."
     } else {
       "Registration failed: ${e.message}"
     }
