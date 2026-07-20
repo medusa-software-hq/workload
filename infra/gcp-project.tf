@@ -19,7 +19,10 @@ resource "google_project" "gcp_project" {
   org_id          = data.google_organization.gcp_organization.org_id
   billing_account = data.google_billing_account.gcp_billing_account.id
 
-  name       = "${module.common.project_base_name} - ${module.common.project_variant}"
+  # Per environment: "workload - baseline" on prod (suffix empty — the existing project must not be
+  # renamed), "workload - baseline - staging" on the staging workspace. The project_id keeps its
+  # random suffix; each workspace has its own state, hence its own random_id, hence a distinct project.
+  name       = "${module.common.project_base_name} - ${module.common.project_variant}${module.common.gcp_project_name_suffix}"
   project_id = "${module.common.gcp_organization_prefix}-${module.common.project_base_name}-${random_id.gcp_project_random_id.hex}"
 
   auto_create_network = false
