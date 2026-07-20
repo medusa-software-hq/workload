@@ -76,6 +76,11 @@ a `google_project_service` resource — the CI/Terraform identity lacks
 with `gcloud services enable monitoring.googleapis.com --project <project-id>`
 (done for `baseline`; redo per new env in M5-02).
 
+The CI/Terraform SA also needs `roles/monitoring.editor` to create these
+resources; that binding lives in the `infra` root (`infra/gcp-ci-cd-sa.tf`).
+Since `infra` is applied by hand, it was granted by hand once too (see the
+comment there).
+
 ### Verifying the alerts (hand-test)
 
 Neither policy can be exercised in CI — both need real job telemetry over real
