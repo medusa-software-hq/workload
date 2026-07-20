@@ -5,20 +5,27 @@ almost nothing: its default command is `sh`, which with no stdin exits 0
 immediately and silently, so a green `workload run` tells you the container
 *started* and nothing else.
 
-This one is a **tiny, ordinary Kotlin app** (`src/main/kotlin/.../Main.kt`, ~90
-lines) that reads a GCS object with `google-cloud-storage`. The point is what it
-*doesn't* contain: **no auth code, no token, no metadata calls of its own.** It
-resolves credentials through Application Default Credentials, which inside a
-`workload run` means the **metadata server the CLI runs** (M4 "Beacon"), and the
-library fetches and refreshes the token itself. A normal Google-library app,
-oblivious to the broker and to refresh, "just works" — exactly as it would on a
-real GCE VM. That obliviousness *is* the thing under test.
+This one is a **tiny, ordinary Kotlin app** (`src/main/kotlin/.../Main.kt`) that
+uses `google-auth` two ways: it reads a GCS object with `google-cloud-storage`
+(the **access-token** path) and mints an audience-bound OIDC **ID token** with
+`IdTokenCredentials` (the **`identity`** path). The point is what it *doesn't*
+contain: **no auth code, no token, no metadata calls of its own.** It resolves
+credentials through Application Default Credentials, which inside a `workload run`
+means the **metadata server the CLI runs** (M4 "Beacon"), and the library fetches
+and refreshes tokens itself. A normal Google-library app, oblivious to the broker
+and to refresh, "just works" — exactly as it would on a real GCE VM. That
+obliviousness *is* the thing under test.
+
+The ID-token step is a **deliberate mirror of how a hosted Flow worker mints its
+credential** (`GoogleCredentials.getApplicationDefault() as IdTokenProvider`,
+`INCLUDE_EMAIL` + `FORMAT_FULL`) — so one `workload run` regression-proves the
+exact path a Flow worker takes, not just the access-token path.
 
 A correct run looks like:
 
 ```
 ==============================================
- hello-workload (Kotlin + google-cloud-storage)
+ hello-workload (Kotlin + google-auth: GCS + ID token)
 ==============================================
 arch:  aarch64
 
@@ -26,6 +33,12 @@ gcs: READ OK — gs://ms-workload-test-…-hello-probe/hello.txt (61 bytes)
   content fingerprint: 6b3a1c9f22de
   -> a live GCS object was read via ADC. No token in this process; the metadata
      server served and refreshed it for us — the workload never knew.
+
+idtoken: MINTED via IdTokenCredentials — the same path a hosted Flow worker uses.
+  audience: https://hello-workload.example.test
+  email:    it-handtest@ms-workload-test-…​.iam.gserviceaccount.com
+  issuer:   https://accounts.google.com
+  token fingerprint: 3f2a1c9d0b71
 
 env: GOOGLE_OAUTH_ACCESS_TOKEN present? false   (Beacon expects: false)
 env: GCE_METADATA_HOST = 192.168.50.88:58046
@@ -39,10 +52,16 @@ exiting with 0
 That single run demonstrates the whole chain: the profile's plain env arrived, a
 **secret was resolved** worker-side out of Secret Manager (`DEMO_SECRET`), the
 access token is **not** in the container's environment (only the `GCE_METADATA_*`
-pointers are), and a **real GCS object was read** as the profile's target service
-account — using nothing but the standard library and the metadata server. The GCS
-read *is* the identity proof: only that SA is granted `objectViewer` on the
-bucket.
+pointers are), a **real GCS object was read** *and* an **audience-bound ID token
+was minted** as the profile's target service account — using nothing but the
+standard library and the metadata server. Both the GCS read and the ID token's
+`email`/`aud` claims are the identity proof: only that SA is granted `objectViewer`
+on the bucket, and the ID token names it.
+
+> The ID-token step needs `ComputeEngineCredentials` (i.e. the metadata path), so
+> it only matches inside a `workload run` container. Run it on a dev machine with
+> `gcloud` set up and ADC resolves to *your* user creds instead — the run flags an
+> `aud` mismatch and exits non-zero, by design.
 
 ## Config (all from the profile's env)
 
@@ -52,6 +71,7 @@ env vars.
 | Env var | Effect |
 | --- | --- |
 | `HELLO_PROBE_GCS` | `gs://bucket/object` to read — the live-resource proof. Unset ⇒ the read is skipped. |
+| `HELLO_IDTOKEN_AUDIENCE` | Audience for the ID-token proof (default `https://hello-workload.example.test`). |
 | `HELLO_EXIT_CODE` | Exit with this instead of 0/1 — makes exit-code passthrough testable by hand. |
 | `HELLO_FINGERPRINT_CHARS` | Fingerprint length (default 12). |
 

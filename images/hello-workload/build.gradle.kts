@@ -15,6 +15,10 @@ dependencies {
   // This app contains no auth code and never handles a token; that is the entire point.
   implementation(platform(libs.google.cloud.libraries.bom))
   implementation(libs.google.cloud.storage)
+  // Used directly for the ID-token proof (mirrors how a hosted Flow worker mints its credential):
+  // GoogleCredentials/IdTokenCredentials/IdTokenProvider. Transitive via storage, but declared so
+  // the dependency this code actually compiles against is explicit.
+  implementation(libs.google.auth.oauth2.http)
 
   // A real SLF4J backend so gRPC/google-cloud don't print a "no provider" banner over our output
   // (same reasoning as the CLI's logback dependency).
