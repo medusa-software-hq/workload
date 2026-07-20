@@ -55,6 +55,12 @@ private fun run(args: Array<String>) {
                           AdminWorkersRejectCommand(),
                           AdminWorkersRevokeCommand(),
                       ),
+                  AdminEnrollmentCommand()
+                      .subcommands(
+                          AdminEnrollmentCreateCommand(),
+                          AdminEnrollmentListCommand(),
+                          AdminEnrollmentRevokeCommand(),
+                      ),
               ),
       )
       .main(args)
