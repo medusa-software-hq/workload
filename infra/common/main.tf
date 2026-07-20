@@ -14,16 +14,20 @@ locals {
   gcp_web_run_service_name = "web"
 
   gh_organization_name = "medusa-software-hq"
-  gh_repo_name         = "counter" # 🎨 TEMPLATE EJECT: Change the repo name
+  gh_repo_name         = "workload"
   gh_api_url_var_name  = "API_URL"
 
-  project_base_name = "counter" # 🎨 TEMPLATE EJECT: Choose an org-unique project base name
-  project_variant   = "v4"      # 🎨 TEMPLATE EJECT: Choose a project-unique variant name
+  project_base_name = "workload"
+  project_variant   = "baseline"
 
-  # Google OAuth 2.0 client ID
-  # https://console.cloud.google.com/auth/clients/852264381191-crah9udgr1d44tposdv348k091t2upb6.apps.googleusercontent.com?project=ms-auth-284371d2
-  # 🎨 TEMPLATE POST-EJECT: Create a new OAuth Client ID manually (🔗 https://console.cloud.google.com/auth/clients/create?project=ms-auth-284371d2) and change it here 👆
-  google_client_id = "852264381191-crah9udgr1d44tposdv348k091t2upb6.apps.googleusercontent.com"
+  # Google OAuth 2.0 client ID — the console SPA's Web client.
+  # https://console.cloud.google.com/auth/clients/852264381191-gi3hrcfbkn6mm43qh26b6hl1hmjvlo7a.apps.googleusercontent.com?project=ms-auth-284371d2
+  google_client_id = "852264381191-gi3hrcfbkn6mm43qh26b6hl1hmjvlo7a.apps.googleusercontent.com"
+
+  # Google OAuth 2.0 client ID — the `workload admin` CLI's Desktop client. Human sign-ins through
+  # the CLI mint ID tokens with this as their audience; the API accepts it alongside the SPA client.
+  # https://console.cloud.google.com/auth/clients/852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com?project=ms-auth-284371d2
+  cli_client_id = "852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com"
 }
 
 output "organization_domain" {
@@ -76,4 +80,8 @@ output "project_variant" {
 
 output "google_client_id" {
   value = local.google_client_id
+}
+
+output "cli_client_id" {
+  value = local.cli_client_id
 }

@@ -33,9 +33,9 @@ jobs:
     name: web (SPA)
     uses: ./.github/workflows/check-web-spa.yml
 
-  check-api-infra:
-    name: api (infra)
-    uses: ./.github/workflows/check-api-infra.yml
+  check-backend-infra:
+    name: backend (infra)
+    uses: ./.github/workflows/check-backend-infra.yml
     secrets: inherit
 
     permissions:
@@ -46,3 +46,19 @@ jobs:
   check-api-impl:
     name: api (implementation)
     uses: ./.github/workflows/check-api-impl.yml
+
+  check-cli:
+    name: cli
+    uses: ./.github/workflows/check-cli.yml
+
+  check-docker-connector:
+    name: docker-connector
+    uses: ./.github/workflows/check-docker-connector.yml
+
+  check-token-format:
+    name: token-format
+    uses: ./.github/workflows/check-token-format.yml
+
+  check-front-door-refresher:
+    name: front-door-refresher
+    uses: ./.github/workflows/check-front-door-refresher.yml

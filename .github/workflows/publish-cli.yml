@@ -1,0 +1,73 @@
+name: Publish CLI
+
+on:
+  push:
+    branches: ["trunk/*"]
+    paths:
+      - "cli/**"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+
+jobs:
+  publish-cli:
+    name: Publish CLI fat jar
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build fat jar
+        working-directory: cli
+        # Bake the admin OAuth client secret + API base URL into the jar (see AdminConfig). The
+        # secret is non-confidential for a Desktop OAuth client, but kept out of source so GitHub's
+        # push protection doesn't fight us; API_URL is the same variable the SPA builds against.
+        env:
+          ADMIN_OAUTH_CLIENT_SECRET: ${{ secrets.WORKLOAD_ADMIN_OAUTH_CLIENT_SECRET }}
+          ADMIN_API_BASE_URL: ${{ vars.API_URL }}
+        run: |
+          ../gradlew shadowJar \
+            -PadminOauthClientSecret="$ADMIN_OAUTH_CLIENT_SECRET" \
+            -PadminApiBaseUrl="$ADMIN_API_BASE_URL"
+          echo "JAR=$GITHUB_WORKSPACE/cli/build/libs/workload-cli.jar" >> $GITHUB_ENV
+          echo "VERSION=0.0.${{ github.run_number }}" >> $GITHUB_ENV
+
+      - name: Create GitHub App token
+        uses: actions/create-github-app-token@v3.2.0
+        id: app-token
+        with:
+          client-id: ${{ vars.GH_RELEASES_CLIENT_ID }}
+          private-key: ${{ secrets.GH_RELEASES_APP_PEM_CONTENT }}
+          owner: medusa-software-hq
+          repositories: workload-releases,homebrew-tap
+
+      - name: Create a release
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh release create "${VERSION}" \
+            --repo medusa-software-hq/workload-releases \
+            --title "Workload CLI ${VERSION}" \
+            --notes "Built from ${GITHUB_REPOSITORY}@${GITHUB_SHA}" \
+            "${JAR}"
+
+      - uses: astral-sh/setup-uv@v8.2.0
+
+      - name: Update Homebrew formula
+        working-directory: cli/tools/update-formula
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: uv run update_formula.py --version "${VERSION}" --jar "${JAR}"

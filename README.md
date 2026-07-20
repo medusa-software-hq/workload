@@ -1,202 +1,165 @@
-# Counter
+# Workload
 
-This is an experimental internal project, which serves as a template for other internal projects.
+An in-house platform for **plug-and-play, GCP-compatible workers**: small,
+self-contained jobs that need to touch Google Cloud resources without carrying
+any long-lived Google credentials of their own.
+
+A worker should be trivial to hand out and run anywhere. It registers itself, an
+admin approves it once, and from then on it can obtain real, short-lived GCP
+access on demand — no service-account key files, no `gcloud` login, no
+cloud-specific secrets baked into the worker.
+
+## The core idea: brokered impersonation
+
+The heart of the system is a **token broker** running inside our
+already-trusted backend. Workers never hold a durable Google credential; they
+ask the broker for a short-lived one, and the broker mints it by impersonating a
+service account on their behalf.
+
+The unit of access is a **profile**: a named binding to one target service
+account, together with the environment (plain and secret) and optional container
+image a worker runs under. A worker is granted profiles; it can then claim
+against them.
+
+The end-to-end flow:
+
+1. A worker **registers** and waits, presenting a one-time confirmation code.
+2. An admin **approves** it and **grants** it one or more profiles.
+3. The worker **claims** a profile. The broker checks the grant, then uses its
+   own cloud identity to mint a short-lived token that **impersonates that
+   profile's target service account**.
+4. The worker uses that token to talk to Google Cloud. When it runs a workload
+   (`run`/`exec`), a local **metadata server** — indistinguishable from GCE's to
+   Google tooling — hands the workload short-lived tokens and refreshes them on
+   demand, so the credential never sits in the workload's environment and jobs
+   aren't capped at one token's lifetime. Revoke the worker and the next refresh
+   simply fails.
+
+The trust and the blast radius live in one place — the broker and the IAM
+bindings behind it — instead of being spread across every worker. Workers stay
+dumb and disposable; the sensitive permission stays server-side, scoped per
+profile, and short-lived.
 
 ## Architecture
 
-Counter is a small full-stack template split into three main layers:
+The system has **two planes with two different trust models**, a broker that
+sits between them and Google Cloud, and an opt-in mechanism that lets any
+project make one of its service accounts claimable.
 
-- **Frontend SPA** - a React/Vite application, served by Caddy
-- **Backend API** - a Kotlin gRPC service built on Armeria
-- **Shared contract** - protobuf definitions used to generate client and server code
+```mermaid
+flowchart TB
+    subgraph human["Admin plane — human"]
+      console["Web console"]
+      adminCli["CLI (admin)"]
+    end
+    subgraph machine["Worker plane — machine"]
+      worker["Worker / CLI"]
+    end
 
-At runtime, the flow is:
+    console -->|"Google sign-in"| backend
+    adminCli -->|"Google sign-in"| backend
+    worker -->|"registration credential,<br/>unguessable path"| backend
 
-```text
-Browser
-  -> React SPA served by Caddy
-  -> Google Identity Services for sign-in
-  -> Kotlin API on Cloud Run
-  -> Counter service implementation
-  -> Counter storage
+    backend["Backend<br/>(admin API · registration · token broker)"]
+    backend -->|"impersonate,<br/>short-lived token"| targetSA["Target service account"]
+    worker -.->|"brokered token"| gcp["Google Cloud<br/>(APIs · registries · secrets)"]
+    targetSA -.-> gcp
+
+    owner["Resource owner<br/>(their own Terraform)"] -->|"opt in: allow impersonation"| targetSA
 ```
 
-In production, the backend validates Google ID tokens and persists the counter in Neon (serverless Postgres), accessed through SQLDelight. For local development, the project swaps those pieces for a no-op auth layer and an in-memory store.
-
-### Application design
-
-The repository is organized as a multi-module project with clear separation between transport, business logic, and infrastructure:
-
-- `apps/web/spa/frontend/` - browser application
-- `backend/api/impl/shared/` - shared backend code
-- `backend/api/impl/gcp/` - production backend entry point
-- `backend/api/impl/local/` - local backend entry point
-- `proto/` - gRPC and protobuf definitions
-- `infra/` and per-module `infra/` directories - Terraform configuration
-
-### Frontend
-
-The frontend is a single-page application built with **React**, **Vite**, and **Mantine**.
-
-Its main responsibilities are:
-
-- render the UI
-- authenticate the user with **Google Identity Services**
-- cache and refresh the ID token
-- call the backend through generated gRPC client code
-
-The SPA has two auth modes:
-
-- **Production auth** via `AuthProvider`, which manages Google sign-in and token refresh
-- **Local auth** via `LocalAuthProvider`, which removes the external auth dependency for local development
-
-The app is bundled with Vite and packaged into a container that serves static assets through **Caddy**, with SPA-style routing fallback to `index.html`.
-
-### Backend
-
-The backend is a **Kotlin + Armeria** server that exposes the `CounterService` gRPC API defined in `proto/medusa/counter/v1/counter_service.proto`.
-
-The shared backend module contains the main building blocks:
-
-- `CounterServiceImpl` - implements the gRPC service
-- `CounterStore` - storage abstraction
-- auth decorators - request authentication
-- `buildServer(...)` - common server wiring
-
-The service itself is intentionally thin. It exposes three RPCs:
-
-- `GetCount`
-- `Increment`
-- `Decrement`
-
-`CounterServiceImpl` delegates all state changes to `CounterStore`, which keeps the transport layer separate from persistence.
-
-The server builder is responsible for:
-
-- binding the HTTP port
-- exposing `/health`
-- registering the gRPC service
-- enabling browser-friendly unframed requests
-- applying CORS
-- applying authentication
-
-### Environments and dependency wiring
-
-The backend has two entry points that wire the same shared service differently:
-
-- **GCP / production**
-    - uses `GoogleIdTokenAuthDecorator`
-    - uses `PostgresCounterStore` (SQLDelight, backed by Neon)
-    - reads configuration such as port, client ID, allowed Google Workspace domain, CORS origin regex, and the Neon `DATABASE_URL` from environment variables
-
-- **Local development**
-    - uses `NoOpAuthDecorator`
-    - uses `InMemoryCounterStore`
-
-This keeps environment-specific concerns at the edge while preserving a single shared application core.
-
-### Storage
-
-The primary persistence model is hidden behind `CounterStore`, which makes the service easy to swap between implementations.
-
-Current implementations include:
-
-- `InMemoryCounterStore` - simple local development store
-- `PostgresCounterStore` - production store backed by Neon (serverless Postgres)
-
-`PostgresCounterStore` uses **SQLDelight** for type-safe queries (generated from
-`shared/src/main/sqldelight/.../Counter.sq`) and **Flyway** for runtime schema
-migrations (`shared/src/main/resources/db/migration/`). SQLDelight owns the queries;
-Flyway owns the schema.
-
-This pattern keeps business logic independent from the underlying database choice.
-
-### API contract
-
-The API is defined in protobuf and versioned under `medusa.counter.v1`.
-
-That contract is the boundary between frontend and backend:
-
-- server code implements the generated Kotlin service base
-- frontend code uses generated client stubs
-- changes to the API are centralized in the proto definitions
-
-Because the service is contract-first, transport and client generation stay consistent across modules.
-
-### Infrastructure
-
-Infrastructure is managed with **Terraform** and split by concern rather than kept in a single root module.
-
-#### Root infrastructure (`infra/`)
-
-The root Terraform project provisions shared platform resources such as:
-
-- the GCP project
-- Artifact Registry
-- CI/CD service accounts
-- GitHub integration
-- shared DNS/domain mapping support
-
-#### Backend infrastructure (`backend/api/infra/`)
-
-The backend Terraform project provisions resources required by the API, including:
-
-- Cloud Run service
-- Neon (serverless Postgres) project
-- Secret Manager secret holding the Neon connection string (injected as `DATABASE_URL`)
-
-#### Web infrastructure (`apps/web/infra/foundation/`)
-
-The web foundation project provisions the frontend runtime, including:
-
-- Cloud Run service for the SPA
-- IAP-related configuration
-
-#### Web domain mapping (`apps/web/infra/domain-mapping/`)
-
-This project manages public routing for the web app, including:
-
-- Cloud Run domain mapping
-- Cloudflare DNS records
-
-Terraform state is stored remotely in GCS, with a separate state prefix per Terraform project.
-
-### Delivery model
-
-The project is designed for automated delivery:
-
-- GitHub Actions validate code and infrastructure changes
-- Terraform workflows plan and apply infrastructure updates
-- deployment workflows build containers and deploy them to Cloud Run
-
-This makes the repository usable both as a working example and as a starting point for new internal services.
-
-### Template considerations
-
-This repository is also a template. Files marked with `🎨 TEMPLATE EJECT` identify places that must be renamed or rewritten when creating a derived project, including:
-
-- package names
-- service names
-- Terraform state prefixes
-- cloud resource names
-- README content
-
-## Ejection
-
-To create a derived project, fork this repository and eject from the template.
-
-To eject from the template:
-
-- Visit all files that contain a `🎨 TEMPLATE EJECT` marker
-- Perform the ejection (mostly renaming)
-- Remove the markers (the comment or the whole file)
-- Commit to Git
-
-After ejecting from the template:
-
-- Visit all files that contain a `🎨 TEMPLATE POST-EJECT` marker
-- Perform appropriate manual actions
-- Remove the markers
-- Commit to Git
-
-<!-- 🎨 TEMPLATE EJECT: Replace this README.md -->
+- **Worker plane (machine).** Registration and token claiming. A worker
+  authenticates with a credential it earned at registration, and the
+  worker-facing API lives behind an unguessable path — it isn't a public,
+  discoverable surface. A worker can do nothing until an admin approves it.
+
+- **Admin plane (human).** Managing workers, profiles, and grants. Reached two
+  ways over the same API — a web console and the CLI's admin commands — both
+  authenticated by an interactive Google sign-in as a real person.
+
+- **The broker** is the only component that holds real GCP power. It mints
+  short-lived, profile-scoped tokens by impersonation, and audit-logs
+  everything it does.
+
+- **Opt-in impersonation.** A project that wants one of its service accounts to
+  be claimable grants the broker permission to impersonate it from **its own
+  Terraform**, through a shared module. Ownership of the grant stays with
+  whoever owns that service account — Workload never reaches in and takes it.
+
+The CLI is the worker end of "plug-and-play": one install, then it can register,
+claim, and run work under a profile — resolving the profile's secrets and
+injecting GCP credentials with no `gcloud` on the host. It can also run a
+profile's **container image**, pulling it with the brokered credential so a bare
+machine with only a container runtime is enough.
+
+## Security model
+
+The design goal is that a leaked worker is boring: it holds nothing durable, and
+what it can reach is narrow, granted, and expiring.
+
+- **No long-lived Google credentials on workers.** The only Google credential a
+  worker ever sees is a short-lived, impersonated token it just claimed. There
+  are no key files and no host sign-in state to steal or to go stale.
+
+- **Centralized, audited trust.** All real GCP power sits in the broker and the
+  IAM bindings behind it — one place to reason about, one place that logs. A
+  worker's reach is exactly the profiles it was granted, nothing more.
+
+- **Two planes, two credentials, no crossover.** The machine plane (workers) and
+  the human plane (admins) authenticate differently on purpose. Admin access
+  requires an interactive Google sign-in belonging to the organization's
+  Workspace domain; the token's hosted-domain claim is the gate, and **no
+  service account can satisfy it** — so no machine identity can reach the admin
+  plane, by construction rather than by policy. The console and the admin CLI
+  go through the same gate.
+
+- **Explicit, owner-controlled grants.** A service account only becomes
+  claimable when its own owner opts in from their Terraform, and a worker only
+  reaches a profile when an admin grants it. Both sides are deliberate acts by
+  the party who should be making them.
+
+- **Credentials only go to Google.** When the brokered token is used to pull a
+  profile's container image, it is only ever sent to Google-hosted registries —
+  never to a host named by the image reference — so a profile can't be used to
+  exfiltrate a live token to an arbitrary endpoint.
+
+- **What runs can't change underfoot.** A profile's image is pinned to a content
+  digest, so a moving tag can't swap out what a worker actually runs between when
+  a revision was defined and when it runs.
+
+- **Stated boundaries, not pretended ones.** Some exposures are accepted rather
+  than solved: an injected environment (including resolved secrets) is visible
+  to anyone with local access to the container runtime, and guaranteed teardown
+  is best-effort. These are documented where they live rather than papered over.
+
+## Repository layout
+
+Top-level, by role:
+
+- **`cli/`** — the worker/admin CLI (Kotlin). Two command groups: *worker*
+  (register, claim tokens, run work) and *admin* (manage profiles, workers,
+  grants).
+- **`backend/`** — the service (Kotlin/Armeria on Cloud Run) that hosts the
+  worker registration/broker plane and the admin API, with auth and storage
+  pluggable so the same core runs in production and locally.
+- **`apps/web/`** — the web console (React/Vite SPA), the human-facing front
+  door.
+- **`proto/`** — the protobuf contract shared by frontend and backend: the
+  single source of truth for the admin API.
+- **`infra/`** — shared platform infrastructure (Terraform), split by concern
+  into separate roots, and the module other projects consume to opt a service
+  account in.
+- **`worker-mvp/`** — a deliberately throwaway, separately-managed slice of
+  infra that exercises the broker flow end to end without touching the real
+  backend.
+
+Delivery is automated: CI validates every change and applies/deploys on merge to
+trunk, and the CLI is published as a release and a Homebrew formula so a worker
+is one install away.
+
+## Status
+
+Internal and experimental. It began life as a full-stack template and has been
+grown into the worker platform described above. Each component's own `README.md`
+and `Taskfile.yml` carry the operational detail and exact commands; this document
+is only meant to explain what the system is and how it holds together.

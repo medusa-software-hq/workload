@@ -1,0 +1,63 @@
+version: '3'
+
+.kotlinSources: &kotlinSources
+  - '**/*.kt'
+  - '**/*.kts'
+
+tasks:
+  checkFormatting:
+    desc: Check Kotlin formatting
+    sources: *kotlinSources
+    cmds:
+      - ../gradlew ktfmtCheck
+    interactive: true
+
+  fixFormatting:
+    desc: Fix Kotlin formatting
+    sources: *kotlinSources
+    cmds:
+      - ../gradlew ktfmtFormat
+    interactive: true
+
+  lint:
+    desc: Lint the Kotlin sources
+    sources: *kotlinSources
+    cmds:
+      - ../gradlew detekt
+    interactive: true
+
+  compile:
+    desc: Compile the Kotlin sources
+    sources: *kotlinSources
+    cmds:
+      - ../gradlew compileKotlin
+    interactive: true
+
+  test:
+    desc: Run tests, including contract tests against a real dockerd (self-skip if none)
+    sources: *kotlinSources
+    cmds:
+      - ../gradlew test
+    interactive: true
+
+  install:
+    desc: Install the CLI locally
+    sources: *kotlinSources
+    generates:
+      - ./build/install/cli/bin/cli
+    cmds:
+      - ../gradlew installDist
+
+  bootstrap:
+    desc: Bootstrap the user-specific CLI script
+    status:
+      - test -f ./bin/user/workload-cli
+    cmds:
+      - cp ./bin/user/workload-cli.sample ./bin/user/workload-cli
+
+  run:
+    desc: Run the user-specific CLI script
+    deps: [install, bootstrap]
+    cmds:
+      - ./bin/user/workload-cli {{.CLI_ARGS}}
+    interactive: true

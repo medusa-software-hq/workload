@@ -5,7 +5,7 @@ terraform {
 
   backend "gcs" {
     bucket = "ms-tfstate-c1984596bdabf023"
-    prefix = "projects/counter/v4/root" # 🎨 TEMPLATE EJECT: Update the prefix (!)
+    prefix = "projects/workload/baseline/root"
   }
 
   required_providers {
@@ -50,7 +50,8 @@ provider "google" {
   billing_project       = local.gcp_project_id
 }
 
-# GitHub provider for accessing CI/CD variables
+# GitHub provider for writing CI/CD Actions variables. The repository itself is
+# managed by the .github/config root; here it is only referenced as data.
 
 variable "gh_token" {
   description = "Organization-owned GitHub token."
@@ -61,4 +62,8 @@ variable "gh_token" {
 provider "github" {
   owner = module.common.gh_organization_name
   token = var.gh_token
+}
+
+data "github_repository" "this" {
+  full_name = "${module.common.gh_organization_name}/${module.common.gh_repo_name}"
 }

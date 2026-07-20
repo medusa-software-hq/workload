@@ -1,0 +1,175 @@
+-- Schema for SQLDelight compile-time query verification (Postgres dialect).
+-- The runtime schema is owned by Flyway; keep these table definitions identical to the
+-- cumulative effect of src/main/resources/db/migration/V2__create_fleet.sql and later
+-- migrations in that directory.
+
+CREATE TABLE workers (
+    worker_id         uuid PRIMARY KEY,
+    secret_hash       bytea NOT NULL,
+    name              text  NOT NULL,
+    hostname          text,
+    os                text,
+    cli_version       text,
+    status            text  NOT NULL,
+    confirmation_code text,
+    created_at        TIMESTAMPTZ NOT NULL,
+    approved_at       TIMESTAMPTZ,
+    approved_by       text,
+    last_seen_at      TIMESTAMPTZ,
+    -- Added in V8__add_worker_registration_source.sql.
+    registered_via    text NOT NULL DEFAULT 'V1',
+    source_ip         text
+);
+
+CREATE TABLE profiles (
+    profile_id      text PRIMARY KEY,
+    display_name    text,
+    latest_revision int  NOT NULL,
+    archived        boolean NOT NULL DEFAULT FALSE,
+    created_at      TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE profile_revisions (
+    profile_id             text NOT NULL REFERENCES profiles,
+    revision                int NOT NULL,
+    target_service_account text NOT NULL,
+    created_at              TIMESTAMPTZ NOT NULL,
+    created_by              text NOT NULL,
+    note                    text,
+    verification_status    text NOT NULL DEFAULT 'UNVERIFIED',
+    -- JSON-encoded Map<String, String>; see V4__add_profile_revision_env_vars.sql.
+    env_vars                text NOT NULL DEFAULT '{}',
+    secret_env_vars         text NOT NULL DEFAULT '{}',
+    -- Optional image ref + resolved digest; see V5__add_profile_revision_image.sql.
+    docker_image            text,
+    docker_image_digest     text,
+    image_status            text NOT NULL DEFAULT 'NOT_APPLICABLE',
+    PRIMARY KEY (profile_id, revision)
+);
+
+CREATE TABLE worker_profile_grants (
+    worker_id  uuid NOT NULL REFERENCES workers,
+    profile_id text NOT NULL REFERENCES profiles,
+    granted_at TIMESTAMPTZ NOT NULL,
+    granted_by text NOT NULL,
+    PRIMARY KEY (worker_id, profile_id)
+);
+
+-- Kept in sync with V7__create_enrollment_tokens.sql.
+CREATE TABLE enrollment_tokens (
+    enrollment_token_id uuid PRIMARY KEY,
+    token_hash          bytea NOT NULL UNIQUE,
+    note                text,
+    created_by          text NOT NULL,
+    created_at          TIMESTAMPTZ NOT NULL,
+    expires_at          TIMESTAMPTZ NOT NULL,
+    require_approval    boolean NOT NULL DEFAULT FALSE,
+    used_at             TIMESTAMPTZ,
+    used_by_worker_id   uuid,
+    revoked_at          TIMESTAMPTZ
+);
+
+insertWorker:
+INSERT INTO workers (worker_id, secret_hash, name, hostname, os, cli_version, status, confirmation_code, created_at, registered_via, source_ip)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+selectWorkerById:
+SELECT * FROM workers WHERE worker_id = ?;
+
+selectAllWorkers:
+SELECT * FROM workers ORDER BY created_at;
+
+approveWorker:
+UPDATE workers
+SET status = 'ACTIVE', approved_at = ?, approved_by = ?
+WHERE worker_id = ? AND status != 'ACTIVE';
+
+rejectWorker:
+UPDATE workers
+SET status = 'REJECTED'
+WHERE worker_id = ?;
+
+revokeWorker:
+UPDATE workers
+SET status = 'REVOKED'
+WHERE worker_id = ?;
+
+updateLastSeen:
+UPDATE workers
+SET last_seen_at = ?
+WHERE worker_id = ?;
+
+insertProfile:
+INSERT INTO profiles (profile_id, display_name, latest_revision, archived, created_at)
+VALUES (?, ?, ?, ?, ?);
+
+insertProfileRevision:
+INSERT INTO profile_revisions (profile_id, revision, target_service_account, created_at, created_by, note, env_vars, secret_env_vars, docker_image, docker_image_digest, image_status)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+updateProfileLatestRevision:
+UPDATE profiles SET latest_revision = ? WHERE profile_id = ?;
+
+archiveProfile:
+UPDATE profiles SET archived = TRUE WHERE profile_id = ?;
+
+selectProfileById:
+SELECT * FROM profiles WHERE profile_id = ?;
+
+selectAllProfiles:
+SELECT * FROM profiles ORDER BY profile_id;
+
+selectProfileRevisions:
+SELECT * FROM profile_revisions WHERE profile_id = ? ORDER BY revision;
+
+selectProfileRevisionByNumber:
+SELECT * FROM profile_revisions WHERE profile_id = ? AND revision = ?;
+
+updateProfileRevisionVerification:
+UPDATE profile_revisions SET verification_status = ? WHERE profile_id = ? AND revision = ?;
+
+updateProfileRevisionImageDigest:
+UPDATE profile_revisions SET docker_image_digest = ?, image_status = ? WHERE profile_id = ? AND revision = ?;
+
+upsertGrant:
+INSERT INTO worker_profile_grants (worker_id, profile_id, granted_at, granted_by)
+VALUES (?, ?, ?, ?)
+ON CONFLICT (worker_id, profile_id) DO UPDATE SET granted_at = EXCLUDED.granted_at, granted_by = EXCLUDED.granted_by;
+
+deleteGrant:
+DELETE FROM worker_profile_grants WHERE worker_id = ? AND profile_id = ?;
+
+selectGrant:
+SELECT * FROM worker_profile_grants WHERE worker_id = ? AND profile_id = ?;
+
+selectGrantsByWorker:
+SELECT * FROM worker_profile_grants WHERE worker_id = ? ORDER BY profile_id;
+
+insertEnrollmentToken:
+INSERT INTO enrollment_tokens (enrollment_token_id, token_hash, note, created_by, created_at, expires_at, require_approval)
+VALUES (?, ?, ?, ?, ?, ?, ?);
+
+selectEnrollmentTokenById:
+SELECT * FROM enrollment_tokens WHERE enrollment_token_id = ?;
+
+-- Outstanding = never redeemed, never revoked, not yet expired. Newest first.
+selectOutstandingEnrollmentTokens:
+SELECT * FROM enrollment_tokens
+WHERE used_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+ORDER BY created_at DESC;
+
+-- Revoke only an outstanding token; RETURNING lets the caller tell "revoked" from "already
+-- used/revoked or unknown" without a second read.
+revokeEnrollmentToken:
+UPDATE enrollment_tokens
+SET revoked_at = ?
+WHERE enrollment_token_id = ? AND used_at IS NULL AND revoked_at IS NULL
+RETURNING *;
+
+-- Atomic single-use burn: the conditional UPDATE is the race guard, so exactly one of N concurrent
+-- redemptions of the same token matches the row and gets it back via RETURNING; the rest get none.
+burnEnrollmentToken:
+UPDATE enrollment_tokens
+SET used_at = ?, used_by_worker_id = ?
+WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?
+RETURNING *;

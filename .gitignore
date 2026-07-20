@@ -1,2 +1,12 @@
+# Gradle (single root — see settings.gradle.kts)
+.gradle/
+build/
+
+# Kotlin compiler cache
+.kotlin/
+
 # Task cache
 .task/
+
+# Claude Code
+.claude/

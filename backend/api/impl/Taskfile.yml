@@ -9,32 +9,39 @@ tasks:
     desc: Check Kotlin formatting
     sources: *kotlinSources
     cmds:
-      - ./gradlew ktfmtCheck
+      - ../../../gradlew ktfmtCheck
     interactive: true
 
   fixFormatting:
     desc: Fix Kotlin formatting
     sources: *kotlinSources
     cmds:
-      - ./gradlew ktfmtFormat
+      - ../../../gradlew ktfmtFormat
     interactive: true
 
   lint:
     desc: Lint the Kotlin sources
     sources: *kotlinSources
     cmds:
-      - ./gradlew detekt
+      - ../../../gradlew detekt
     interactive: true
 
   compile:
     desc: Compile the Kotlin sources
     sources: *kotlinSources
     cmds:
-      - ./gradlew compileKotlin
+      - ../../../gradlew compileKotlin
+    interactive: true
+
+  test:
+    desc: Run the test suite
+    sources: *kotlinSources
+    cmds:
+      - ../../../gradlew test
     interactive: true
 
   run:
     desc: Run the service locally (no auth, localhost CORS)
     cmds:
-      - ./gradlew :local:run
+      - ../../../gradlew local:run
     interactive: true

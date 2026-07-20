@@ -1,0 +1,705 @@
+import { Code, ConnectError } from '@connectrpc/connect';
+import { render, screen, waitFor, within } from '@test-utils';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, expect, test, vi } from 'vitest';
+import {
+  ImageStatus,
+  VerificationStatus,
+  type Profile,
+  type ProfileRevision,
+} from './gen/medusa/workload/v1/fleet_service_pb.ts';
+
+const listProfiles = vi.fn();
+const listWorkers = vi.fn();
+const listProfileRevisions = vi.fn();
+const createProfile = vi.fn();
+const updateProfile = vi.fn();
+const archiveProfile = vi.fn();
+const verifyProfile = vi.fn();
+const resolveImage = vi.fn();
+
+vi.mock('@connectrpc/connect', async (importOriginal) => ({
+  // Keep the real Code/ConnectError (the app uses them to detect the CAS mismatch); only the client
+  // factory is stubbed.
+  ...(await importOriginal<typeof import('@connectrpc/connect')>()),
+  createClient: () => ({
+    listProfiles,
+    listWorkers,
+    listProfileRevisions,
+    createProfile,
+    updateProfile,
+    archiveProfile,
+    verifyProfile,
+    resolveImage,
+  }),
+}));
+vi.mock('@connectrpc/connect-web', () => ({ createGrpcWebTransport: () => ({}) }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('./useAuth.tsx', () => ({ useAuth: () => ({ handleUnauthorized: vi.fn() }) }));
+
+const { ProfilesPage } = await import('./ProfilesPage.tsx');
+
+/** Clicks a profile row to open its detail modal, and returns the modal element. */
+async function openProfile(
+  user: ReturnType<typeof userEvent.setup>,
+  profileId = 'my-profile-1'
+): Promise<HTMLElement> {
+  await user.click(await screen.findByRole('button', { name: `Open ${profileId}` }));
+  return screen.findByRole('dialog');
+}
+
+function fakeProfile(overrides: Partial<Profile> = {}): Profile {
+  return {
+    profileId: 'my-profile-1',
+    displayName: '',
+    latestRevision: 1,
+    archived: false,
+    createdAt: '2026-01-01T00:00:00Z',
+    ...overrides,
+  } as Profile;
+}
+
+function fakeRevision(overrides: Partial<ProfileRevision> = {}): ProfileRevision {
+  return {
+    profileId: 'my-profile-1',
+    revision: 1,
+    targetServiceAccount: 'sa@project.iam.gserviceaccount.com',
+    createdAt: '2026-01-01T00:00:00Z',
+    createdBy: 'admin@example.com',
+    note: '',
+    verificationStatus: VerificationStatus.VERIFIED,
+    envVars: {},
+    secretEnvVars: {},
+    dockerImage: '',
+    dockerImageDigest: '',
+    imageStatus: ImageStatus.NOT_APPLICABLE,
+    ...overrides,
+  } as ProfileRevision;
+}
+
+beforeEach(() => {
+  listProfiles.mockReset();
+  listWorkers.mockReset();
+  listProfileRevisions.mockReset();
+  createProfile.mockReset();
+  updateProfile.mockReset();
+  archiveProfile.mockReset();
+  verifyProfile.mockReset();
+  resolveImage.mockReset();
+  listWorkers.mockResolvedValue({ workers: [] });
+  listProfileRevisions.mockResolvedValue({ revisions: [fakeRevision()] });
+  createProfile.mockResolvedValue({});
+  updateProfile.mockResolvedValue({});
+  archiveProfile.mockResolvedValue({});
+  verifyProfile.mockResolvedValue({});
+  // Default: a tag resolves to a digest. Tests that care override this.
+  resolveImage.mockResolvedValue({
+    dockerImageDigest: 'sha256:previewed',
+    imageStatus: ImageStatus.RESOLVED,
+    detail: '',
+  });
+});
+
+test('lists a profile with its target service account and verification status', async () => {
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  expect(await screen.findByText('my-profile-1')).toBeInTheDocument();
+  expect(screen.getByText('sa@project.iam.gserviceaccount.com')).toBeInTheDocument();
+  expect(screen.getByText('Verified')).toBeInTheDocument();
+});
+
+test('shows a binding-missing profile with a remediation tooltip', async () => {
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [fakeRevision({ verificationStatus: VerificationStatus.BINDING_MISSING })],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  expect(await screen.findByText('Binding missing')).toBeInTheDocument();
+});
+
+test('creating a profile validates the ID and service account client-side', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'X');
+  await user.type(within(dialog).getByLabelText(/Target service account/), 'not-an-email');
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  expect(await within(dialog).findByText(/lowercase letters/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/GCP service account email/)).toBeInTheDocument();
+  expect(createProfile).not.toHaveBeenCalled();
+});
+
+test('creating a valid profile calls createProfile and refreshes', async () => {
+  const user = userEvent.setup();
+  listProfiles
+    .mockResolvedValueOnce({ profiles: [] })
+    .mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  await waitFor(() => {
+    expect(createProfile).toHaveBeenCalledWith(
+      {
+        profileId: 'my-profile-1',
+        displayName: '',
+        targetServiceAccount: 'sa@project.iam.gserviceaccount.com',
+        note: '',
+        dockerImage: '',
+        expectedDockerImageDigest: '',
+        envVars: {},
+        secretEnvVars: {},
+      },
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+});
+
+test('editing from the detail view appends a revision without asking for a new ID', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+  await user.click(within(detail).getByRole('button', { name: /New revision from Revision/ }));
+
+  const dialog = await screen.findByRole('dialog');
+  expect(within(dialog).getByText(/creates revision/)).toBeInTheDocument();
+
+  const saInput = within(dialog).getByLabelText(/Target service account/);
+  await user.clear(saInput);
+  await user.type(saInput, 'sa-v2@project.iam.gserviceaccount.com');
+  await user.click(within(dialog).getByRole('button', { name: 'Save' }));
+
+  await waitFor(() => {
+    expect(updateProfile).toHaveBeenCalledWith(
+      {
+        profileId: 'my-profile-1',
+        targetServiceAccount: 'sa-v2@project.iam.gserviceaccount.com',
+        note: '',
+        dockerImage: '',
+        expectedDockerImageDigest: '',
+        envVars: {},
+        secretEnvVars: {},
+      },
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+});
+
+test('archiving from the detail view requires confirmation', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+  await user.click(within(detail).getByRole('button', { name: 'Archive' }));
+
+  const confirm = await screen.findByRole('dialog');
+  await user.click(within(confirm).getByRole('button', { name: 'Archive' }));
+
+  await waitFor(() => {
+    expect(archiveProfile).toHaveBeenCalledWith(
+      { profileId: 'my-profile-1' },
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+});
+
+test('an archived profile disables Edit and Archive in its detail view', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile({ archived: true })] });
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+  expect(within(detail).getByRole('button', { name: /New revision from Revision/ })).toBeDisabled();
+  expect(within(detail).getByRole('button', { name: 'Archive' })).toBeDisabled();
+});
+
+test('re-verifying from the detail view', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+  await user.click(within(detail).getByRole('button', { name: 'Re-verify' }));
+
+  await waitFor(() => {
+    expect(verifyProfile).toHaveBeenCalledWith(
+      { profileId: 'my-profile-1' },
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+});
+
+test('the revision pager steps between revisions, defaulting to the latest', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile({ latestRevision: 2 })] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({ revision: 1, targetServiceAccount: 'old-sa@project.iam.gserviceaccount.com' }),
+      fakeRevision({ revision: 2, targetServiceAccount: 'new-sa@project.iam.gserviceaccount.com' }),
+    ],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+  // Lands on the latest (rev 2), which is flagged as such and shows rev 2's SA.
+  expect(within(detail).getByText('Latest')).toBeInTheDocument();
+  expect(within(detail).getByText('new-sa@project.iam.gserviceaccount.com')).toBeInTheDocument();
+
+  await user.click(within(detail).getByRole('button', { name: 'Previous revision' }));
+  // Now viewing rev 1: its SA, and no "Latest" badge.
+  expect(within(detail).getByText('old-sa@project.iam.gserviceaccount.com')).toBeInTheDocument();
+  expect(within(detail).queryByText('Latest')).not.toBeInTheDocument();
+});
+
+test('Edit templates from the revision currently being viewed, not always the latest', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile({ latestRevision: 2 })] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({ revision: 1, targetServiceAccount: 'old-sa@project.iam.gserviceaccount.com' }),
+      fakeRevision({ revision: 2, targetServiceAccount: 'new-sa@project.iam.gserviceaccount.com' }),
+    ],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+  // Page back to revision 1, then Edit — the form should seed from rev 1, not the latest.
+  await user.click(within(detail).getByRole('button', { name: 'Previous revision' }));
+  await user.click(within(detail).getByRole('button', { name: /New revision from Revision/ }));
+
+  const dialog = await screen.findByRole('dialog');
+  expect(
+    within(dialog).getByDisplayValue('old-sa@project.iam.gserviceaccount.com')
+  ).toBeInTheDocument();
+});
+
+test('the detail view shows the selected revision and its granted workers', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listWorkers.mockResolvedValue({
+    workers: [
+      {
+        workerId: 'worker-1',
+        name: 'jakub-mbp',
+        grantedProfileIds: ['my-profile-1'],
+      } as never,
+    ],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+
+  expect(within(detail).getByText('Revision')).toBeInTheDocument();
+  expect(within(detail).getByText('Granted workers')).toBeInTheDocument();
+  expect(await within(detail).findByText('jakub-mbp')).toBeInTheDocument();
+});
+
+test('creating a profile with an env var and a secret env var sends both maps', async () => {
+  const user = userEvent.setup();
+  listProfiles
+    .mockResolvedValueOnce({ profiles: [] })
+    .mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+
+  await user.click(within(dialog).getByRole('button', { name: 'Add env vars' }));
+  const [nameInput] = within(dialog).getAllByPlaceholderText('NAME');
+  await user.type(nameInput, 'MODE');
+  const [valueInput] = within(dialog).getAllByLabelText('Value');
+  await user.type(valueInput, 'batch');
+
+  await user.click(within(dialog).getByRole('button', { name: 'Add secret env vars' }));
+  const nameInputs = within(dialog).getAllByPlaceholderText('NAME');
+  await user.type(nameInputs[1], 'API_KEY');
+  const secretInput = within(dialog).getByLabelText('Secret Manager resource name');
+  await user.type(secretInput, 'projects/p/secrets/api-key/versions/latest');
+
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  await waitFor(() => {
+    expect(createProfile).toHaveBeenCalledWith(
+      {
+        profileId: 'my-profile-1',
+        displayName: '',
+        targetServiceAccount: 'sa@project.iam.gserviceaccount.com',
+        note: '',
+        dockerImage: '',
+        expectedDockerImageDigest: '',
+        envVars: { MODE: 'batch' },
+        secretEnvVars: { API_KEY: 'projects/p/secrets/api-key/versions/latest' },
+      },
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+});
+
+test('an invalid env var name is rejected client-side without calling createProfile', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.click(within(dialog).getByRole('button', { name: 'Add env vars' }));
+  const [nameInput] = within(dialog).getAllByPlaceholderText('NAME');
+  await user.type(nameInput, 'not-valid');
+
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  expect(await within(dialog).findByText(/uppercase letters/)).toBeInTheDocument();
+  expect(createProfile).not.toHaveBeenCalled();
+});
+
+test('a malformed secret resource name is rejected client-side', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.click(within(dialog).getByRole('button', { name: 'Add secret env vars' }));
+  const [nameInput] = within(dialog).getAllByPlaceholderText('NAME');
+  await user.type(nameInput, 'API_KEY');
+  const secretInput = within(dialog).getByLabelText('Secret Manager resource name');
+  await user.type(secretInput, 'not-a-resource-name');
+
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  expect(await within(dialog).findByText(/projects\/<project>/)).toBeInTheDocument();
+  expect(createProfile).not.toHaveBeenCalled();
+});
+
+test('editing a profile pre-populates its existing env vars', async () => {
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [fakeRevision({ envVars: { MODE: 'batch' } })],
+  });
+  const user = userEvent.setup();
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+  await user.click(within(detail).getByRole('button', { name: /New revision from Revision/ }));
+  const dialog = await screen.findByRole('dialog');
+
+  expect(within(dialog).getByDisplayValue('MODE')).toBeInTheDocument();
+  expect(within(dialog).getByDisplayValue('batch')).toBeInTheDocument();
+});
+
+test('a secret_inaccessible profile shows the remediation alert when editing', async () => {
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({
+        verificationStatus: VerificationStatus.SECRET_INACCESSIBLE,
+        secretEnvVars: { API_KEY: 'projects/p/secrets/api-key/versions/latest' },
+      }),
+    ],
+  });
+  const user = userEvent.setup();
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+  await user.click(within(detail).getByRole('button', { name: /New revision from Revision/ }));
+  const dialog = await screen.findByRole('dialog');
+
+  expect(await within(dialog).findByText(/secret_ids input/)).toBeInTheDocument();
+});
+
+test('revision history shows an env diff between adjacent revisions', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({ revision: 1, envVars: { MODE: 'batch', OLD_VAR: 'x' } }),
+      fakeRevision({ revision: 2, envVars: { MODE: 'streaming', NEW_VAR: 'y' } }),
+    ],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  // Opens on the latest revision, whose "Changes from the previous revision" is the diff vs rev 1.
+  const detail = await openProfile(user);
+
+  expect(within(detail).getByText('+NEW_VAR')).toBeInTheDocument();
+  expect(within(detail).getByText('~MODE')).toBeInTheDocument();
+  expect(within(detail).getByText('-OLD_VAR')).toBeInTheDocument();
+});
+
+test('creating a profile with an image previews the digest and pins it as the CAS token', async () => {
+  const user = userEvent.setup();
+  listProfiles
+    .mockResolvedValueOnce({ profiles: [] })
+    .mockResolvedValue({ profiles: [fakeProfile()] });
+  resolveImage.mockResolvedValue({
+    dockerImageDigest: 'sha256:abc123',
+    imageStatus: ImageStatus.RESOLVED,
+    detail: '',
+  });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.type(
+    within(dialog).getByLabelText(/Container image/),
+    'us-docker.pkg.dev/p/repo/app:v1'
+  );
+
+  // The preview resolves and is shown to the admin *before* they commit.
+  expect(await within(dialog).findByText(/sha256:abc123/)).toBeInTheDocument();
+  expect(resolveImage).toHaveBeenCalledWith(
+    {
+      dockerImage: 'us-docker.pkg.dev/p/repo/app:v1',
+      targetServiceAccount: 'sa@project.iam.gserviceaccount.com',
+    },
+    { headers: { Authorization: 'Bearer tok' } }
+  );
+
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  await waitFor(() => {
+    expect(createProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dockerImage: 'us-docker.pkg.dev/p/repo/app:v1',
+        // The pinned digest is exactly the one previewed — the CAS token.
+        expectedDockerImageDigest: 'sha256:abc123',
+      }),
+      { headers: { Authorization: 'Bearer tok' } }
+    );
+  });
+});
+
+test('an image without a target service account prompts for one instead of resolving', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [] });
+  resolveImage.mockResolvedValue({
+    dockerImageDigest: 'sha256:def456',
+    imageStatus: ImageStatus.RESOLVED,
+    detail: '',
+  });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  // Image filled, SA still empty — can't resolve a digest as nobody, so we prompt rather than
+  // sit silent, and never hit the backend.
+  await user.type(
+    within(dialog).getByLabelText(/Container image/),
+    'us-docker.pkg.dev/p/repo/app:v1'
+  );
+  expect(await within(dialog).findByText(/Enter the target service account/)).toBeInTheDocument();
+  expect(resolveImage).not.toHaveBeenCalled();
+
+  // Once the SA is provided, the preview resolves.
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  expect(await within(dialog).findByText(/sha256:def456/)).toBeInTheDocument();
+});
+
+test('a CAS mismatch (tag moved) re-previews the new digest instead of dead-ending', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [] });
+  // Preview first shows :aaa, then (after the tag moves) :bbb.
+  resolveImage
+    .mockResolvedValueOnce({
+      dockerImageDigest: 'sha256:aaa',
+      imageStatus: ImageStatus.RESOLVED,
+      detail: '',
+    })
+    .mockResolvedValue({
+      dockerImageDigest: 'sha256:bbb',
+      imageStatus: ImageStatus.RESOLVED,
+      detail: '',
+    });
+  // The backend rejects the create because the tag moved since the admin confirmed :aaa.
+  createProfile.mockRejectedValueOnce(new ConnectError('tag moved', Code.FailedPrecondition));
+
+  render(<ProfilesPage token="tok" />);
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.type(
+    within(dialog).getByLabelText(/Container image/),
+    'us-docker.pkg.dev/p/repo/app:v1'
+  );
+
+  expect(await within(dialog).findByText(/sha256:aaa/)).toBeInTheDocument();
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  // The create was rejected, but the form recovers: it re-resolves and shows the new digest, so the
+  // admin can confirm the current one rather than being stuck.
+  expect(await within(dialog).findByText(/sha256:bbb/)).toBeInTheDocument();
+});
+
+test('an unresolvable image surfaces the reason in the form before creating', async () => {
+  const user = userEvent.setup();
+  listProfiles
+    .mockResolvedValueOnce({ profiles: [] })
+    .mockResolvedValue({ profiles: [fakeProfile()] });
+  resolveImage.mockResolvedValue({
+    dockerImageDigest: '',
+    imageStatus: ImageStatus.UNRESOLVABLE,
+    detail: 'registry returned 403',
+  });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.type(
+    within(dialog).getByLabelText(/Container image/),
+    'us-docker.pkg.dev/p/repo/nope:v1'
+  );
+
+  expect(await within(dialog).findByText(/Can't resolve this image/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/artifactregistry.reader/)).toBeInTheDocument();
+});
+
+test('a non-Google registry image ref is rejected client-side without calling createProfile', async () => {
+  // Security rule, not a preference: the backend and the worker both authenticate to the image's
+  // registry with a token impersonating the profile's target SA, so a third-party host would be
+  // handed a live credential for that account.
+  const user = userEvent.setup();
+  listProfiles
+    .mockResolvedValueOnce({ profiles: [] })
+    .mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.type(within(dialog).getByLabelText(/Container image/), 'ghcr.io/someone/app:v1');
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  expect(await within(dialog).findByText(/Google container registry/)).toBeInTheDocument();
+  expect(createProfile).not.toHaveBeenCalled();
+});
+
+test('a bare Docker Hub image ref is rejected client-side without calling createProfile', async () => {
+  const user = userEvent.setup();
+  listProfiles
+    .mockResolvedValueOnce({ profiles: [] })
+    .mockResolvedValue({ profiles: [fakeProfile()] });
+  render(<ProfilesPage token="tok" />);
+
+  await user.click(await screen.findByRole('button', { name: 'Create profile' }));
+  const dialog = await screen.findByRole('dialog');
+
+  await user.type(within(dialog).getByLabelText(/Profile ID/), 'my-profile-1');
+  await user.type(
+    within(dialog).getByLabelText(/Target service account/),
+    'sa@project.iam.gserviceaccount.com'
+  );
+  await user.type(within(dialog).getByLabelText(/Container image/), 'busybox:latest');
+  await user.click(within(dialog).getByRole('button', { name: 'Create' }));
+
+  expect(await within(dialog).findByText(/fully-qualified registry ref/)).toBeInTheDocument();
+  expect(createProfile).not.toHaveBeenCalled();
+});
+
+test('revision history surfaces a digest change under an identical tag', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({
+        revision: 1,
+        dockerImage: 'us-docker.pkg.dev/p/repo/app:v1',
+        dockerImageDigest: 'sha256:aaaaaaaa11111111',
+        imageStatus: ImageStatus.RESOLVED,
+      }),
+      // Same tag, different digest — a re-push. The diff must call this out.
+      fakeRevision({
+        revision: 2,
+        dockerImage: 'us-docker.pkg.dev/p/repo/app:v1',
+        dockerImageDigest: 'sha256:bbbbbbbb22222222',
+        imageStatus: ImageStatus.RESOLVED,
+      }),
+    ],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  // Latest revision: same tag as rev 1 but a different pinned digest → flagged as an image change.
+  const detail = await openProfile(user);
+
+  expect(within(detail).getByText('image digest')).toBeInTheDocument();
+  expect(within(detail).getByText(/sha256:bbbbbbbb22222222/)).toBeInTheDocument();
+});
+
+test('an unresolvable image revision shows the flagged badge in the detail view', async () => {
+  const user = userEvent.setup();
+  listProfiles.mockResolvedValue({ profiles: [fakeProfile()] });
+  listProfileRevisions.mockResolvedValue({
+    revisions: [
+      fakeRevision({
+        revision: 1,
+        dockerImage: 'us-docker.pkg.dev/p/repo/missing:v9',
+        dockerImageDigest: '',
+        imageStatus: ImageStatus.UNRESOLVABLE,
+      }),
+    ],
+  });
+  render(<ProfilesPage token="tok" />);
+
+  const detail = await openProfile(user);
+
+  expect(within(detail).getByText('Unresolvable')).toBeInTheDocument();
+});

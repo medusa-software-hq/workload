@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Directory where this script lives
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# Dist script relative to this script
+TARGET="$SCRIPT_DIR/../build/install/cli/bin/cli"
+
+# Call it, forwarding all arguments
+exec "$TARGET" "$@"

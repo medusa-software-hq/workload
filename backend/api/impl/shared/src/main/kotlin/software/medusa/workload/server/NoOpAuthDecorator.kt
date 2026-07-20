@@ -1,0 +1,21 @@
+package software.medusa.workload.server
+
+import com.linecorp.armeria.common.HttpRequest
+import com.linecorp.armeria.common.HttpResponse
+import com.linecorp.armeria.server.DecoratingHttpServiceFunction
+import com.linecorp.armeria.server.HttpService
+import com.linecorp.armeria.server.ServiceRequestContext
+
+private const val localAdminEmail = "local-dev@example.com"
+
+/** Passes every request through without any authentication check. For local development only. */
+object NoOpAuthDecorator : DecoratingHttpServiceFunction {
+  override fun serve(
+      delegate: HttpService,
+      ctx: ServiceRequestContext,
+      req: HttpRequest,
+  ): HttpResponse {
+    ctx.setAttr(adminEmailAttrKey, localAdminEmail)
+    return delegate.serve(ctx, req)
+  }
+}

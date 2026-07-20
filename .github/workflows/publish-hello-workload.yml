@@ -1,0 +1,91 @@
+name: Publish hello-workload image
+
+# The demo/diagnostic image the manual end-to-end test runs. Pushed to the integration-test
+# project's private repo — the same one the registry-auth workflow pulls from — because its whole
+# purpose is to be pulled through the brokered path. It is not a product image, so it does not
+# belong in the production registry.
+#
+# Fixtures (the repo and the IT_* variables) come from infra/integration-test.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - trunk/*
+    paths:
+      - images/hello-workload/**
+      - .github/workflows/publish-hello-workload.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  NO_COLOR: 1
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.IT_CI_SA_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.IT_REGISTRY_HOSTNAME }}" --quiet
+
+      # The image is a Kotlin/JVM app. Build its fat jar here, once: it's architecture-neutral, so
+      # the multi-arch Docker build below just copies the same jar onto each arch's JRE base.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build the hello-workload fat jar
+        run: ./gradlew :images:hello-workload:shadowJar
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Multi-arch, unlike the SPA image: that one only ever runs on Cloud Run (amd64), whereas this
+      # runs wherever a worker does — developer Macs and the arm64 Ubuntu VM. An amd64-only image
+      # would simply not run on either. The digest this publishes is a manifest list, which the
+      # backend's resolver already handles (it Accepts image indexes) and the daemon resolves per
+      # host.
+      - name: Build and push image
+        uses: docker/build-push-action@v7.1.0
+        with:
+          context: images/hello-workload
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ vars.IT_HELLO_IMAGE_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report the pinned digest
+        run: |
+          ref="${{ vars.IT_HELLO_IMAGE_REPOSITORY }}:latest"
+          digest=$(gcloud artifacts docker images describe "$ref" --format='value(image_summary.digest)')
+          echo "Pushed $ref"
+          echo "  digest: $digest"
+          {
+            echo "### hello-workload published"
+            echo
+            echo "Paste into the console's *Create profile* form:"
+            echo
+            echo '```'
+            echo "$ref"
+            echo '```'
+            echo
+            echo "Pinned digest: \`$digest\` (linux/amd64 + linux/arm64)"
+          } >> "$GITHUB_STEP_SUMMARY"

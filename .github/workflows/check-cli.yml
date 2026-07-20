@@ -1,0 +1,55 @@
+name: Check CLI
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+  NO_COLOR: 1
+
+  SERVICE_PATH: cli
+
+jobs:
+  check-cli:
+    name: Check CLI
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: go-task/setup-task@v2
+
+      # Fail loudly if the runner has no daemon, rather than letting `workload run`'s contract
+      # tests self-skip into a false green. Pairs with DOCKER_CONTRACT_REQUIRED on the test step.
+      - name: Verify Docker daemon is available
+        run: docker version
+
+      - name: Check formatting
+        run: task checkFormatting
+        working-directory: ${{ env.SERVICE_PATH }}
+
+      - name: Lint
+        run: task lint
+        working-directory: ${{ env.SERVICE_PATH }}
+
+      - name: Compile
+        run: task compile
+        working-directory: ${{ env.SERVICE_PATH }}
+
+      # ubuntu-latest has a live daemon; DOCKER_CONTRACT_REQUIRED turns a would-be skip into a
+      # failure so `workload run`'s container tests are guaranteed to execute here.
+      - name: Test (incl. contract tests vs Docker)
+        run: task test
+        working-directory: ${{ env.SERVICE_PATH }}
+        env:
+          DOCKER_CONTRACT_REQUIRED: "1"

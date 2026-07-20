@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Directory where this script lives
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+# User-agnostic helper script relative to this script
+TARGET="$SCRIPT_DIR/../workload-cli"
+
+# Call it, forwarding all arguments
+exec "$TARGET" "$@"

@@ -1,0 +1,121 @@
+name: Integration test - registry auth
+
+# Manual only. It talks to real GCP and pushes a fixture image, so it is not something to run on
+# every PR — but it is the only thing that proves the brokered pull actually works against a real
+# private Artifact Registry image. Run it when touching image pull, registry auth, or digest
+# resolution. Fixtures: infra/integration-test (applied by hand).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  JAVA_VERSION: 21
+  NO_COLOR: 1
+
+jobs:
+  registry-auth:
+    name: Registry auth
+    # ubuntu-latest ships a running Docker daemon, which the pull half of this needs.
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Federate in as the test project's CI identity. This is only a front door: it pushes the
+      # fixture image and mints tokens for the two target SAs. It is never the identity under test —
+      # it is near-admin here, so a pull as *it* would pass regardless of the reader grant and the
+      # negative case could never fail.
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.IT_CI_SA_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Verify Docker daemon is available
+        run: docker version
+
+      # Push the fixture: a re-tagged busybox in the private test repo. Done with the CI identity's
+      # writer role — the test itself never uses these credentials.
+      - name: Publish the private fixture image
+        run: |
+          gcloud auth configure-docker "${{ vars.IT_REGISTRY_HOSTNAME }}" --quiet
+          docker pull busybox:latest
+          docker tag busybox:latest "${{ vars.IT_IMAGE_REPOSITORY }}:latest"
+          docker push "${{ vars.IT_IMAGE_REPOSITORY }}:latest"
+
+      # Drop every trace of that push from this machine, so the pull under test cannot ride it. From
+      # here on the only usable credential is the brokered token.
+      - name: Remove all local Docker sign-in state
+        run: |
+          docker image rm "${{ vars.IT_IMAGE_REPOSITORY }}:latest" || true
+          rm -rf ~/.docker
+          echo "docker config dir:"; ls -la ~/.docker 2>&1 || echo "  (absent, as intended)"
+
+      # Mint the two tokens by impersonating the target SAs — the same generateAccessToken call the
+      # broker makes. These are what a worker would receive in its claim.
+      - name: Mint brokered tokens for target SAs
+        run: |
+          reader=$(gcloud auth print-access-token \
+            --impersonate-service-account="${{ vars.IT_READER_SA_EMAIL }}")
+          no_reader=$(gcloud auth print-access-token \
+            --impersonate-service-account="${{ vars.IT_NO_READER_SA_EMAIL }}")
+          echo "::add-mask::$reader"
+          echo "::add-mask::$no_reader"
+          echo "IT_READER_TOKEN=$reader" >> "$GITHUB_ENV"
+          echo "IT_NO_READER_TOKEN=$no_reader" >> "$GITHUB_ENV"
+
+      # The pull half: a brokered token must read the private image, and must be refused without the
+      # grant. Runs against the runner's own daemon.
+      - name: Brokered pull against real Artifact Registry
+        run: >
+          ./gradlew :libraries:docker-connector:test
+          --tests 'software.medusa.workload.docker.BrokeredPullIntegrationTest'
+        env:
+          IT_IMAGE_REF: ${{ vars.IT_IMAGE_REPOSITORY }}:latest
+
+      # The verification half: the real resolver mints its own impersonated token and HEADs the real
+      # manifest, so a missing grant flags the revision rather than failing on a worker mid-pull.
+      - name: Digest resolution against real Artifact Registry
+        run: >
+          ./gradlew :backend:api:impl:shared:test
+          --tests 'software.medusa.workload.server.ImageDigestResolverIntegrationTest'
+        env:
+          IT_IMAGE_REF: ${{ vars.IT_IMAGE_REPOSITORY }}:latest
+          IT_READER_SA_EMAIL: ${{ vars.IT_READER_SA_EMAIL }}
+          IT_NO_READER_SA_EMAIL: ${{ vars.IT_NO_READER_SA_EMAIL }}
+
+      # The tests self-skip when their fixture vars are absent, so a misconfigured run would
+      # otherwise pass with nothing executed. Fail instead.
+      - name: Fail if the integration tests were skipped
+        run: |
+          skipped=$(grep -rl 'skipped="[1-9]' \
+            libraries/docker-connector/build/test-results/test \
+            backend/api/impl/shared/build/test-results/test 2>/dev/null || true)
+          if [ -n "$skipped" ]; then
+            echo "Integration tests skipped instead of running — the IT_* variables are probably"
+            echo "missing. Apply infra/integration-test to set them."
+            echo "$skipped"
+            exit 1
+          fi
+          echo "Integration tests executed."
+
+      - name: Confirm nothing was written to the Docker config
+        run: |
+          if [ -e ~/.docker/config.json ]; then
+            echo "A brokered pull must not write ~/.docker/config.json, but it exists:"
+            cat ~/.docker/config.json
+            exit 1
+          fi
+          echo "~/.docker/config.json absent, as intended."
