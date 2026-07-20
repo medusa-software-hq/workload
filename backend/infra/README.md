@@ -11,9 +11,13 @@ are added:
 
 ## Spend guardrails
 
-The backend is a public, unauthenticated-at-the-edge HTTP surface, so its
-failure mode under abuse is a runaway Cloud Run bill rather than an outage. Two
-layers bound that:
+The backend's origin (`run.app`) is **IAM-locked** (M4-A6): only the Cloudflare
+front-door Worker, carrying an invoker ID token, gets past Google's front end —
+every other caller is rejected there for free, before any instance starts. The
+public surface is the Cloudflare front door, which forwards legitimate traffic on
+to the origin. Abuse can still drive billable Cloud Run work *through* the front
+door, so the failure mode under load remains a runaway Cloud Run bill rather than
+an outage. Two layers bound that:
 
 - **`max_instance_count` cap** on both the API and web services
   (`gcp-service.tf`). This is a deliberate **bills-over-availability** trade: the
@@ -42,6 +46,42 @@ create`):
 
 Verify by lowering the amount so a threshold trips on current spend (or
 hand-check the configuration if test-firing isn't practical), then restore it.
+
+## Front-door refresher monitoring
+
+The M4-A6 front door depends on one Cloud Run job — `front-door-refresher` — to
+keep the Cloudflare Worker's invoker ID token fresh (pushed every 15 min, valid
+~60 min). If that loop silently stops, the **entire API goes dark ~45 min later
+with no other signal**. `gcp-monitoring.tf` guards it with two Cloud Monitoring
+alert policies, both notifying the `alerts@medusa.software` group (an `email`
+notification channel; the group is hand-created in the Workspace admin console —
+Terraform/CI lacks group-admin rights):
+
+- **Execution failed** — a threshold on `run.googleapis.com/job/completed_execution_count`
+  with `result="failed"`: an execution ran but returned non-zero.
+- **No successful run in 20m** — an MQL `absent_for` (missing-data) condition on
+  the `result="succeeded"` series. Unlike a threshold, this also fires when the
+  job stops emitting entirely — a paused/deleted Cloud Scheduler trigger, a
+  deleted job — which is the failure mode most likely to go unnoticed. The 20-min
+  window trips after a single fully-missed 15-min run, leaving ~40 min of runway
+  before the current token actually expires.
+
+The notification channel targets a **Google Group**, not an individual, so the
+alert survives people coming and going.
+
+### Verifying the alerts (hand-test)
+
+Neither policy can be exercised in CI — both need real job telemetry over real
+wall-clock time:
+
+- **Staleness:** pause the Cloud Scheduler trigger
+  (`gcloud scheduler jobs pause front-door-refresher --location=<region>`), wait
+  ~25 min, confirm the "no successful run in 20m" alert fires and an email
+  reaches the group; then resume
+  (`gcloud scheduler jobs resume front-door-refresher …`) and confirm it clears.
+- **Failure:** trigger one execution with an argument override that makes the job
+  exit non-zero (e.g. a bogus `CF_ACCOUNT_ID`), confirm the "execution failed"
+  alert fires, then let a normal run auto-close it.
 
 ## Neon provisioning
 
