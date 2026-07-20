@@ -133,3 +133,44 @@ resource "github_actions_repository_permissions" "this" {
   enabled         = true
   allowed_actions = "all"
 }
+
+# Deployment environments for the prod/staging split (M5-02). Each holds the environment-scoped
+# CI/CD variables (GCP project id, API URL, CI/CD SA, OAuth client id, …) that distinguish a
+# staging deploy from a prod one — see infra/github-variables.tf. Required reviewers are
+# Enterprise-only for private repos, so any promotion gate is a job dependency (M5-04's
+# deploy-prod needs staging smoke), not an Environment reviewer. The Environment still earns its
+# keep: deployment tracking, environment-scoped variables, and a branch policy that restricts
+# deploys to the trunk.
+resource "github_repository_environment" "production" {
+  repository  = github_repository.this.name
+  environment = "production"
+
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+# Only the trunk may deploy to production.
+resource "github_repository_environment_deployment_policy" "production_trunk" {
+  repository     = github_repository.this.name
+  environment    = github_repository_environment.production.environment
+  branch_pattern = module.common.gh_default_branch_name
+}
+
+resource "github_repository_environment" "staging" {
+  repository  = github_repository.this.name
+  environment = "staging"
+
+  deployment_branch_policy {
+    protected_branches     = false
+    custom_branch_policies = true
+  }
+}
+
+# Only the trunk may deploy to staging.
+resource "github_repository_environment_deployment_policy" "staging_trunk" {
+  repository     = github_repository.this.name
+  environment    = github_repository_environment.staging.environment
+  branch_pattern = module.common.gh_default_branch_name
+}
