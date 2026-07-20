@@ -252,7 +252,7 @@ export function WorkersPage({ token }: { token: string }) {
         </Group>
         <Text c="dimmed" size="sm">
           Mint a one-time token and hand it to a teammate. They register with it once, and it's
-          burnt — no open registration, no confirmation code.
+          burnt — the only way to enroll a worker.
         </Text>
 
         {enrollmentTokens.length === 0 ? (
@@ -307,9 +307,9 @@ export function WorkersPage({ token }: { token: string }) {
 
         {pending.length > 1 && (
           <Alert color="orange" title="Multiple pending registrations">
-            {pending.length} workers are waiting for approval. Match each confirmation code with the
-            requester out of band before approving — with more than one pending, the code is the
-            only thing telling them apart.
+            {pending.length} workers are waiting for approval. Confirm each one's source IP matches
+            where your invitee actually is before approving — with more than one pending, that's
+            what tells them apart.
           </Alert>
         )}
 
@@ -323,7 +323,6 @@ export function WorkersPage({ token }: { token: string }) {
                 <Table.Th>Hostname</Table.Th>
                 <Table.Th>OS</Table.Th>
                 <Table.Th>Requested at</Table.Th>
-                <Table.Th>Confirmation code</Table.Th>
                 <Table.Th>Source IP</Table.Th>
                 <Table.Th />
               </Table.Tr>
@@ -335,17 +334,8 @@ export function WorkersPage({ token }: { token: string }) {
                   <Table.Td>{worker.hostname || '—'}</Table.Td>
                   <Table.Td>{worker.os || '—'}</Table.Td>
                   <Table.Td>{formatDate(worker.createdAt)}</Table.Td>
-                  <Table.Td>
-                    {worker.confirmationCode ? (
-                      <Text size="xl" fw={700} ff="monospace">
-                        {worker.confirmationCode}
-                      </Text>
-                    ) : (
-                      <Text c="dimmed">—</Text>
-                    )}
-                  </Table.Td>
-                  {/* For a v2 (enrollment-token) pending worker the source IP is the check: does it
-                      match where your invitee actually is? v1 workers show no IP. */}
+                  {/* The source IP is the check on a require_approval pending worker: does it match
+                      where your invitee actually is? */}
                   <Table.Td ff="monospace">{worker.sourceIp || '—'}</Table.Td>
                   <Table.Td>
                     <Group gap="xs">
@@ -483,10 +473,18 @@ export function WorkersPage({ token }: { token: string }) {
               </Alert>
             )}
             <Text>
-              Does the requester for <strong>{pendingAction.worker.name}</strong> see code{' '}
-              <Text component="span" fw={700} ff="monospace">
-                {pendingAction.worker.confirmationCode}
-              </Text>
+              {pendingAction.kind === 'approve' ? 'Approve' : 'Reject'}{' '}
+              <strong>{pendingAction.worker.name}</strong>
+              {pendingAction.worker.sourceIp ? (
+                <>
+                  , which registered from{' '}
+                  <Text component="span" fw={700} ff="monospace">
+                    {pendingAction.worker.sourceIp}
+                  </Text>
+                </>
+              ) : (
+                ''
+              )}
               ?
             </Text>
             {pendingAction.kind === 'approve' && pending.length > 1 && (
