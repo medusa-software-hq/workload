@@ -100,10 +100,16 @@ resource "google_monitoring_alert_policy" "front_door_refresher_stale" {
     # scheduler, deleted trigger) there is nothing to threshold. absent_for fires precisely because
     # the series went missing — the failure mode we most need to catch.
     condition_monitoring_query_language {
+      # align delta(5m) | every 5m gives the query the explicit alignment window the Monitoring API
+      # requires (a bare group_by is rejected). A succeeded execution lands a point in its 5m window;
+      # with a run every 15 min the gap between points stays well under absent_for's 20m, so absent_for
+      # fires only when executions actually stop.
       query    = <<-EOT
         fetch cloud_run_job
         | metric 'run.googleapis.com/job/completed_execution_count'
         | filter (metric.result == 'succeeded' && resource.job_name == '${google_cloud_run_v2_job.front_door_refresher.name}')
+        | align delta(5m)
+        | every 5m
         | group_by [], [executions: row_count()]
         | absent_for 20m
       EOT
