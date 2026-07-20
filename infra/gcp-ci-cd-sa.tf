@@ -64,6 +64,13 @@ resource "google_project_iam_member" "cicd_sa_run_admin" {
   member  = "serviceAccount:${google_service_account.cicd_sa.email}"
 }
 
+# Grant CI/CD SA Cloud Scheduler admin (manage the front-door refresher's schedule)
+resource "google_project_iam_member" "cicd_sa_scheduler_admin" {
+  project = local.gcp_project_id
+  role    = "roles/cloudscheduler.admin"
+  member  = "serviceAccount:${google_service_account.cicd_sa.email}"
+}
+
 # Grant CI/CD SA IAP admin (manage IAP access policies)
 resource "google_project_iam_member" "cicd_sa_iap_admin" {
   project = local.gcp_project_id
