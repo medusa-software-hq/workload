@@ -230,7 +230,19 @@ class DockerConnector(
       fun create(socketPath: String): Transport {
         val address = DomainSocketAddress.of(Path.of(socketPath))
         val factory = ClientFactory.builder().build()
-        val webClient = WebClient.builder("http://" + address.authority()).factory(factory).build()
+        // Docker daemon calls are deliberately long-lived — `POST /containers/{id}/wait` blocks
+        // until the container exits, and `GET /containers/{id}/logs?follow=1` streams for the whole
+        // run. Armeria's default 15s response timeout would abort those, which (for `workload run`)
+        // tore down every container that outlived 15 seconds. Disable it, and lift the default
+        // response-length cap so a long/chatty followed-log stream or a large image pull isn't
+        // truncated. Connection failures are still surfaced by the transport, not a response
+        // timeout.
+        val webClient =
+            WebClient.builder("http://" + address.authority())
+                .responseTimeoutMillis(0)
+                .maxResponseLength(0)
+                .factory(factory)
+                .build()
         return Transport(webClient, factory)
       }
     }

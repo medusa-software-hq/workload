@@ -226,11 +226,22 @@ internal suspend fun runContainerToCompletion(
     return coroutineScope {
       val exit = async { connector.containers.wait(created.id) }
 
-      connector.logs.logs(created.id, follow = true).collect { frame ->
-        when (frame.stream) {
-          LogStream.STDOUT -> onStdout(frame.bytes)
-          LogStream.STDERR -> onStderr(frame.bytes)
+      // Log streaming is best-effort: the container's lifecycle is governed by `wait` (its exit
+      // code), not by the log follow. If the follow stream drops mid-run, warn and keep waiting —
+      // a broken log tail must never tear down an otherwise-healthy long-running workload.
+      try {
+        connector.logs.logs(created.id, follow = true).collect { frame ->
+          when (frame.stream) {
+            LogStream.STDOUT -> onStdout(frame.bytes)
+            LogStream.STDERR -> onStderr(frame.bytes)
+          }
         }
+      } catch (e: DockerConnectorException) {
+        System.err.write(
+            "workload: log streaming interrupted (${e.message}); the container keeps running.\n"
+                .toByteArray()
+        )
+        System.err.flush()
       }
       exit.await().statusCode
     }
