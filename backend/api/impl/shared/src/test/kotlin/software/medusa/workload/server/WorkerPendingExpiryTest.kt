@@ -14,7 +14,6 @@ private fun pendingWorker(createdAt: Instant) =
         os = null,
         cliVersion = null,
         status = WorkerStatus.PENDING,
-        confirmationCode = "1234",
         createdAt = createdAt,
         approvedAt = null,
         approvedBy = null,

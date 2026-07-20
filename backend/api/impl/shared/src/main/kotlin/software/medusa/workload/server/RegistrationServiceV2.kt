@@ -36,16 +36,16 @@ internal data class RegisterWorkerV2Response(
 /**
  * Implements `POST /worker/v2/registrations` — the enrollment-token exchange (M4-A3). The Bearer
  * credential is a one-time `wle_` enrollment token; a valid one is atomically burnt and swapped for
- * a fresh `wlw_` worker secret, returning `{workerId, workerSecret}` with no confirmation code. The
- * worker lands `active`, or `pending` when the token was minted requiring approval.
+ * a fresh `wlw_` worker secret, returning `{workerId, workerSecret}`. The worker lands `active`, or
+ * `pending` when the token was minted requiring approval.
  *
  * Absent or malformed credentials are dropped upstream by the `v2EnrollmentTokenDrop` decorator
  * (bare 404, counted, not audited), so this handler only ever sees a well-formed `wle_` token.
  * Everything else that isn't a successful exchange — unknown/expired/already-used token, a
  * rate-limited caller, a malformed body — also returns a **bare 404** with no body, audit-logged
  * with the true reason, so the whole plane is unprobeable. A modest per-IP rate limit shields the
- * database from load. Unlike v1 this endpoint is deliberately not behind the UUID path prefix — the
- * `wle_`/`wlw_` format is the filter now.
+ * database from load. The endpoint sits directly on the hostname with no path-prefix guard — the
+ * `wle_`/`wlw_` token format is the filter.
  *
  * Never logs the worker secret or the response body containing it.
  */

@@ -9,8 +9,6 @@ private const val allowedDomainEnvVarName = "GOOGLE_ALLOWED_DOMAIN"
 private const val corsOriginRegexEnvVarName = "CORS_ALLOWED_ORIGIN_REGEX"
 private const val databaseUrlEnvVarName = "DATABASE_URL"
 
-private const val workerApiPathPrefixSecretNameEnvVarName = "WORKER_API_PATH_PREFIX_SECRET_NAME"
-
 private const val tokenLifetimeSecondsEnvVarName = "TOKEN_LIFETIME_SECONDS"
 
 fun main() {
@@ -38,11 +36,6 @@ fun main() {
   val databaseUrl =
       System.getenv(databaseUrlEnvVarName)
           ?: error("$databaseUrlEnvVarName environment variable must be set")
-
-  val workerApiPathPrefixSecretName =
-      System.getenv(workerApiPathPrefixSecretNameEnvVarName)
-          ?: error("$workerApiPathPrefixSecretNameEnvVarName environment variable must be set")
-  val workerApiPathPrefix = loadSecretPayload(workerApiPathPrefixSecretName)
 
   // One physical database, shared by every Postgres-backed store — a single connection pool and
   // a single Flyway migration run.
@@ -72,7 +65,6 @@ fun main() {
   buildServer(
           originRegex = corsOriginRegex,
           port = port,
-          workerApiPathPrefix = workerApiPathPrefix,
           auth = GoogleIdTokenAuthDecorator(setOfNotNull(clientId, cliClientId), allowedDomain),
           fleetStore = fleetStore,
           impersonationVerifier = IamImpersonationVerifier(iamCredentialsClient),
@@ -80,7 +72,6 @@ fun main() {
           workerTokenBroker = workerTokenBroker,
           workerIdTokenBroker = workerIdTokenBroker,
           workerClaimService = workerClaimService,
-          registrationService = RegistrationService(fleetStore),
           selfStatusService = SelfStatusService(fleetStore),
           v2RegistrationService = RegistrationServiceV2(fleetStore),
       )

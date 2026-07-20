@@ -11,6 +11,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import software.medusa.workload.tokenformat.TokenKind
+import software.medusa.workload.tokenformat.WorkloadToken
 
 /**
  * Behavior every [FleetStore] implementation must satisfy, run against both [InMemoryFleetStore]
@@ -23,12 +25,11 @@ abstract class FleetStoreContractTest {
 
   private fun newWorker(name: String = "worker-1") =
       NewWorker(
-          secretHash = hashWorkerSecret(generateWorkerSecret()),
+          secretHash = hashWorkerSecret(WorkloadToken.generate(TokenKind.WORKER)),
           name = name,
           hostname = "host.local",
           os = "linux",
           cliVersion = "1.0.0",
-          confirmationCode = "1234",
       )
 
   @Test
@@ -108,7 +109,7 @@ abstract class FleetStoreContractTest {
 
   @Test
   fun `worker secrets are never persisted in plaintext`() = test { store ->
-    val secret = generateWorkerSecret()
+    val secret = WorkloadToken.generate(TokenKind.WORKER)
     val worker = store.createWorker(newWorker().copy(secretHash = hashWorkerSecret(secret)))
     val stored = store.getWorker(worker.workerId)
     assertNotNull(stored)
@@ -637,7 +638,6 @@ abstract class FleetStoreContractTest {
         assertEquals(WorkerStatus.ACTIVE, worker.status)
         assertEquals(RegisteredVia.V2, worker.registeredVia)
         assertEquals("203.0.113.7", worker.sourceIp)
-        assertNull(worker.confirmationCode)
         assertEquals(worker, store.getWorker(worker.workerId))
 
         // The token is burnt — a second redemption creates nothing.

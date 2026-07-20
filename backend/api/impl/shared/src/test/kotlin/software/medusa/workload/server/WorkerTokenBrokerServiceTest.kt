@@ -13,9 +13,10 @@ import kotlin.test.assertEquals
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import software.medusa.workload.tokenformat.TokenKind
+import software.medusa.workload.tokenformat.WorkloadToken
 
-private const val prefix = "test-prefix"
-private const val tokenPath = "/$prefix/worker/v1/token"
+private const val tokenPath = "/worker/token"
 
 /** End-to-end check of [WorkerTokenBrokerService] via a real running server. */
 class WorkerTokenBrokerServiceTest {
@@ -28,15 +29,9 @@ class WorkerTokenBrokerServiceTest {
   fun start() {
     fleetStore = InMemoryFleetStore()
     server =
-        buildServer(
-            originRegex = """http://localhost(:\d+)?""",
-            port = 0,
-            workerApiPathPrefix = prefix,
-            auth = NoOpAuthDecorator,
-            fleetStore = fleetStore,
-            impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
-            imageDigestResolver = AlwaysResolvedImageDigestResolver,
-            workerTokenBroker = WorkerTokenBrokerService(fleetStore, FakeTokenMinter),
+        buildWorkerServiceTestServer(
+            tokenPath,
+            WorkerTokenBrokerService(fleetStore, FakeTokenMinter),
         )
     server.start().join()
     client = WebClient.of("http://127.0.0.1:${server.activeLocalPort()}")
@@ -71,7 +66,7 @@ class WorkerTokenBrokerServiceTest {
 
   private fun registerActiveWorker(name: String = "worker-1"): Pair<WorkerId, String> =
       runBlocking {
-        val secret = generateWorkerSecret()
+        val secret = WorkloadToken.generate(TokenKind.WORKER)
         val worker =
             fleetStore.createWorker(
                 NewWorker(
@@ -80,7 +75,6 @@ class WorkerTokenBrokerServiceTest {
                     hostname = null,
                     os = null,
                     cliVersion = null,
-                    confirmationCode = "1234",
                 )
             )
         fleetStore.approveWorker(worker.workerId, approvedBy = "admin@example.com")
@@ -121,7 +115,7 @@ class WorkerTokenBrokerServiceTest {
 
   @Test
   fun `pending worker is unauthorized`() = runBlocking {
-    val secret = generateWorkerSecret()
+    val secret = WorkloadToken.generate(TokenKind.WORKER)
     val worker =
         fleetStore.createWorker(
             NewWorker(
@@ -130,7 +124,6 @@ class WorkerTokenBrokerServiceTest {
                 hostname = null,
                 os = null,
                 cliVersion = null,
-                confirmationCode = "1234",
             )
         )
 

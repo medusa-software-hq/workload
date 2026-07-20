@@ -68,17 +68,11 @@ resource "google_cloud_run_v2_service" "primary" {
         name  = "TOKEN_LIFETIME_SECONDS"
         value = "900"
       }
-
-      env {
-        name  = "WORKER_API_PATH_PREFIX_SECRET_NAME"
-        value = "projects/${var.gcp_project_id}/secrets/${google_secret_manager_secret.worker_api_path_prefix.secret_id}/versions/latest"
-      }
     }
   }
 
   depends_on = [
     google_secret_manager_secret_version.database_url,
-    google_secret_manager_secret_version.worker_api_path_prefix,
   ]
 
   # The image is managed by CI/CD after initial creation.
@@ -107,11 +101,4 @@ resource "google_cloud_run_v2_service" "primary" {
 
 output "cloud_run_primary_service_url" {
   value = google_cloud_run_v2_service.primary.uri
-}
-
-# Sensitive because it's a de-facto capability token component (rides in the worker-facing URL,
-# not meant to be public) — same trade-off as the Neon connection string, see backend/infra/README.md.
-output "worker_api_path_prefix" {
-  value     = random_uuid.worker_api_path_prefix.result
-  sensitive = true
 }

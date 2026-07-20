@@ -17,9 +17,10 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
+import software.medusa.workload.tokenformat.TokenKind
+import software.medusa.workload.tokenformat.WorkloadToken
 
-private const val prefix = "test-prefix"
-private const val idTokenPath = "/$prefix/worker/v1/id-token"
+private const val idTokenPath = "/worker/id-token"
 
 /**
  * ID-token-specific behavior of [WorkerIdTokenBrokerService]. The auth/grant/revision denial paths
@@ -37,15 +38,9 @@ class WorkerIdTokenBrokerServiceTest {
   fun start() {
     fleetStore = InMemoryFleetStore()
     server =
-        buildServer(
-            originRegex = """http://localhost(:\d+)?""",
-            port = 0,
-            workerApiPathPrefix = prefix,
-            auth = NoOpAuthDecorator,
-            fleetStore = fleetStore,
-            impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
-            imageDigestResolver = AlwaysResolvedImageDigestResolver,
-            workerIdTokenBroker = WorkerIdTokenBrokerService(fleetStore, FakeTokenMinter),
+        buildWorkerServiceTestServer(
+            idTokenPath,
+            WorkerIdTokenBrokerService(fleetStore, FakeTokenMinter),
         )
     server.start().join()
     client = WebClient.of("http://127.0.0.1:${server.activeLocalPort()}")
@@ -73,7 +68,7 @@ class WorkerIdTokenBrokerServiceTest {
           .join()
 
   private fun registerActiveWorker(): Pair<WorkerId, String> = runBlocking {
-    val secret = generateWorkerSecret()
+    val secret = WorkloadToken.generate(TokenKind.WORKER)
     val worker =
         fleetStore.createWorker(
             NewWorker(
@@ -82,7 +77,6 @@ class WorkerIdTokenBrokerServiceTest {
                 hostname = null,
                 os = null,
                 cliVersion = null,
-                confirmationCode = "1234",
             )
         )
     fleetStore.approveWorker(worker.workerId, approvedBy = "admin@example.com")

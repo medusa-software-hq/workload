@@ -11,7 +11,6 @@ CREATE TABLE workers (
     os                text,
     cli_version       text,
     status            text  NOT NULL,
-    confirmation_code text,
     created_at        TIMESTAMPTZ NOT NULL,
     approved_at       TIMESTAMPTZ,
     approved_by       text,
@@ -70,8 +69,8 @@ CREATE TABLE enrollment_tokens (
 );
 
 insertWorker:
-INSERT INTO workers (worker_id, secret_hash, name, hostname, os, cli_version, status, confirmation_code, created_at, registered_via, source_ip)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO workers (worker_id, secret_hash, name, hostname, os, cli_version, status, created_at, registered_via, source_ip)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 selectWorkerById:
 SELECT * FROM workers WHERE worker_id = ?;

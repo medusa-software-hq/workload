@@ -35,9 +35,9 @@ enum class WorkerStatus {
 }
 
 /**
- * Which registration plane a worker came through: [V1] open registration + confirmation code (M1),
- * or [V2] one-time enrollment-token exchange (M4). Recorded so the console can show the fleet's
- * migration state — the measure the A5 v1-retirement gate reads.
+ * Which registration plane a worker came through: [V1] the retired open-registration plane (M1), or
+ * [V2] the one-time enrollment-token exchange (M4, now the only way to register). Retained so
+ * existing V1 rows keep an accurate provenance after the v1 plane was removed in M4-A5.
  */
 enum class RegisteredVia {
   V1,
@@ -62,7 +62,6 @@ data class Worker(
     val os: String?,
     val cliVersion: String?,
     val status: WorkerStatus,
-    val confirmationCode: String?,
     val createdAt: Instant,
     val approvedAt: Instant?,
     val approvedBy: String?,
@@ -79,7 +78,6 @@ data class NewWorker(
     val hostname: String?,
     val os: String?,
     val cliVersion: String?,
-    val confirmationCode: String,
 )
 
 data class Profile(

@@ -33,7 +33,6 @@ data class AdminWorker(
     val os: String = "",
     val cliVersion: String = "",
     val status: String = "",
-    val confirmationCode: String = "",
     val createdAt: String = "",
     val approvedAt: String = "",
     val approvedBy: String = "",

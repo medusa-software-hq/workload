@@ -23,7 +23,9 @@ against them.
 
 The end-to-end flow:
 
-1. A worker **registers** and waits, presenting a one-time confirmation code.
+1. An admin mints a one-time **enrollment token** and hands it to a teammate, who
+   redeems it once to **register** a worker (the token is burnt on use). Unless
+   the token was auto-approve, the worker then waits for an admin's approval.
 2. An admin **approves** it and **grants** it one or more profiles.
 3. The worker **claims** a profile. The broker checks the grant, then uses its
    own cloud identity to mint a short-lived token that **impersonates that
@@ -58,7 +60,7 @@ flowchart TB
 
     console -->|"Google sign-in"| backend
     adminCli -->|"Google sign-in"| backend
-    worker -->|"registration credential,<br/>unguessable path"| backend
+    worker -->|"enrollment token /<br/>worker credential"| backend
 
     backend["Backend<br/>(admin API · registration · token broker)"]
     backend -->|"impersonate,<br/>short-lived token"| targetSA["Target service account"]
@@ -69,9 +71,12 @@ flowchart TB
 ```
 
 - **Worker plane (machine).** Registration and token claiming. A worker
-  authenticates with a credential it earned at registration, and the
-  worker-facing API lives behind an unguessable path — it isn't a public,
-  discoverable surface. A worker can do nothing until an admin approves it.
+  authenticates with a credential it earned at registration. The worker-facing
+  API is unprobeable: every request whose bearer isn't a well-formed enrollment
+  (`wle_`) or worker (`wlw_`) token — and every credential that fails to
+  authenticate — is dropped with an identical bare `404` before it reaches any
+  handler, so the surface leaks nothing to a scanner. A worker can do nothing
+  until an admin approves it.
 
 - **Admin plane (human).** Managing workers, profiles, and grants. Reached two
   ways over the same API — a web console and the CLI's admin commands — both

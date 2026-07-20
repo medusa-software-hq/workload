@@ -47,14 +47,13 @@ function fakeWorker(overrides: Partial<Worker> = {}): Worker {
     os: 'macos',
     cliVersion: '1.0.0',
     status: WorkerStatus.PENDING,
-    confirmationCode: '4913',
     createdAt: '2026-01-01T00:00:00Z',
     approvedAt: '',
     approvedBy: '',
     lastSeenAt: '',
     grantedProfileIds: [],
-    registeredVia: 'v1',
-    sourceIp: '',
+    registeredVia: 'v2',
+    sourceIp: '203.0.113.7',
     ...overrides,
   } as Worker;
 }
@@ -104,30 +103,13 @@ beforeEach(() => {
   revokeEnrollmentToken.mockResolvedValue({});
 });
 
-test('shows a pending worker with its confirmation code', async () => {
+test('shows a pending worker with its source IP', async () => {
   listWorkers.mockResolvedValue({ workers: [fakeWorker()] });
   render(<WorkersPage token="tok" />);
 
   expect(await screen.findByText('jakub-mbp')).toBeInTheDocument();
-  expect(screen.getByText('4913')).toBeInTheDocument();
+  expect(screen.getByText('203.0.113.7')).toBeInTheDocument();
   expect(screen.getByText('No active workers.')).toBeInTheDocument();
-});
-
-test('a v2 pending worker shows its source IP instead of a confirmation code', async () => {
-  listWorkers.mockResolvedValue({
-    workers: [
-      fakeWorker({
-        status: WorkerStatus.PENDING,
-        confirmationCode: '',
-        registeredVia: 'v2',
-        sourceIp: '203.0.113.7',
-      }),
-    ],
-  });
-  render(<WorkersPage token="tok" />);
-
-  expect(await screen.findByText('203.0.113.7')).toBeInTheDocument();
-  expect(screen.queryByText('4913')).not.toBeInTheDocument();
 });
 
 test('an active v2 worker is badged v2', async () => {
@@ -135,7 +117,6 @@ test('an active v2 worker is badged v2', async () => {
     workers: [
       fakeWorker({
         status: WorkerStatus.ACTIVE,
-        confirmationCode: '',
         registeredVia: 'v2',
       }),
     ],
@@ -146,17 +127,6 @@ test('an active v2 worker is badged v2', async () => {
   expect(screen.getByText('v2')).toBeInTheDocument();
 });
 
-test('does not show a confirmation code for an active worker', async () => {
-  listWorkers.mockResolvedValue({
-    workers: [fakeWorker({ status: WorkerStatus.ACTIVE, confirmationCode: '' })],
-  });
-  render(<WorkersPage token="tok" />);
-
-  expect(await screen.findByText('jakub-mbp')).toBeInTheDocument();
-  expect(screen.queryByText('4913')).not.toBeInTheDocument();
-  expect(screen.getByText('No workers are pending approval.')).toBeInTheDocument();
-});
-
 test('approving a lone pending worker requires only a plain confirmation', async () => {
   const user = userEvent.setup();
   listWorkers.mockResolvedValue({ workers: [fakeWorker()] });
@@ -165,7 +135,7 @@ test('approving a lone pending worker requires only a plain confirmation', async
   await user.click(await screen.findByRole('button', { name: 'Approve' }));
 
   const dialog = await screen.findByRole('dialog');
-  expect(within(dialog).getByText(/Does the requester/)).toBeInTheDocument();
+  expect(within(dialog).getByText(/registered from/)).toBeInTheDocument();
   expect(within(dialog).queryByRole('checkbox')).not.toBeInTheDocument();
 
   await user.click(within(dialog).getByRole('button', { name: 'Approve' }));
@@ -182,8 +152,8 @@ test('with two pending workers, shows the multi-pending warning and requires the
   const user = userEvent.setup();
   listWorkers.mockResolvedValue({
     workers: [
-      fakeWorker({ workerId: 'worker-1', name: 'worker-a', confirmationCode: '1111' }),
-      fakeWorker({ workerId: 'worker-2', name: 'worker-b', confirmationCode: '2222' }),
+      fakeWorker({ workerId: 'worker-1', name: 'worker-a' }),
+      fakeWorker({ workerId: 'worker-2', name: 'worker-b' }),
     ],
   });
   render(<WorkersPage token="tok" />);
@@ -215,7 +185,6 @@ test('revoking an active worker', async () => {
     workers: [
       fakeWorker({
         status: WorkerStatus.ACTIVE,
-        confirmationCode: '',
         grantedProfileIds: ['my-profile-1'],
       }),
     ],
@@ -239,9 +208,7 @@ test('revoking an active worker', async () => {
 test('granting a profile to an active worker', async () => {
   const user = userEvent.setup();
   listWorkers.mockResolvedValue({
-    workers: [
-      fakeWorker({ status: WorkerStatus.ACTIVE, confirmationCode: '', grantedProfileIds: [] }),
-    ],
+    workers: [fakeWorker({ status: WorkerStatus.ACTIVE, grantedProfileIds: [] })],
   });
   listProfiles.mockResolvedValue({
     profiles: [
@@ -275,7 +242,6 @@ test('revoking a grant from the manage-grants dialog', async () => {
     workers: [
       fakeWorker({
         status: WorkerStatus.ACTIVE,
-        confirmationCode: '',
         grantedProfileIds: ['my-profile-1'],
       }),
     ],

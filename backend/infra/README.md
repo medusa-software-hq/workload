@@ -8,8 +8,6 @@ are added:
 - a **Neon serverless Postgres** project backing the workload database (`neon.tf`)
 - a **Secret Manager** secret holding the Neon JDBC connection string, injected
   into Cloud Run as `DATABASE_URL` (`gcp-secret-manager.tf`)
-- a **Secret Manager** secret holding the deployment-wide worker API path prefix
-  (`gcp-secret-manager.tf`) — see below
 
 ## Spend guardrails
 
@@ -44,22 +42,6 @@ create`):
 
 Verify by lowering the amount so a threshold trips on current spend (or
 hand-check the configuration if test-firing isn't practical), then restore it.
-
-## Worker API path prefix
-
-All worker-facing HTTP endpoints (registration, self-status, the token broker) are
-mounted under `/<uuid>/worker/v1/...` purely to shed bot/scanner noise before it
-reaches billable logic — it is **not** a security boundary. It is generated and
-fully managed by Terraform (`random_uuid.worker_api_path_prefix` in
-`gcp-secret-manager.tf`), since there's no human-approval step and rotating it is
-just a re-apply (which strands any CLI configs pointing at the old value — an accepted,
-crude kill switch).
-
-Retrieve the current value to hand to a new CLI user with:
-
-```sh
-terraform output -raw worker_api_path_prefix
-```
 
 ## Neon provisioning
 

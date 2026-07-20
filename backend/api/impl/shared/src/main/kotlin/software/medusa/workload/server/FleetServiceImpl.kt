@@ -82,8 +82,6 @@ private fun Worker.toProto(grantedProfileIds: List<ProfileId>): WorkerProto =
         .setOs(os.orEmpty())
         .setCliVersion(cliVersion.orEmpty())
         .setStatus(status.toProto())
-        // Confirmation code is only meaningful (and only ever shown) while pending.
-        .setConfirmationCode(if (status == WorkerStatus.PENDING) confirmationCode.orEmpty() else "")
         .setCreatedAt(createdAt.toString())
         .setApprovedAt(approvedAt?.toString().orEmpty())
         .setApprovedBy(approvedBy.orEmpty())
