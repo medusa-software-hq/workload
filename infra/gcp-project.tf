@@ -34,6 +34,7 @@ resource "google_project_service" "apis" {
   for_each = toset([
     "artifactregistry.googleapis.com",
     "cloudresourcemanager.googleapis.com",
+    "cloudscheduler.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "iap.googleapis.com",
