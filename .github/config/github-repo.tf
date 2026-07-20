@@ -40,16 +40,16 @@ locals {
   check_docker_connector_job_name   = "docker-connector"
 }
 
-# Branch protection ruleset for the default branch
-resource "github_repository_ruleset" "default_branch" {
-  name        = "Default branch"
+# Branch protection ruleset for trunk branches
+resource "github_repository_ruleset" "trunk_branches" {
+  name        = "Trunk branches"
   repository  = github_repository.this.name
   target      = "branch"
   enforcement = "active"
 
   conditions {
     ref_name {
-      include = ["~DEFAULT_BRANCH"]
+      include = ["refs/heads/trunk/*"]
       exclude = []
     }
   }
