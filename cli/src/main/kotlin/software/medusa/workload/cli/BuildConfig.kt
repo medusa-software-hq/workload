@@ -17,8 +17,11 @@ object BuildConfig {
   // Recognized for back-compat with the admin plane's original env var.
   private const val LEGACY_ADMIN_API_URL_ENV = "WORKLOAD_ADMIN_API_URL"
 
-  /** The prod backend URL — the fallback when nothing is baked (a local build). */
-  const val DEFAULT_API_BASE_URL = "https://api-s5hue5meiq-ew.a.run.app"
+  // The prod backend URL — the fallback when nothing is baked (a local build). This is the stable
+  // M4-A6 front-door hostname (api.<web host>), the single source of truth being infra/common's
+  // api_host_name, which the API_URL Actions variable is also computed from. The raw Cloud Run
+  // run.app URL is deliberately *not* used here — it's locked down behind the front door.
+  const val DEFAULT_API_BASE_URL = "https://api.workload-baseline.medusa.software"
 
   private val baked: Properties =
       Properties().apply {
