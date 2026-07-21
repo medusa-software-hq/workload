@@ -12,9 +12,9 @@ object AdminConfig {
   /**
    * The workload-baseline Desktop OAuth client. Public; safe in source. Project-specific client in
    * the prod project (ms-workload-d91b0eaf); cut over from the sunset ms-auth client in M5-02. Kept
-   * in sync with infra/common's prod `cli_client_id` (the API's accepted CLI audience). The matching
-   * non-confidential Desktop secret is baked at publish from the `WORKLOAD_ADMIN_OAUTH_CLIENT_SECRET`
-   * Actions secret, which holds *this* client's secret.
+   * in sync with infra/common's prod `cli_client_id` (the API's accepted CLI audience). The
+   * matching non-confidential Desktop secret is baked at publish from the
+   * `WORKLOAD_ADMIN_OAUTH_CLIENT_SECRET` Actions secret, which holds *this* client's secret.
    */
   const val CLIENT_ID = "136908422577-jllms7h9l7gopqujps2d8e7jvtrc2qgb.apps.googleusercontent.com"
 
