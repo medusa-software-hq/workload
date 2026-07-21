@@ -28,22 +28,21 @@ locals {
       gh_environment_name = "production"
 
       # Google OAuth 2.0 client ID — the console SPA's Web client; the audience of the *user* tokens
-      # this environment's API accepts and the client its SPA signs in with.
-      #
-      # NOTE: this is still the legacy client in the shared ms-auth project (852264381191 =
-      # ms-auth-284371d2), which is being SUNSET. A project-specific replacement already exists in
-      # the prod project (136908422577-d9nesf47igb7es3ok4lergqaf2g18aci, origin
-      # workload-baseline.medusa.software, Internal) but is not yet wired in — cutting prod over to it
-      # is a pending, deliberate step (change this value + redeploy). Until then prod runs the ms-auth
-      # client, so ms-auth must not be deleted before the cutover. See M5-02.
-      # https://console.cloud.google.com/auth/clients/852264381191-gi3hrcfbkn6mm43qh26b6hl1hmjvlo7a.apps.googleusercontent.com?project=ms-auth-284371d2
-      google_client_id = "852264381191-gi3hrcfbkn6mm43qh26b6hl1hmjvlo7a.apps.googleusercontent.com"
+      # this environment's API accepts and the client its SPA signs in with. Project-specific client
+      # in the prod project (136908422577 = ms-workload-d91b0eaf); origin
+      # workload-baseline.medusa.software, Internal. Cut over from the sunset ms-auth client in M5-02.
+      # https://console.cloud.google.com/auth/clients/136908422577-d9nesf47igb7es3ok4lergqaf2g18aci.apps.googleusercontent.com?project=ms-workload-d91b0eaf
+      google_client_id = "136908422577-d9nesf47igb7es3ok4lergqaf2g18aci.apps.googleusercontent.com"
 
       # Google OAuth 2.0 client ID — the `workload admin` CLI's Desktop client. Human CLI sign-ins
       # mint ID tokens with this as their audience; the API accepts it alongside the SPA client.
-      # Same sunset story as google_client_id above: legacy ms-auth client; project-specific
-      # replacement 136908422577-jllms7h9l7gopqujps2d8e7jvtrc2qgb exists in the prod project, cutover
-      # pending.
+      #
+      # STILL the legacy ms-auth Desktop client (852264381191). Its project-specific replacement
+      # (136908422577-jllms7h9l7gopqujps2d8e7jvtrc2qgb) exists in the prod project, but the CLI cutover
+      # is staged separately from the Web cutover above: it also requires rotating the
+      # WORKLOAD_ADMIN_OAUTH_CLIENT_SECRET Actions secret + republishing the CLI + kept in sync with
+      # cli/…/AdminConfig.CLIENT_ID. Until that lands, prod's admin CLI still uses the ms-auth Desktop
+      # client, so ms-auth must not be deleted yet.
       # https://console.cloud.google.com/auth/clients/852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com?project=ms-auth-284371d2
       cli_client_id = "852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com"
     }
