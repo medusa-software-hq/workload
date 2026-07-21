@@ -1,5 +1,6 @@
 package software.medusa.workload.cli
 
+import java.io.IOException
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -287,7 +288,27 @@ class AdminApiClient(
             .header("Accept", "application/json")
             .POST(HttpRequest.BodyPublishers.ofString(body))
             .build()
-    val response = httpClient.send(request, BodyHandlers.ofString())
+    // A failure to even reach the API (bad URL, DNS, offline, a front door that's down) surfaces as
+    // a transport error. Translate it to BrokerUnreachableException — the same clean,
+    // no-stack-trace
+    // treatment the worker client gives, handled by the top-level `main` catch — instead of letting
+    // a raw IOException reach the operator as a stack trace. Parity with the worker plane matters
+    // more now that an IAM-locked front door sits in the path.
+    val response =
+        try {
+          httpClient.send(request, BodyHandlers.ofString())
+        } catch (e: IOException) {
+          throw BrokerUnreachableException(
+              "${request.uri().scheme}://${request.uri().authority}",
+              e,
+          )
+        } catch (e: InterruptedException) {
+          Thread.currentThread().interrupt()
+          throw BrokerUnreachableException(
+              "${request.uri().scheme}://${request.uri().authority}",
+              e,
+          )
+        }
     val status = response.statusCode()
     if (status == 401 || status == 403) {
       throw AdminApiException(

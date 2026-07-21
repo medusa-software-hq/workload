@@ -84,6 +84,15 @@ class AdminApiClientTest {
   }
 
   @Test
+  fun `an unreachable API becomes a BrokerUnreachableException (no stack trace)`() {
+    // Port 1 on loopback: nothing listens, so the connect fails — the admin client must translate
+    // that transport failure the same way the worker client does, for the top-level clean message.
+    val client = AdminApiClient("http://127.0.0.1:1", idTokenProvider = { "t" })
+    val error = assertFailsWith<BrokerUnreachableException> { client.listProfiles() }
+    assertTrue(error.message!!.contains("127.0.0.1:1"))
+  }
+
+  @Test
   fun `approveWorker posts the worker id and parses the returned worker`() {
     val api =
         StubApi(
