@@ -29,6 +29,10 @@ internal data class AuditLogEntry(
     val revision: Int? = null,
     val targetServiceAccount: String? = null,
     val expiresAt: String? = null,
+    /** The acting admin's email (admin-plane audits only; null on the worker plane). */
+    val actor: String? = null,
+    /** The acting admin's principal kind — "human" or "service" (admin-plane audits only). */
+    val actorKind: String? = null,
     /** ID-token mints record the caller-chosen audience — the one place we exceed GCE's audit. */
     val audience: String? = null,
     // The surrogate id of an enrollment token (not the token or its hash — safe to log).

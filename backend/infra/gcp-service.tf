@@ -49,6 +49,20 @@ resource "google_cloud_run_v2_service" "primary" {
         value = module.common.organization_domain
       }
 
+      # s2s admin principal (M5-05). API_URL is the audience an allow-listed service account's ID
+      # token must name (this API's own front-door URL, per env). ADMIN_SERVICE_ACCOUNTS is the
+      # comma-separated allowlist — currently just the per-env workload-ci-admin SA (created in the
+      # infra root; its email is deterministic from the project id).
+      env {
+        name  = "API_URL"
+        value = module.common.api_url
+      }
+
+      env {
+        name  = "ADMIN_SERVICE_ACCOUNTS"
+        value = "workload-ci-admin@${var.gcp_project_id}.iam.gserviceaccount.com"
+      }
+
       env {
         name  = "CORS_ALLOWED_ORIGIN_REGEX"
         value = "https://[a-z0-9-]+\\.medusa\\.software"

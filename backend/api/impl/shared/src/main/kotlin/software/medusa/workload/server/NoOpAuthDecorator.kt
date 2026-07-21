@@ -15,7 +15,7 @@ object NoOpAuthDecorator : DecoratingHttpServiceFunction {
       ctx: ServiceRequestContext,
       req: HttpRequest,
   ): HttpResponse {
-    ctx.setAttr(adminEmailAttrKey, localAdminEmail)
+    ctx.setAttr(adminPrincipalAttrKey, Principal.Human(localAdminEmail))
     return delegate.serve(ctx, req)
   }
 }
