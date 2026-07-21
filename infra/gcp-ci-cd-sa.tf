@@ -30,6 +30,33 @@ resource "google_service_account_iam_member" "cicd_sa_wi_user" {
   member             = "principalSet://iam.googleapis.com/${local.gcp_cicd_wi_pool_name}/attribute.repository/${module.common.gh_organization_name}/${module.common.gh_repo_name}"
 }
 
+# s2s admin principal (M5-05): a dedicated CI identity that calls the *admin plane* as a service
+# principal — the runner impersonates it via WIF, then mints an ID token for the API's own audience
+# (the API allow-lists this SA's email in ADMIN_SERVICE_ACCOUNTS). Deliberately separate from the
+# deploy SA (github-actions) above: deploying and administering are different powers, and the
+# allowlist is the admin boundary. Per env (its own project via the workspace), so a staging token
+# is never accepted by prod (different SA email *and* different API audience).
+resource "google_service_account" "ci_admin" {
+  project      = local.gcp_project_id
+  account_id   = "workload-ci-admin"
+  display_name = "CI admin (s2s admin-plane principal)"
+
+  depends_on = [google_project_service.apis["iam.googleapis.com"]]
+}
+
+# Allow GitHub Actions from this repo to impersonate the CI admin SA via WIF (repo-pinned, same
+# pattern as the deploy SA).
+resource "google_service_account_iam_member" "ci_admin_wi_user" {
+  service_account_id = google_service_account.ci_admin.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${local.gcp_cicd_wi_pool_name}/attribute.repository/${module.common.gh_organization_name}/${module.common.gh_repo_name}"
+}
+
+output "gcp_ci_admin_sa_email" {
+  description = "GCP CI admin service account e-mail (the s2s admin-plane principal)."
+  value       = google_service_account.ci_admin.email
+}
+
 # Grant CI/CD SA read access to all Terraform state
 resource "google_storage_bucket_iam_member" "cicd_sa_object_viewer" {
   bucket = module.common.gcp_terraform_state_bucket_name
