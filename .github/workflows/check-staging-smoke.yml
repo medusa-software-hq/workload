@@ -1,0 +1,53 @@
+name: Check staging smoke
+
+# Post-deploy smoke against the deployed staging environment. workflow_call so the promotion chains
+# (promote-api / promote-web-spa) wire it as the gate between staging and prod; workflow_dispatch to
+# run it ad hoc.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Smoke (staging)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # `environment:` resolves vars.* to staging's values (its own project id, CI/CD identity, API
+    # URL). The trunk-only deployment branch policy allows this from trunk.
+    environment: staging
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v3
+
+      - name: Resolve the staging origin (run.app) URL
+        id: origin
+        run: |
+          URL=$(gcloud run services describe "${{ vars.GCP_API_RUN_SERVICE_NAME }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ vars.GCP_PRIMARY_LOCATION }}" \
+            --format='value(status.url)')
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Run the smoke suite
+        env:
+          API_URL: ${{ vars.API_URL }}
+          RUN_APP_URL: ${{ steps.origin.outputs.url }}
+        run: ./smoke/smoke.sh
