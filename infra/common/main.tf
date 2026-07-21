@@ -29,11 +29,21 @@ locals {
 
       # Google OAuth 2.0 client ID — the console SPA's Web client; the audience of the *user* tokens
       # this environment's API accepts and the client its SPA signs in with.
+      #
+      # NOTE: this is still the legacy client in the shared ms-auth project (852264381191 =
+      # ms-auth-284371d2), which is being SUNSET. A project-specific replacement already exists in
+      # the prod project (136908422577-d9nesf47igb7es3ok4lergqaf2g18aci, origin
+      # workload-baseline.medusa.software, Internal) but is not yet wired in — cutting prod over to it
+      # is a pending, deliberate step (change this value + redeploy). Until then prod runs the ms-auth
+      # client, so ms-auth must not be deleted before the cutover. See M5-02.
       # https://console.cloud.google.com/auth/clients/852264381191-gi3hrcfbkn6mm43qh26b6hl1hmjvlo7a.apps.googleusercontent.com?project=ms-auth-284371d2
       google_client_id = "852264381191-gi3hrcfbkn6mm43qh26b6hl1hmjvlo7a.apps.googleusercontent.com"
 
       # Google OAuth 2.0 client ID — the `workload admin` CLI's Desktop client. Human CLI sign-ins
       # mint ID tokens with this as their audience; the API accepts it alongside the SPA client.
+      # Same sunset story as google_client_id above: legacy ms-auth client; project-specific
+      # replacement 136908422577-jllms7h9l7gopqujps2d8e7jvtrc2qgb exists in the prod project, cutover
+      # pending.
       # https://console.cloud.google.com/auth/clients/852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com?project=ms-auth-284371d2
       cli_client_id = "852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com"
     }
@@ -49,11 +59,12 @@ locals {
       # (GoogleIdTokenAuthDecorator), so a shared client would make a token minted through staging's
       # SPA indistinguishable from a production one and accepted by the production API. Staging runs
       # not-yet-promoted code; it must not hold a credential production honours. The credential
-      # boundary is the environment boundary.
-      # TODO(M5-02): create the staging OAuth clients (Web + Desktop) in the console and paste their
-      # IDs here — staging does not converge until then. See infra/README.md.
-      google_client_id = "REPLACE_WITH_STAGING_WEB_OAUTH_CLIENT_ID.apps.googleusercontent.com"
-      cli_client_id    = "REPLACE_WITH_STAGING_CLI_OAUTH_CLIENT_ID.apps.googleusercontent.com"
+      # boundary is the environment boundary. These are project-specific clients in the staging
+      # project (983402080078 = ms-workload-868c1b71), created for M5-02 — Web client's authorized JS
+      # origin is https://workload-baseline-staging.medusa.software; Desktop client is the CLI.
+      # https://console.cloud.google.com/auth/clients?project=ms-workload-868c1b71
+      google_client_id = "983402080078-p2haqgrghma6pkgqkbov2p38lcbh1041.apps.googleusercontent.com"
+      cli_client_id    = "983402080078-rsidgj3id5cv5nqmt6jkgq81v4kpg1tm.apps.googleusercontent.com"
     }
   }
   selected_environment = local.environment_config[local.environment]
