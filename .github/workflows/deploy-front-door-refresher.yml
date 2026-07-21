@@ -1,8 +1,11 @@
 name: Deploy front-door refresher
 
-# Builds the front-door-refresher jib image and updates the Cloud Run job's image (the job, its
-# schedule, and its config are managed by Terraform in backend/infra). Fires on changes to the
-# module; dispatch manually for the first rollout.
+# Builds the front-door-refresher jib image and updates the Cloud Run job's image, per environment
+# (M5-03/04). The job, its schedule, and its config are managed by Terraform in backend/infra.
+#
+# - production: the default env. Push-triggered on module changes; dispatch for a manual rollout.
+# - staging: `workflow_dispatch` with environment: staging (the push trigger only rolls prod, to
+#   keep steady-state deploys simple; staging is rolled during bring-up / on demand).
 on:
   push:
     branches: ["trunk/*"]
@@ -10,6 +13,14 @@ on:
       - "backend/front-door-refresher/**"
 
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Which environment's refresher to deploy
+        type: choice
+        options:
+          - production
+          - staging
+        default: production
 
 permissions:
   contents: read
@@ -18,13 +29,19 @@ env:
   JAVA_VERSION: 21
   NO_COLOR: 1
 
-  IMAGE_REF: ${{ vars.GCP_AR_REPO_ENDPOINT }}/front-door-refresher/${{ github.sha }}
+  # NOTE: IMAGE_REF is deliberately NOT defined here — it depends on vars.GCP_AR_REPO_ENDPOINT, which
+  # only resolves to this environment's registry once the job is running (a top-level env: block
+  # falls back to the repo-level / production value). Resolved in a step below.
+
   SERVICE_PATH: backend/front-door-refresher
 
 jobs:
   deploy-job:
     name: Deploy refresher job
     runs-on: ubuntu-latest
+
+    # A push (steady-state) rolls production; a manual run uses the chosen environment.
+    environment: ${{ inputs.environment || 'production' }}
 
     permissions:
       contents: read
@@ -39,6 +56,9 @@ jobs:
         with:
           workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
           service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - name: Resolve the image ref
+        run: echo "IMAGE_REF=${{ vars.GCP_AR_REPO_ENDPOINT }}/front-door-refresher/${{ github.sha }}" >> "$GITHUB_ENV"
 
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ vars.GCP_AR_REPO_HOSTNAME }} --quiet
