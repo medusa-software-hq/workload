@@ -1,0 +1,163 @@
+name: Promote web SPA
+
+# Phased promotion of the web SPA: build → deploy staging → smoke → deploy prod, in one run.
+#
+# Unlike the API, the SPA is NOT build-once/promote-by-digest: the bundle bakes environment-specific
+# config at build time (VITE_API_URL, VITE_GOOGLE_CLIENT_ID, VITE_GOOGLE_HD), so the staging and prod
+# images legitimately differ and there is no shared digest to assert. Each environment builds its own
+# image; the promotion property here is ordering + gating, not artifact identity.
+#
+# Prod gate: `deploy-prod` needs `smoke`, so prod cannot deploy unless staging smoke is green in the
+# same run. Rollback = re-run an earlier green run's `deploy-prod` job.
+
+on:
+  push:
+    branches: ["trunk/*"]
+    paths:
+      - "apps/web/spa/**"
+      - "proto/**"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NO_COLOR: 1
+
+  # NOTE: IMAGE_REF is deliberately NOT defined here (env-scoped vars only exist once a job runs; a
+  # top-level env: block falls back to the repository-level / production value). Resolved per job.
+
+  APP_PATH: apps/web/spa
+
+jobs:
+  deploy-staging:
+    name: Build & deploy staging
+    runs-on: ubuntu-latest
+
+    environment: staging
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - name: Resolve the image ref
+        run: echo "IMAGE_REF=${{ vars.GCP_AR_REPO_ENDPOINT }}/web/${{ github.sha }}" >> "$GITHUB_ENV"
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_AR_REPO_HOSTNAME }} --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7.1.0
+        with:
+          context: ${{ env.APP_PATH }}
+          build-contexts: |
+            proto=proto
+          push: true
+          tags: ${{ env.IMAGE_REF }}
+          build-args: |
+            VITE_GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
+            VITE_GOOGLE_HD=${{ vars.GOOGLE_ALLOWED_DOMAIN }}
+            VITE_API_URL=${{ vars.API_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ vars.GCP_WEB_RUN_SERVICE_NAME }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --image=${{ env.IMAGE_REF }} \
+            --quiet
+          gcloud run services describe ${{ vars.GCP_WEB_RUN_SERVICE_NAME }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --format='value(status.url)' | tee service-url.txt
+          {
+            echo '## Staging deployment'
+            echo ''
+            echo "- Service URL: [$(cat service-url.txt)]($(cat service-url.txt))"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    name: Smoke gate
+    needs: deploy-staging
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/check-staging-smoke.yml
+
+  deploy-prod:
+    name: Deploy prod (promote)
+    needs: [deploy-staging, smoke]
+    runs-on: ubuntu-latest
+
+    environment: production
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - name: Resolve the image ref
+        run: echo "IMAGE_REF=${{ vars.GCP_AR_REPO_ENDPOINT }}/web/${{ github.sha }}" >> "$GITHUB_ENV"
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_AR_REPO_HOSTNAME }} --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7.1.0
+        with:
+          context: ${{ env.APP_PATH }}
+          build-contexts: |
+            proto=proto
+          push: true
+          tags: ${{ env.IMAGE_REF }}
+          build-args: |
+            VITE_GOOGLE_CLIENT_ID=${{ vars.GOOGLE_CLIENT_ID }}
+            VITE_GOOGLE_HD=${{ vars.GOOGLE_ALLOWED_DOMAIN }}
+            VITE_API_URL=${{ vars.API_URL }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ vars.GCP_WEB_RUN_SERVICE_NAME }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --image=${{ env.IMAGE_REF }} \
+            --quiet
+          gcloud run services describe ${{ vars.GCP_WEB_RUN_SERVICE_NAME }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --format='value(status.url)' | tee service-url.txt
+          {
+            echo '## Production deployment'
+            echo ''
+            echo "- Service URL: [$(cat service-url.txt)]($(cat service-url.txt))"
+          } >> "$GITHUB_STEP_SUMMARY"

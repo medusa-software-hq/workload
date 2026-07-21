@@ -1,0 +1,208 @@
+name: Promote API
+
+# Phased promotion of the API broker: build → deploy staging → smoke → deploy prod, in one run.
+#
+# Promote-by-digest guarantee: prod deploys the *exact* artifact that staging's smoke validated.
+# Each environment owns an independent Artifact Registry (no cross-environment coupling — the same
+# principle that keeps the Neon projects independent), so the image is built in each environment's
+# own registry rather than copied across a cross-project grant. jib builds are reproducible (pinned
+# epoch-0 creation time, deterministic layers), so the prod-side build is bit-identical to
+# staging's; the `Assert digest` step fails the promotion closed if the two digests ever diverge.
+# Same "prod runs what staging validated" property as a physical digest copy, zero cross-env IAM.
+#
+# Prod gate: `deploy-prod` needs `smoke`, so prod cannot deploy unless staging smoke is green in the
+# *same run*. Required-reviewer gating is Enterprise-only for private repos on this plan, so the
+# smoke-job dependency is the gate. Rollback = re-run an earlier green run's `deploy-prod` job.
+
+on:
+  push:
+    branches: ["trunk/*"]
+    paths:
+      - "backend/api/impl/**"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+  NO_COLOR: 1
+
+  # NOTE: IMAGE_REF is deliberately NOT defined here. It depends on vars.GCP_AR_REPO_ENDPOINT, and
+  # environment-scoped variables only exist on the runner once the job is executing — a workflow- or
+  # job-level env: block silently falls back to the *repository-level* (production) value, which
+  # would push staging's image into production's Artifact Registry. It is resolved in a step below.
+
+  SERVICE_PATH: backend/api/impl
+
+jobs:
+  # 1. Build the image once and deploy it to staging, pinned by digest.
+  deploy-staging:
+    name: Build & deploy staging
+    runs-on: ubuntu-latest
+
+    environment: staging
+
+    permissions:
+      contents: read
+      id-token: write
+
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - name: Resolve the image ref
+        # Exact image path is arbitrary (as long as it's unique). Resolved in a step, not an env:
+        # block, so it picks up this environment's registry — see the note at the top of the file.
+        run: echo "IMAGE_REF=${{ vars.GCP_AR_REPO_ENDPOINT }}/api/${{ github.sha }}" >> "$GITHUB_ENV"
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_AR_REPO_HOSTNAME }} --quiet
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and push image
+        id: build
+        working-directory: ${{ env.SERVICE_PATH }}
+        run: |
+          ../../../gradlew gcp:jib \
+            -Pjib.imageRef=${{ env.IMAGE_REF }} \
+            -Pjib.imageTag=${{ github.sha }} \
+            --stacktrace --info
+          # jib writes the pushed manifest digest here (default outputPaths.digest).
+          digest=$(cat gcp/build/jib-image.digest)
+          echo "Built image digest: $digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy to Cloud Run (by digest)
+        run: |
+          image="${{ env.IMAGE_REF }}@${{ steps.build.outputs.digest }}"
+          gcloud run deploy ${{ vars.GCP_API_RUN_SERVICE_NAME }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --image="$image" \
+            --quiet
+          gcloud run services describe ${{ vars.GCP_API_RUN_SERVICE_NAME }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --format='value(status.url)' | tee service-url.txt
+          {
+            echo '## Staging deployment'
+            echo ''
+            echo "- Digest: \`${{ steps.build.outputs.digest }}\`"
+            echo "- Service URL: [$(cat service-url.txt)]($(cat service-url.txt))"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # 2. Gate: the staging smoke suite. Prod does not deploy unless this is green.
+  #    id-token: write must be granted here — a called workflow's GITHUB_TOKEN permissions are
+  #    capped by the caller, and the smoke job needs it for WIF auth.
+  smoke:
+    name: Smoke gate
+    needs: deploy-staging
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/check-staging-smoke.yml
+
+  # 3. Promote the identical artifact to prod. Reproducible rebuild + digest assertion; prod only
+  #    deploys once staging smoke is green (needs: smoke).
+  deploy-prod:
+    name: Deploy prod (promote)
+    needs: [deploy-staging, smoke]
+    runs-on: ubuntu-latest
+
+    environment: production
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - name: Resolve the image ref
+        run: echo "IMAGE_REF=${{ vars.GCP_AR_REPO_ENDPOINT }}/api/${{ github.sha }}" >> "$GITHUB_ENV"
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_AR_REPO_HOSTNAME }} --quiet
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and push image
+        id: build
+        working-directory: ${{ env.SERVICE_PATH }}
+        run: |
+          ../../../gradlew gcp:jib \
+            -Pjib.imageRef=${{ env.IMAGE_REF }} \
+            -Pjib.imageTag=${{ github.sha }} \
+            --stacktrace --info
+          digest=$(cat gcp/build/jib-image.digest)
+          echo "Built image digest: $digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Assert digest matches the staging-validated artifact
+        env:
+          STAGING_DIGEST: ${{ needs.deploy-staging.outputs.digest }}
+          PROD_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          echo "Staging-validated digest: $STAGING_DIGEST"
+          echo "Prod rebuilt digest:      $PROD_DIGEST"
+          {
+            echo '## Promotion digest check'
+            echo ''
+            echo "| environment | digest |"
+            echo "|---|---|"
+            echo "| staging (validated) | \`$STAGING_DIGEST\` |"
+            echo "| prod (promoting) | \`$PROD_DIGEST\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$STAGING_DIGEST" != "$PROD_DIGEST" ]; then
+            echo "::error::Prod image digest differs from the staging-validated digest — refusing to promote a non-identical artifact." >&2
+            exit 1
+          fi
+          echo "Digests match — promoting the artifact validated on staging."
+
+      - name: Deploy to Cloud Run (by digest)
+        run: |
+          image="${{ env.IMAGE_REF }}@${{ steps.build.outputs.digest }}"
+          gcloud run deploy ${{ vars.GCP_API_RUN_SERVICE_NAME }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --image="$image" \
+            --quiet
+          gcloud run services describe ${{ vars.GCP_API_RUN_SERVICE_NAME }} \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --format='value(status.url)' | tee service-url.txt
+          {
+            echo '## Production deployment'
+            echo ''
+            echo "- Digest: \`${{ steps.build.outputs.digest }}\`"
+            echo "- Service URL: [$(cat service-url.txt)]($(cat service-url.txt))"
+          } >> "$GITHUB_STEP_SUMMARY"
