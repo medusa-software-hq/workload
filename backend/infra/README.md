@@ -69,17 +69,19 @@ Terraform/CI lacks group-admin rights):
 The notification channel targets a **Google Group**, not an individual, so the
 alert survives people coming and going.
 
-**One-time hand step:** `monitoring.googleapis.com` must be enabled on the
-project. Like this project's other Google APIs it is enabled out-of-band, not via
-a `google_project_service` resource — the CI/Terraform identity lacks
-`serviceusage.services.enable`, so managing it in-config only 403s. Enable it once
-with `gcloud services enable monitoring.googleapis.com --project <project-id>`
-(done for `baseline`; redo per new env in M5-02).
+**Prerequisites (managed in the hand-applied `infra` root, so per-env by
+construction — M5-03):**
 
-The CI/Terraform SA also needs `roles/monitoring.editor` to create these
-resources; that binding lives in the `infra` root (`infra/gcp-ci-cd-sa.tf`).
-Since `infra` is applied by hand, it was granted by hand once too (see the
-comment there).
+- `monitoring.googleapis.com` is enabled via the `google_project_service.apis`
+  set in `infra/gcp-project.tf` — no longer a separate `gcloud services enable`
+  step. (The `infra` root is applied by the operator, who *does* hold
+  `serviceusage.services.enable`, unlike the CI SA; a new env picks it up on its
+  first `infra` apply. Prod's earlier hand-enable is simply adopted into state.)
+- The CI/Terraform SA needs `roles/monitoring.editor` to create these resources;
+  that binding lives in `infra/gcp-ci-cd-sa.tf` and applies with the `infra` root.
+
+Both come up automatically when `infra` is applied in a new workspace, so staging
+needs no bespoke monitoring bootstrap.
 
 ### Verifying the alerts (hand-test)
 
