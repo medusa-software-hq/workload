@@ -441,7 +441,7 @@ class FleetServiceImpl(
     // Same resolution the create path runs, but read-only — nothing is stored. Lets the console
     // show the exact digest (or the unresolvable reason) before an admin commits to pinning it.
     val resolution = imageDigestResolver.resolve(request.targetServiceAccount, request.dockerImage)
-    audit(
+    adminAudit(
         AuditLogEntry(
             event = "image_resolution_preview",
             requestId = UUID.randomUUID().toString(),
@@ -470,7 +470,7 @@ class FleetServiceImpl(
 
     val admin = currentAdminEmail()
     fleetStore.grant(workerId, profileId, grantedBy = admin)
-    audit(
+    adminAudit(
         AuditLogEntry(
             event = "profile_granted",
             requestId = UUID.randomUUID().toString(),
@@ -490,7 +490,7 @@ class FleetServiceImpl(
     val workerId = parseWorkerId(request.workerId)
     val profileId = parseProfileId(request.profileId)
     fleetStore.revoke(workerId, profileId)
-    audit(
+    adminAudit(
         AuditLogEntry(
             event = "profile_grant_revoked",
             requestId = UUID.randomUUID().toString(),
@@ -562,7 +562,7 @@ class FleetServiceImpl(
       revision: ProfileRevision,
   ): ProfileRevision {
     val result = impersonationVerifier.verify(revision.targetServiceAccount, revision.secretEnvVars)
-    audit(
+    adminAudit(
         AuditLogEntry(
             event = "profile_revision_verification",
             requestId = UUID.randomUUID().toString(),
@@ -615,7 +615,7 @@ class FleetServiceImpl(
       targetServiceAccount: String,
       resolution: ImageResolution,
   ): ProfileRevision {
-    audit(
+    adminAudit(
         AuditLogEntry(
             event = "profile_revision_image_resolution",
             requestId = UUID.randomUUID().toString(),
@@ -653,8 +653,19 @@ class FleetServiceImpl(
     )
   }
 
-  private fun auditWorkerChange(event: String, workerId: WorkerId) {
+  /**
+   * Emit an admin-plane audit entry, stamping the verified acting principal (email + kind) so every
+   * admin action records who did it and whether they were a human or a service account (M5-05).
+   */
+  private fun adminAudit(entry: AuditLogEntry) {
+    val principal = currentAdminPrincipal()
     audit(
+        entry.copy(actor = principal?.email ?: "unknown", actorKind = principal?.kind ?: "unknown")
+    )
+  }
+
+  private fun auditWorkerChange(event: String, workerId: WorkerId) {
+    adminAudit(
         AuditLogEntry(
             event = event,
             requestId = UUID.randomUUID().toString(),
@@ -668,7 +679,7 @@ class FleetServiceImpl(
   }
 
   private fun auditProfileChange(event: String, profileId: ProfileId, revision: Int?) {
-    audit(
+    adminAudit(
         AuditLogEntry(
             event = event,
             requestId = UUID.randomUUID().toString(),
@@ -687,7 +698,7 @@ class FleetServiceImpl(
       id: EnrollmentTokenId,
       expiresAt: Instant?,
   ) {
-    audit(
+    adminAudit(
         AuditLogEntry(
             event = event,
             requestId = UUID.randomUUID().toString(),

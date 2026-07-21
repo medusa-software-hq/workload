@@ -6,6 +6,11 @@ private const val portEnvVarName = "PORT"
 private const val clientIdEnvVarName = "GOOGLE_CLIENT_ID"
 private const val cliClientIdEnvVarName = "GOOGLE_CLI_CLIENT_ID"
 private const val allowedDomainEnvVarName = "GOOGLE_ALLOWED_DOMAIN"
+
+// s2s admin principal (M5-05): the audience an allow-listed SA's ID token must name (this API's own
+// URL) and the comma-separated list of SA emails permitted on the admin plane.
+private const val serviceAudienceEnvVarName = "API_URL"
+private const val adminServiceAccountsEnvVarName = "ADMIN_SERVICE_ACCOUNTS"
 private const val corsOriginRegexEnvVarName = "CORS_ALLOWED_ORIGIN_REGEX"
 private const val databaseUrlEnvVarName = "DATABASE_URL"
 
@@ -28,6 +33,20 @@ fun main() {
   val allowedDomain =
       System.getenv(allowedDomainEnvVarName)
           ?: error("$allowedDomainEnvVarName environment variable must be set")
+
+  // The audience an s2s admin's ID token must name — this API's own URL. Optional: absent just
+  // means
+  // no service principal can authenticate (only humans).
+  val serviceAudience = System.getenv(serviceAudienceEnvVarName)?.takeIf { it.isNotBlank() }
+
+  // Allow-listed admin service accounts, comma-separated. Empty (or unset) means no SA is accepted.
+  val adminServiceAccounts =
+      System.getenv(adminServiceAccountsEnvVarName)
+          ?.split(",")
+          ?.map { it.trim() }
+          ?.filter { it.isNotEmpty() }
+          ?.toSet()
+          .orEmpty()
 
   val corsOriginRegex =
       System.getenv(corsOriginRegexEnvVarName)
@@ -65,7 +84,15 @@ fun main() {
   buildServer(
           originRegex = corsOriginRegex,
           port = port,
-          auth = GoogleIdTokenAuthDecorator(setOfNotNull(clientId, cliClientId), allowedDomain),
+          auth =
+              GoogleIdTokenAuthDecorator(
+                  GooglePrincipalVerifier(
+                      humanAudiences = setOfNotNull(clientId, cliClientId),
+                      allowedDomain = allowedDomain,
+                      serviceAudience = serviceAudience,
+                      serviceAccountAllowlist = adminServiceAccounts,
+                  )
+              ),
           fleetStore = fleetStore,
           impersonationVerifier = IamImpersonationVerifier(iamCredentialsClient),
           imageDigestResolver = GcpImageDigestResolver(iamCredentialsClient),
