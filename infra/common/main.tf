@@ -36,15 +36,12 @@ locals {
 
       # Google OAuth 2.0 client ID — the `workload admin` CLI's Desktop client. Human CLI sign-ins
       # mint ID tokens with this as their audience; the API accepts it alongside the SPA client.
-      #
-      # STILL the legacy ms-auth Desktop client (852264381191). Its project-specific replacement
-      # (136908422577-jllms7h9l7gopqujps2d8e7jvtrc2qgb) exists in the prod project, but the CLI cutover
-      # is staged separately from the Web cutover above: it also requires rotating the
-      # WORKLOAD_ADMIN_OAUTH_CLIENT_SECRET Actions secret + republishing the CLI + kept in sync with
-      # cli/…/AdminConfig.CLIENT_ID. Until that lands, prod's admin CLI still uses the ms-auth Desktop
-      # client, so ms-auth must not be deleted yet.
-      # https://console.cloud.google.com/auth/clients/852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com?project=ms-auth-284371d2
-      cli_client_id = "852264381191-8blq9kgof5o0j65cjjb00peqb144hpen.apps.googleusercontent.com"
+      # Project-specific client in the prod project (136908422577 = ms-workload-d91b0eaf); kept in sync
+      # with cli/…/AdminConfig.CLIENT_ID (the CLI bakes this id + the Desktop client's non-confidential
+      # secret from the WORKLOAD_ADMIN_OAUTH_CLIENT_SECRET Actions secret). Cut over from the sunset
+      # ms-auth client in M5-02.
+      # https://console.cloud.google.com/auth/clients/136908422577-jllms7h9l7gopqujps2d8e7jvtrc2qgb.apps.googleusercontent.com?project=ms-workload-d91b0eaf
+      cli_client_id = "136908422577-jllms7h9l7gopqujps2d8e7jvtrc2qgb.apps.googleusercontent.com"
     }
     staging = {
       gcp_project_name_suffix = " - staging"
