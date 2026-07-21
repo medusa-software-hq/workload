@@ -20,7 +20,7 @@ env:
 
 jobs:
   apply-config:
-    name: Apply (${{ matrix.environment }})
+    name: Apply Terraform configuration (${{ matrix.environment }})
     runs-on: ubuntu-latest
 
     # One job per environment; staging first, serialized, fail-fast (see apply-backend-infra.yml for

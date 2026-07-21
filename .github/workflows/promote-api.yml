@@ -183,7 +183,7 @@ jobs:
             echo "| prod (promoting) | \`$PROD_DIGEST\` |"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$STAGING_DIGEST" != "$PROD_DIGEST" ]; then
-            echo "::error::Prod image digest differs from the staging-validated digest — refusing to promote a non-identical artifact." >&2
+            echo "::error::prod digest differs from the staging-validated digest; refusing to promote." >&2
             exit 1
           fi
           echo "Digests match — promoting the artifact validated on staging."
