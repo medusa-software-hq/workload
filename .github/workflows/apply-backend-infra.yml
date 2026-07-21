@@ -20,8 +20,30 @@ env:
 
 jobs:
   apply-config:
-    name: Apply Terraform configuration
+    name: Apply (${{ matrix.environment }})
     runs-on: ubuntu-latest
+
+    # One job per environment. `environment:` is what makes vars.* resolve to that environment's
+    # values (its own GCP project, CI/CD identity, Artifact Registry, API URL); the Terraform
+    # workspace is what keeps their states apart. Production's workspace is `default`: its state
+    # predates the prod/staging split and stays where it is.
+    #
+    # Serialized, staging first (promotion ordering): staging applies before production so infra
+    # changes are proven on staging first, and fail-fast gates production on it — a failed staging
+    # apply cancels the still-queued production job, so broken infra never reaches prod. The
+    # environments are independent projects/states, so the order is a safety choice, not a data
+    # dependency.
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        include:
+          - environment: staging
+            workspace: staging
+          - environment: production
+            workspace: default
+
+    environment: ${{ matrix.environment }}
 
     permissions:
       contents: read
@@ -51,4 +73,5 @@ jobs:
           TF_VAR_cloudflare_refresh_token: ${{ secrets.CLOUDFLARE_REFRESH_TOKEN }}
         run: |
           terraform init
+          terraform workspace select -or-create=true ${{ matrix.workspace }}
           terraform apply -auto-approve

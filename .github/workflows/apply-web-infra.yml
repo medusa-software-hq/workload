@@ -20,8 +20,22 @@ env:
 
 jobs:
   apply-config:
-    name: Apply Terraform configuration
+    name: Apply (${{ matrix.environment }})
     runs-on: ubuntu-latest
+
+    # One job per environment; staging first, serialized, fail-fast (see apply-backend-infra.yml for
+    # the rationale). `environment:` resolves vars.* per env; the workspace keeps their states apart.
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        include:
+          - environment: staging
+            workspace: staging
+          - environment: production
+            workspace: default
+
+    environment: ${{ matrix.environment }}
 
     permissions:
       contents: read
@@ -48,4 +62,5 @@ jobs:
           TF_VAR_gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
         run: |
           terraform init
+          terraform workspace select -or-create=true ${{ matrix.workspace }}
           terraform apply -auto-approve
