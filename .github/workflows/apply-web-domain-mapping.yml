@@ -20,8 +20,23 @@ env:
 
 jobs:
   apply-config:
-    name: Apply Terraform configuration
+    name: Apply Terraform configuration (${{ matrix.environment }})
     runs-on: ubuntu-latest
+
+    # One job per environment; staging first, serialized, fail-fast (see apply-backend-infra.yml for
+    # the rationale). `environment:` resolves the per-env project (GCP_PROJECT_ID) while the shared
+    # domain-mapper SA and Cloudflare zone fall back to the repo-level vars.
+    strategy:
+      fail-fast: true
+      max-parallel: 1
+      matrix:
+        include:
+          - environment: staging
+            workspace: staging
+          - environment: production
+            workspace: default
+
+    environment: ${{ matrix.environment }}
 
     permissions:
       contents: read
@@ -52,4 +67,5 @@ jobs:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           terraform init
+          terraform workspace select -or-create=true ${{ matrix.workspace }}
           terraform apply -auto-approve

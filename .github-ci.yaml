@@ -3,6 +3,15 @@ linters:
   disable:
     - versions
 
+  settings:
+    style:
+      # Raise the name-length cap from the default 50. The check counts the *raw* string, so a
+      # `${{ … }}` expression (~25 chars of pure syntax) in a job/step name — matrix envs, workflow
+      # inputs — pushes an otherwise-short, readable name past 50. 80 leaves room for a descriptive
+      # name plus one interpolation while still catching genuinely runaway names.
+      min-name-length: 3
+      max-name-length: 80
+
 upgrade:
   actions: {}
   format: tag
