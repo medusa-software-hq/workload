@@ -28,3 +28,19 @@ TARGET_AUDIENCE = "https://api-s5hue5meiq-ew.a.run.app"
 # here — it's minted and pushed by the refresh-front-door-token workflow via impersonation and
 # rotated on a cron (the org disables SA keys, so the front door is keyless). Until it exists the
 # Worker proxies without the platform header, which is fine while the broker is still public.
+
+# The top-level config above is the *production* environment (`wrangler deploy`, no --env — leaving
+# prod deploys unchanged). Non-prod environments are named blocks below, deployed with
+# `wrangler deploy --env <name>` (M5-03). Same worker code (`main`/`account_id` are inherited); each
+# env gets its own worker name, hostname route, and origin.
+
+# Staging front door → the staging broker. ORIGIN_URL / TARGET_AUDIENCE (the staging run.app URL) are
+# NOT hardcoded here — the staging service URL is generated at deploy time, so the Deploy front door
+# workflow injects them via `--var` from `gcloud run services describe` (keeps this file free of a
+# stale, hand-maintained run.app URL). INVOKER_ID_TOKEN is pushed by the staging refresher job, same
+# as prod. Requires the staging broker to be deployed first (its run.app URL must exist).
+[env.staging]
+name = "workload-front-door-staging"
+routes = [
+  { pattern = "api.workload-baseline-staging.medusa.software", custom_domain = true },
+]
