@@ -41,6 +41,7 @@ resource "google_project_service" "apis" {
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "iap.googleapis.com",
+    "monitoring.googleapis.com",
     "orgpolicy.googleapis.com",
     "run.googleapis.com",
     "secretmanager.googleapis.com",

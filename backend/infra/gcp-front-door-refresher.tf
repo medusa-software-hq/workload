@@ -4,8 +4,12 @@
 # Cloudflare. Moved off GitHub Actions' best-effort cron onto Cloud Scheduler (reliable, GCP-native).
 
 locals {
-  cloudflare_account_id  = "b703ded0019355a0913800063af2a5f5"
-  front_door_worker_name = "workload-front-door"
+  cloudflare_account_id = "b703ded0019355a0913800063af2a5f5"
+
+  # Per-environment Cloudflare Worker name — must match the name the Deploy front door workflow
+  # deploys (apps/front-door/wrangler.toml: top-level for prod, [env.staging] for staging). prod
+  # keeps the bare name (top-level wrangler env); non-prod envs get an "-<env>" suffix.
+  front_door_worker_name = "workload-front-door${module.common.environment == "prod" ? "" : "-${module.common.environment}"}"
 }
 
 # The scoped Cloudflare token (Workers Scripts: Edit only — not the broad deploy token) the job uses

@@ -1,12 +1,24 @@
 name: Deploy front door
 
-# Manual for now (the front door is being rolled out; see M4-A6). Deploys the Cloudflare Worker in
-# apps/front-door and, via its wrangler custom-domain route, stands up
-# api.workload-baseline.medusa.software in front of the broker. Additive while the broker is still
-# public — the new hostname works alongside the run.app URL. Switch to a push trigger on
-# apps/front-door/** once the front door is the primary path (post-cutover).
+# Manual (front-door deploys are deliberate). Deploys the Cloudflare Worker in apps/front-door and,
+# via its wrangler custom-domain route, stands up the API hostname in front of the broker — per
+# environment (M5-03).
+#
+# - production: the top-level wrangler env (`wrangler deploy`) — unchanged from the A6 rollout. Its
+#   ORIGIN_URL/TARGET_AUDIENCE are hardcoded in wrangler.toml.
+# - staging: the `[env.staging]` block (`wrangler deploy --env staging`). The staging run.app origin
+#   is generated, so it is read from the live service (gcloud) at deploy time and injected via
+#   `--var` rather than hardcoded. Requires the staging broker to already be deployed.
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: Which front door to deploy
+        type: choice
+        options:
+          - production
+          - staging
+        default: production
 
 permissions:
   contents: read
@@ -16,6 +28,13 @@ jobs:
     name: Deploy front-door Worker
     runs-on: ubuntu-latest
 
+    # Resolve the env-scoped Actions variables (GCP project/SA) for this environment (M5-02).
+    environment: ${{ inputs.environment }}
+
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
       - uses: actions/checkout@v6.0.2
 
@@ -23,8 +42,37 @@ jobs:
         with:
           node-version: 20
 
+      # staging only: authenticate to GCP so we can read the generated staging run.app URL.
+      - name: Authenticate to Google Cloud
+        if: ${{ inputs.environment == 'staging' }}
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - name: Resolve staging origin URL
+        if: ${{ inputs.environment == 'staging' }}
+        id: origin
+        run: |
+          URL=$(gcloud run services describe "${{ vars.GCP_API_RUN_SERVICE_NAME }}" \
+            --project="${{ vars.GCP_PROJECT_ID }}" \
+            --region="${{ vars.GCP_PRIMARY_LOCATION }}" \
+            --format='value(status.url)')
+          if [ -z "$URL" ]; then
+            echo "::error::staging broker has no run.app URL yet — deploy the staging API first."
+            exit 1
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
       - name: Deploy the Worker
         working-directory: apps/front-door
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-        run: npx --yes wrangler@4 deploy
+        run: |
+          if [ "${{ inputs.environment }}" = "staging" ]; then
+            npx --yes wrangler@4 deploy --env staging \
+              --var ORIGIN_URL:'${{ steps.origin.outputs.url }}' \
+              --var TARGET_AUDIENCE:'${{ steps.origin.outputs.url }}'
+          else
+            npx --yes wrangler@4 deploy
+          fi
