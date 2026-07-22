@@ -2,7 +2,6 @@ package software.medusa.workload.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.PrintMessage
-import com.github.ajalt.clikt.core.requireObject
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.prompt
@@ -12,7 +11,7 @@ private const val pollIntervalStartSeconds = 2L
 private const val pollIntervalMaxSeconds = 15L
 
 class RegisterCommand : CliktCommand(name = "register") {
-  private val env by requireObject<Environment>()
+  private val env by requireEnvironment()
   private val name by option("--name", help = "Defaults to <user>-<hostname>")
   private val enrollmentToken by
       option(

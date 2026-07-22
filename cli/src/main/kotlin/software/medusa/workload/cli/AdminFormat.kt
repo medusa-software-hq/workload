@@ -58,3 +58,47 @@ private val timestampFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 fun shortEnum(value: String): String =
     if (value.isBlank()) "—"
     else value.substringAfterLast("_STATUS_", value).lowercase().replace('_', '-')
+
+/** `RUN_STATE_RUNNING` → `running`, `RUN_KIND_EXEC` → `exec`; blank → `—`. */
+fun shortRunEnum(value: String): String =
+    if (value.isBlank()) "—" else value.substringAfterLast('_').lowercase()
+
+/**
+ * A coarse "how long ago" for a timestamp: `30s ago`, `4m ago`, `2h ago`, `3d ago`. Blank →
+ * `never`, unparseable → passed through. [now] is injectable for tests.
+ */
+fun formatRelative(iso: String, now: Instant = Instant.now()): String {
+  if (iso.isBlank()) return "never"
+  return runCatching {
+        val seconds = java.time.Duration.between(Instant.parse(iso), now).seconds.coerceAtLeast(0)
+        when {
+          seconds < 60 -> "${seconds}s ago"
+          seconds < 3600 -> "${seconds / 60}m ago"
+          seconds < 86_400 -> "${seconds / 3600}h ago"
+          else -> "${seconds / 86_400}d ago"
+        }
+      }
+      .getOrDefault(iso)
+}
+
+/**
+ * A run's elapsed time — `[ended] - [started]`, or `now - started` when [ended] is blank (still
+ * going). `3h12m` / `4m01s` / `45s`; blank/unparseable start → `—`. [now] is injectable for tests.
+ */
+fun formatRunDuration(started: String, ended: String, now: Instant = Instant.now()): String {
+  if (started.isBlank()) return "—"
+  return runCatching {
+        val from = Instant.parse(started)
+        val to = if (ended.isBlank()) now else Instant.parse(ended)
+        val total = java.time.Duration.between(from, to).seconds.coerceAtLeast(0)
+        val h = total / 3600
+        val m = (total % 3600) / 60
+        val s = total % 60
+        when {
+          h > 0 -> "${h}h${m}m"
+          m > 0 -> "${m}m%02ds".format(s)
+          else -> "${s}s"
+        }
+      }
+      .getOrDefault("—")
+}

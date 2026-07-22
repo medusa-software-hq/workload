@@ -105,7 +105,7 @@ class AdminJwtTest {
 class AdminProfileTableTest {
   @Test
   fun `empty profiles renders a friendly note`() {
-    assertEquals("No profiles.", formatProfileTable(emptyList()))
+    assertEquals("No profiles.", formatProfileTable(emptyList(), emptyList()))
   }
 
   @Test
@@ -121,7 +121,8 @@ class AdminProfileTableTest {
                     createdAt = "2026-07-17",
                 ),
                 AdminProfile("legacy-2", "Legacy", 1, archived = true, createdAt = "2026-01-02"),
-            )
+            ),
+            emptyList(),
         )
     val lines = table.lines()
     assertEquals(3, lines.size)

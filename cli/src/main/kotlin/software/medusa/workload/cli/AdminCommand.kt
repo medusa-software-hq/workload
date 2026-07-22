@@ -6,7 +6,6 @@ import com.github.ajalt.clikt.core.NoOpCliktCommand
 import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.core.requireObject
 import com.github.ajalt.clikt.parameters.arguments.argument
-import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
@@ -18,13 +17,6 @@ import java.io.File
 // Shared plumbing
 // ---------------------------------------------------------------------------
 
-/** How `workload admin` authenticates: auto-detect, or force one plane. */
-enum class AdminAuthMode {
-  AUTO,
-  HUMAN,
-  SERVICE,
-}
-
 /** The default human token source: the cached browser sign-in for [env], refreshed silently. */
 internal fun humanTokenProvider(env: Environment): () -> String {
   val session = AdminSession(dir = env.configDir, refresher = defaultRefresher(env))
@@ -32,58 +24,71 @@ internal fun humanTokenProvider(env: Environment): () -> String {
 }
 
 /**
- * Resolves the ID-token source for an admin call given the chosen [mode]. `AUTO` prefers ambient
- * service credentials (ADC/WIF) when they can mint an ID token, else the human sign-in — so CI
- * (WIF) needs no browser and no long-lived secret, while a developer keeps the browser flow.
- * `SERVICE` requires ambient credentials (a clean error otherwise); `HUMAN` ignores them. The two
- * provider factories are injectable so the selection is unit-testable without real credentials.
+ * Resolves the ID-token source for an admin call given the chosen [method]. [AdminAuthMethod.GSI]
+ * uses the cached human browser sign-in; [AdminAuthMethod.SA] uses ambient service credentials
+ * (ADC/WIF) — a clean error when none can mint an ID token. There is deliberately no auto-detection
+ * (see [AdminAuthMethod]). The two provider factories are injectable so the selection is
+ * unit-testable without real credentials.
  */
 internal fun adminTokenProvider(
     env: Environment,
-    mode: AdminAuthMode,
+    method: AdminAuthMethod,
     service: (String) -> (() -> String)? = { serviceIdTokenProvider(it) },
     human: (Environment) -> (() -> String) = ::humanTokenProvider,
 ): () -> String =
-    when (mode) {
-      AdminAuthMode.HUMAN -> human(env)
-      AdminAuthMode.SERVICE ->
+    when (method) {
+      AdminAuthMethod.GSI -> human(env)
+      AdminAuthMethod.SA ->
           service(env.apiBaseUrl)
               ?: throw PrintMessage(
-                  "--auth=service found no ambient service credentials able to mint an ID token. " +
-                      "On a dev box run 'gcloud auth application-default login' with a service " +
-                      "account (or impersonation); in CI, authenticate via Workload Identity " +
-                      "Federation. Use --auth=human for the browser sign-in instead.",
+                  "Service-account auth (sa) found no ambient credentials able to mint an ID " +
+                      "token. On a dev box run 'gcloud auth application-default login' with a " +
+                      "service account (or impersonation); in CI, authenticate via Workload " +
+                      "Identity Federation. To use your own Google account, use gsi (the default).",
                   statusCode = 1,
                   printError = true,
               )
-      AdminAuthMode.AUTO -> service(env.apiBaseUrl) ?: human(env)
     }
 
-private fun adminClient(env: Environment, mode: AdminAuthMode): AdminApiClient =
-    AdminApiClient(env.apiBaseUrl, idTokenProvider = adminTokenProvider(env, mode))
+/** The `[verbose]`-mode one-liner describing how this admin call will authenticate. */
+internal fun verboseAuthLine(env: Environment, method: AdminAuthMethod): String =
+    when (method) {
+      AdminAuthMethod.GSI -> {
+        val who =
+            loadAdminCredentials(env.configDir)?.email?.let { "as $it" }
+                ?: "(no cached session — run 'workload admin login')"
+        "auth: gsi — Google Sign-In $who; token audience ${env.oauthClientId}"
+      }
+      AdminAuthMethod.SA ->
+          "auth: sa — ambient service credentials (ADC/WIF); token audience ${env.apiBaseUrl}"
+    }
 
 /**
  * Shared base for the admin **API** action commands (everything except login/logout, which are
- * inherently human / purely local). Injects the [Environment] and the `--auth` mode, and hands back
- * an authenticated client via [client].
+ * inherently human / purely local). Injects the [Environment], resolves the auth method (`--auth`
+ * override, else `$WORKLOAD_AUTH_METHOD`, else GSI), and hands back an authenticated client via
+ * [client].
  */
 abstract class AdminActionCommand(name: String) : CliktCommand(name) {
-  protected val env by requireObject<Environment>()
-  private val authMode by
+  protected val env by requireEnvironment()
+  private val cli by requireObject<CliContext>()
+  private val authOverride by
       option(
               "--auth",
               help =
-                  "How to authenticate: auto (default) uses ambient service credentials (ADC/WIF) " +
-                      "when present, else your cached human sign-in; force with human or service.",
+                  "Force the auth method for this call: gsi (Google Sign-In, the default) or sa " +
+                      "(service account via ambient ADC/WIF). Overrides \$WORKLOAD_AUTH_METHOD.",
           )
-          .choice(
-              "auto" to AdminAuthMode.AUTO,
-              "human" to AdminAuthMode.HUMAN,
-              "service" to AdminAuthMode.SERVICE,
-          )
-          .default(AdminAuthMode.AUTO)
+          .choice("gsi" to AdminAuthMethod.GSI, "sa" to AdminAuthMethod.SA)
 
-  protected fun client(): AdminApiClient = adminClient(env, authMode)
+  private fun authMethod(): AdminAuthMethod =
+      authOverride ?: cli.authMethodDefault ?: AdminAuthMethod.GSI
+
+  protected fun client(): AdminApiClient {
+    val method = authMethod()
+    if (cli.verbose) echo(verboseAuthLine(env, method), err = true)
+    return AdminApiClient(env.apiBaseUrl, idTokenProvider = adminTokenProvider(env, method))
+  }
 }
 
 /** Turns the two expected admin failures into clean, actionable CLI errors. */
@@ -158,7 +163,7 @@ class AdminCommand : NoOpCliktCommand(name = "admin") {
 
 /** `admin login` — the loopback + PKCE browser sign-in; caches the refresh token for later. */
 class AdminLoginCommand : CliktCommand(name = "login") {
-  private val env by requireObject<Environment>()
+  private val env by requireEnvironment()
 
   override fun help(context: Context) =
       "Sign in with your medusa.software Google account and cache the session."
@@ -199,7 +204,7 @@ class AdminLoginCommand : CliktCommand(name = "login") {
 
 /** `admin logout` — forget the cached session. */
 class AdminLogoutCommand : CliktCommand(name = "logout") {
-  private val env by requireObject<Environment>()
+  private val env by requireEnvironment()
 
   override fun help(context: Context) = "Forget the cached admin session on this machine."
 
@@ -218,10 +223,11 @@ class AdminProfilesCommand : NoOpCliktCommand(name = "profiles") {
 }
 
 class AdminProfilesListCommand : AdminActionCommand(name = "list") {
-  override fun help(context: Context) = "List all profiles."
+  override fun help(context: Context) = "List all profiles, with a live-runs count per profile."
 
   override fun run() {
-    echo(formatProfileTable(runAdmin { client().listProfiles() }))
+    val c = client()
+    echo(runAdmin { formatProfileTable(c.listProfiles(), c.listRuns(liveOnly = true)) })
   }
 }
 
@@ -362,10 +368,23 @@ class AdminWorkersCommand : NoOpCliktCommand(name = "workers") {
 }
 
 class AdminWorkersListCommand : AdminActionCommand(name = "list") {
-  override fun help(context: Context) = "List all workers."
+  private val includeRevoked by
+      option(
+              "--include-revoked",
+              help = "Also show revoked workers (hidden by default), with when they were revoked.",
+          )
+          .flag()
+
+  override fun help(context: Context) =
+      "List workers, grouped by state, with per-worker activity from live runs."
 
   override fun run() {
-    echo(formatWorkerTable(runAdmin { client().listWorkers() }))
+    val c = client()
+    echo(
+        runAdmin {
+          formatWorkerSections(c.listWorkers(), c.listRuns(liveOnly = true), includeRevoked)
+        }
+    )
   }
 }
 
@@ -462,6 +481,33 @@ class AdminEnrollmentRevokeCommand : AdminActionCommand(name = "revoke") {
 }
 
 // ---------------------------------------------------------------------------
+// runs
+// ---------------------------------------------------------------------------
+
+class AdminRunsCommand : NoOpCliktCommand(name = "runs") {
+  override fun help(context: Context) =
+      "Inspect runs — who is running what, right now and recently."
+}
+
+class AdminRunsListCommand : AdminActionCommand(name = "list") {
+  private val profileId by
+      option("--profile", "-p", help = "Only runs of this profile — 'who is online for X'.")
+  private val workerId by option("--worker", "-w", help = "Only runs on this worker.")
+  private val all by
+      option("--all", help = "Include finished runs (default: only in-flight runs).").flag()
+
+  override fun help(context: Context) =
+      "List runs. By default only in-flight runs (running or lost); --all includes finished ones."
+
+  override fun run() {
+    val runs = runAdmin {
+      client().listRuns(profileId = profileId, workerId = workerId, liveOnly = !all)
+    }
+    echo(formatRunTable(runs))
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Formatting
 // ---------------------------------------------------------------------------
 
@@ -473,15 +519,41 @@ internal fun renderTable(header: List<String>, rows: List<List<String>>): String
   return (listOf(line(header)) + rows.map { line(it) }).joinToString("\n")
 }
 
-internal fun formatProfileTable(profiles: List<AdminProfile>): String {
+/** A run is "running" for presence purposes only when its heartbeat is still fresh (not lost). */
+private const val runStateRunning = "RUN_STATE_RUNNING"
+
+/**
+ * Worker names of the fresh-running runs per profile — the presence signal, keyed by profile id.
+ */
+private fun runningWorkersByProfile(liveRuns: List<AdminRun>): Map<String, List<String>> =
+    liveRuns
+        .filter { it.state == runStateRunning && it.profileId.isNotBlank() }
+        .groupBy { it.profileId }
+        .mapValues { (_, runs) -> runs.map { it.workerName.ifBlank { it.workerId } } }
+
+/** Count of fresh-running runs per worker id — the "● N running" activity signal. */
+private fun runningCountByWorker(liveRuns: List<AdminRun>): Map<String, Int> =
+    liveRuns.filter { it.state == runStateRunning }.groupingBy { it.workerId }.eachCount()
+
+/** `● 2 (tux-flow…, jakub-…)`, truncated to two names; `—` when idle. */
+private fun activeRunsCell(workers: List<String>): String {
+  if (workers.isEmpty()) return "—"
+  val shown = workers.take(2).joinToString(", ")
+  val suffix = if (workers.size > 2) ", …" else ""
+  return "● ${workers.size} ($shown$suffix)"
+}
+
+internal fun formatProfileTable(profiles: List<AdminProfile>, liveRuns: List<AdminRun>): String {
   if (profiles.isEmpty()) return "No profiles."
+  val running = runningWorkersByProfile(liveRuns)
   return renderTable(
-      listOf("PROFILE ID", "LATEST REV", "STATUS", "CREATED"),
+      listOf("PROFILE ID", "LATEST REV", "STATUS", "ACTIVE RUNS", "CREATED"),
       profiles.map {
         listOf(
             it.profileId,
             it.latestRevision.toString(),
             if (it.archived) "archived" else "active",
+            activeRunsCell(running[it.profileId].orEmpty()),
             formatTimestamp(it.createdAt),
         )
       },
@@ -504,17 +576,118 @@ internal fun formatEnrollmentTokenTable(tokens: List<AdminEnrollmentToken>): Str
   )
 }
 
-internal fun formatWorkerTable(workers: List<AdminWorker>): String {
+private const val workerStatusPending = "WORKER_STATUS_PENDING"
+private const val workerStatusActive = "WORKER_STATUS_ACTIVE"
+private const val workerStatusRejected = "WORKER_STATUS_REJECTED"
+private const val workerStatusRevoked = "WORKER_STATUS_REVOKED"
+private const val runStateLost = "RUN_STATE_LOST"
+
+/** A titled section: the header line, then the table indented two spaces under it. */
+private fun section(title: String, header: List<String>, rows: List<List<String>>): String =
+    title + "\n" + renderTable(header, rows).lines().joinToString("\n") { "  $it" }
+
+/**
+ * Workers grouped by lifecycle state, with per-worker activity from live runs. Revoked workers are
+ * hidden unless [includeRevoked]; rejected registrations are hidden entirely (a footnote counts
+ * them — surfacing their history is the deferred lifecycle-cleanup story). Pending workers get
+ * their own section; active workers show an ACTIVITY column (`● N running` from fresh live runs,
+ * else `idle`) plus last-seen.
+ */
+internal fun formatWorkerSections(
+    workers: List<AdminWorker>,
+    liveRuns: List<AdminRun>,
+    includeRevoked: Boolean,
+): String {
   if (workers.isEmpty()) return "No workers."
+  val runningByWorker = runningCountByWorker(liveRuns)
+  val pending = workers.filter { it.status == workerStatusPending }
+  val active = workers.filter { it.status == workerStatusActive }
+  val revoked = workers.filter { it.status == workerStatusRevoked }
+  val rejectedCount = workers.count { it.status == workerStatusRejected }
+
+  val sections = mutableListOf<String>()
+
+  if (pending.isNotEmpty()) {
+    sections +=
+        section(
+            "Pending approval:",
+            listOf("WORKER ID", "NAME", "SOURCE IP", "CREATED"),
+            pending.map {
+              listOf(
+                  it.workerId,
+                  it.name.ifBlank { "—" },
+                  it.sourceIp.ifBlank { "—" },
+                  formatTimestamp(it.createdAt),
+              )
+            },
+        )
+  }
+
+  if (active.isNotEmpty()) {
+    sections +=
+        section(
+            "Workers:",
+            listOf("WORKER ID", "NAME", "ACTIVITY", "GRANTS", "LAST SEEN", "CREATED"),
+            active.map {
+              val running = runningByWorker[it.workerId] ?: 0
+              listOf(
+                  it.workerId,
+                  it.name.ifBlank { "—" },
+                  if (running > 0) "● $running running" else "idle",
+                  if (it.grantedProfileIds.isEmpty()) "—"
+                  else it.grantedProfileIds.joinToString(","),
+                  formatRelative(it.lastSeenAt),
+                  formatTimestamp(it.createdAt),
+              )
+            },
+        )
+  }
+
+  if (includeRevoked && revoked.isNotEmpty()) {
+    sections +=
+        section(
+            "Revoked workers:",
+            listOf("WORKER ID", "NAME", "REVOKED", "CREATED"),
+            revoked.map {
+              listOf(
+                  it.workerId,
+                  it.name.ifBlank { "—" },
+                  formatTimestamp(it.revokedAt),
+                  formatTimestamp(it.createdAt),
+              )
+            },
+        )
+  }
+
+  val notes = mutableListOf<String>()
+  if (!includeRevoked && revoked.isNotEmpty()) {
+    notes += "(${revoked.size} revoked worker(s) hidden — pass --include-revoked to show them.)"
+  }
+  if (rejectedCount > 0) {
+    notes += "($rejectedCount rejected registration(s) hidden.)"
+  }
+
+  return (sections + notes).joinToString("\n\n").ifBlank { "No workers to show." }
+}
+
+/**
+ * The runs table (M6-B2). `PROFILE@REV` pins what was claimed; DURATION is elapsed time (`—` for a
+ * lost run, whose end is unknown); EXIT is shown only for a run that reported one.
+ */
+internal fun formatRunTable(runs: List<AdminRun>): String {
+  if (runs.isEmpty()) return "No runs."
   return renderTable(
-      listOf("WORKER ID", "NAME", "STATUS", "GRANTS", "CREATED"),
-      workers.map {
+      listOf("RUN ID", "KIND", "PROFILE@REV", "WORKER", "STATE", "STARTED", "DURATION", "EXIT"),
+      runs.map {
         listOf(
-            it.workerId,
-            it.name.ifBlank { "—" },
-            shortEnum(it.status),
-            if (it.grantedProfileIds.isEmpty()) "—" else it.grantedProfileIds.joinToString(","),
-            formatTimestamp(it.createdAt),
+            it.runId,
+            shortRunEnum(it.kind),
+            if (it.profileId.isBlank()) "—" else "${it.profileId}@${it.revision}",
+            it.workerName.ifBlank { it.workerId },
+            shortRunEnum(it.state),
+            formatTimestamp(it.startedAt),
+            if (it.state == runStateLost) "—" else formatRunDuration(it.startedAt, it.endedAt),
+            if (it.hasExitCode) it.exitCode.toString() else "—",
         )
       },
   )

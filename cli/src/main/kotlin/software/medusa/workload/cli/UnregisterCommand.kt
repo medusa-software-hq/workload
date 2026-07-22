@@ -2,12 +2,11 @@ package software.medusa.workload.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.PrintMessage
-import com.github.ajalt.clikt.core.requireObject
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 
 class UnregisterCommand : CliktCommand(name = "unregister") {
-  private val env by requireObject<Environment>()
+  private val env by requireEnvironment()
   private val yes by option("--yes", "-y", help = "Skip the confirmation prompt").flag()
 
   override fun run() {

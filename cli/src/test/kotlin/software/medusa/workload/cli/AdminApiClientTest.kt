@@ -108,6 +108,27 @@ class AdminApiClientTest {
   }
 
   @Test
+  fun `listRuns posts the filters and parses runs (empty filters omitted)`() {
+    val api =
+        StubApi(
+            200,
+            """{"runs":[{"runId":"r-1","workerName":"tux","profileId":"flow-worker","revision":4,"kind":"RUN_KIND_RUN","state":"RUN_STATE_RUNNING","startedAt":"2026-07-22T10:00:00Z"}]}""",
+        )
+    stub = api
+    val runs =
+        AdminApiClient(api.baseUrl, idTokenProvider = { "t" })
+            .listRuns(profileId = "flow-worker", liveOnly = true)
+
+    assertEquals("/medusa.workload.v1.FleetService/ListRuns", api.lastPath)
+    // An empty filter rides as "" — the server treats blank as "no filter on this dimension".
+    assertEquals("""{"profileId":"flow-worker","workerId":"","liveOnly":true}""", api.lastBody)
+    assertEquals(1, runs.size)
+    assertEquals("tux", runs[0].workerName)
+    assertEquals("RUN_STATE_RUNNING", runs[0].state)
+    assertEquals(4, runs[0].revision)
+  }
+
+  @Test
   fun `grantProfile posts both ids`() {
     val api = StubApi(200, "{}")
     stub = api
