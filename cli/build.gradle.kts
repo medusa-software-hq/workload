@@ -33,6 +33,12 @@ dependencies {
 
   testImplementation(libs.kotlin.test)
 
+  // logback is the runtime binding (above); the Beacon refresh-observability test asserts the
+  // actual
+  // `event=beacon.token.refresh` line via logback's ListAppender, so it needs it at compile scope
+  // too.
+  testImplementation(libs.logback.classic)
+
   // The metadata emulator's contract test drives a real Google auth client
   // (ComputeEngineCredentials
   // pointed at the emulator via GCE_METADATA_HOST) — proving genuine GCE-client compatibility, not
