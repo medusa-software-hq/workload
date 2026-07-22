@@ -5,7 +5,7 @@ variable "enforced_environments" {
     to ["staging", "production"]. (A single root owns both — see main.tf for why it isn't workspaced.)
   EOT
   type        = list(string)
-  default     = ["staging"]
+  default     = ["staging", "production"]
 
   validation {
     condition     = length(var.enforced_environments) > 0
