@@ -85,11 +85,15 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
-  fun `revokeWorker moves a worker to revoked`() = test { store ->
+  fun `revokeWorker moves a worker to revoked and stamps revokedAt`() = test { store ->
     val created = store.createWorker(newWorker())
     store.approveWorker(created.workerId, approvedBy = "admin@example.com")
+    assertNull(created.revokedAt)
     val revoked = store.revokeWorker(created.workerId)
     assertEquals(WorkerStatus.REVOKED, revoked?.status)
+    assertNotNull(revoked?.revokedAt)
+    // Persisted, not just returned.
+    assertNotNull(store.getWorker(created.workerId)?.revokedAt)
   }
 
   @Test

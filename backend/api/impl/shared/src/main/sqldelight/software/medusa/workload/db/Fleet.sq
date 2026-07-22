@@ -17,7 +17,9 @@ CREATE TABLE workers (
     last_seen_at      TIMESTAMPTZ,
     -- Added in V8__add_worker_registration_source.sql.
     registered_via    text NOT NULL DEFAULT 'V1',
-    source_ip         text
+    source_ip         text,
+    -- Added in V11__add_worker_revoked_at.sql.
+    revoked_at        TIMESTAMPTZ
 );
 
 CREATE TABLE profiles (
@@ -107,7 +109,7 @@ WHERE worker_id = ?;
 
 revokeWorker:
 UPDATE workers
-SET status = 'REVOKED'
+SET status = 'REVOKED', revoked_at = ?
 WHERE worker_id = ?;
 
 updateLastSeen:

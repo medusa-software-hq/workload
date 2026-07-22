@@ -20,7 +20,9 @@ import software.medusa.workload.v1.FleetServiceGrpcKt
 import software.medusa.workload.v1.GrantProfileRequest
 import software.medusa.workload.v1.ListEnrollmentTokensRequest
 import software.medusa.workload.v1.ListProfilesRequest
+import software.medusa.workload.v1.ListRunsRequest
 import software.medusa.workload.v1.ListWorkersRequest
+import software.medusa.workload.v1.RunState as RunStateProto
 import software.medusa.workload.v1.RevokeEnrollmentTokenRequest
 import software.medusa.workload.v1.RevokeProfileGrantRequest
 import software.medusa.workload.v1.RevokeWorkerRequest
@@ -702,6 +704,74 @@ class FleetServiceImplTest {
           impersonationVerifier = AlwaysVerifiedImpersonationVerifier,
           imageDigestResolver = resolver,
       )
+
+  private suspend fun anActiveWorker(name: String): WorkerId {
+    val worker =
+        fleetStore.createWorker(
+            NewWorker(
+                hashWorkerSecret(WorkloadToken.generate(TokenKind.WORKER)),
+                name,
+                hostname = null,
+                os = null,
+                cliVersion = null,
+            )
+        )
+    fleetStore.approveWorker(worker.workerId, approvedBy = "admin@example.com")
+    return worker.workerId
+  }
+
+  @Test
+  fun `revokeWorker returns the worker with revoked_at set`() = runBlocking {
+    val workerId = anActiveWorker("to-revoke")
+    val response =
+        stub.revokeWorker(
+            RevokeWorkerRequest.newBuilder().setWorkerId(workerId.value.toString()).build()
+        )
+    assertEquals(WorkerStatus.WORKER_STATUS_REVOKED, response.worker.status)
+    assertTrue(response.worker.revokedAt.isNotBlank())
+  }
+
+  @Test
+  fun `listRuns denormalizes the worker name and applies filters`() = runBlocking {
+    val tux = anActiveWorker("tux-worker")
+    val mac = anActiveWorker("jakub-mac")
+    val tuxRun = fleetStore.createRun(NewRun(tux, ProfileId("flow-worker"), 4, RunKind.RUN))
+    fleetStore.createRun(NewRun(mac, ProfileId("hand-test-1"), 2, RunKind.EXEC))
+    val ended = fleetStore.createRun(NewRun(tux, ProfileId("flow-worker"), 4, RunKind.RUN))
+    fleetStore.endRun(ended.runId, exitCode = 0)
+
+    val all = stub.listRuns(ListRunsRequest.getDefaultInstance()).runsList
+    assertEquals(3, all.size)
+    val tuxProto = all.single { it.runId == tuxRun.runId.value.toString() }
+    assertEquals("tux-worker", tuxProto.workerName)
+    assertEquals("flow-worker", tuxProto.profileId)
+    assertEquals(4, tuxProto.revision)
+    assertEquals(RunStateProto.RUN_STATE_RUNNING, tuxProto.state)
+
+    val byWorker =
+        stub.listRuns(ListRunsRequest.newBuilder().setWorkerId(tux.value.toString()).build())
+    assertEquals(2, byWorker.runsList.size)
+    val byProfile =
+        stub.listRuns(ListRunsRequest.newBuilder().setProfileId("hand-test-1").build())
+    assertEquals(1, byProfile.runsList.size)
+    val live = stub.listRuns(ListRunsRequest.newBuilder().setLiveOnly(true).build())
+    assertEquals(2, live.runsList.size)
+    assertTrue(live.runsList.none { it.runId == ended.runId.value.toString() })
+  }
+
+  @Test
+  fun `listRuns reports the exit code presence flag`() = runBlocking {
+    val workerId = anActiveWorker("exit-worker")
+    val succeeded = fleetStore.createRun(NewRun(workerId, ProfileId("p-1"), 1, RunKind.RUN))
+    fleetStore.endRun(succeeded.runId, exitCode = 0)
+    val running = fleetStore.createRun(NewRun(workerId, ProfileId("p-1"), 1, RunKind.RUN))
+
+    val byId = stub.listRuns(ListRunsRequest.getDefaultInstance()).runsList.associateBy { it.runId }
+    // A run that ended with exit 0: hasExitCode distinguishes it from a running run's default 0.
+    assertTrue(byId.getValue(succeeded.runId.value.toString()).hasExitCode)
+    assertEquals(0, byId.getValue(succeeded.runId.value.toString()).exitCode)
+    assertTrue(!byId.getValue(running.runId.value.toString()).hasExitCode)
+  }
 }
 
 /** Reports success unless the revision references any secrets, which it always flags. */

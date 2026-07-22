@@ -34,6 +34,11 @@ service FleetService {
   rpc GrantProfile(GrantProfileRequest) returns (GrantProfileResponse);
   rpc RevokeProfileGrant(RevokeProfileGrantRequest) returns (RevokeProfileGrantResponse);
 
+  // Runs (M6-B1/B2): "who is running what". A run is created when a worker starts a `workload
+  // run`/`exec`, heartbeats while alive, and ends with an exit code. Presence is derived from live
+  // runs, never stored separately.
+  rpc ListRuns(ListRunsRequest) returns (ListRunsResponse);
+
   // Enrollment tokens (M4 Path A): an admin mints a one-time `wle_` token and hands it to a
   // teammate, who exchanges it for a worker credential at registration. The plaintext is returned
   // by CreateEnrollmentToken exactly once and never again — only its hash is stored.
@@ -74,6 +79,23 @@ enum ImageStatus {
   IMAGE_STATUS_UNDETERMINED = 4;
 }
 
+// A run's kind. Extensible: M7 adds AGENT (a session with no profile/revision).
+enum RunKind {
+  RUN_KIND_UNSPECIFIED = 0;
+  RUN_KIND_RUN = 1;
+  RUN_KIND_EXEC = 2;
+}
+
+// A run's lifecycle state. RUNNING/SUCCEEDED/FAILED are stored; LOST is derived at read time from a
+// still-running run whose last heartbeat aged past the grace window (never persisted).
+enum RunState {
+  RUN_STATE_UNSPECIFIED = 0;
+  RUN_STATE_RUNNING = 1;
+  RUN_STATE_SUCCEEDED = 2;
+  RUN_STATE_FAILED = 3;
+  RUN_STATE_LOST = 4;
+}
+
 message Worker {
   string worker_id = 1;
   string name = 2;
@@ -87,7 +109,8 @@ message Worker {
   string created_at = 8;
   string approved_at = 9;
   string approved_by = 10;
-  // Empty until M2 adds worker heartbeats.
+  // Last time the worker made an authenticated call (token/claim, or a run heartbeat since M6-B1).
+  // Empty until it first does so.
   string last_seen_at = 11;
   repeated string granted_profile_ids = 12;
   // Which registration plane the worker came through: "v1" (the retired open-registration plane) or
@@ -97,6 +120,44 @@ message Worker {
   // The source IP the worker registered from — recorded for v2 (shown on a require_approval pending
   // row as a defense-in-depth signal); empty for v1.
   string source_ip = 14;
+  // When the worker was revoked; empty unless status is REVOKED (M6-B2).
+  string revoked_at = 15;
+}
+
+// A run of a workload (M6-B1/B2). state may be LOST (a read-time derivation); everything else is as
+// stored. worker_name is denormalized for display. profile_id/revision are empty/0 only for a
+// future AGENT-kind run.
+message Run {
+  string run_id = 1;
+  string worker_id = 2;
+  string worker_name = 3;
+  string profile_id = 4;
+  int32 revision = 5;
+  RunKind kind = 6;
+  RunState state = 7;
+  // The reported exit code; meaningful only when has_exit_code is true (proto3 can't tell 0 from
+  // unset, and a run can end failed with no known code).
+  int32 exit_code = 8;
+  bool has_exit_code = 9;
+  string started_at = 10;
+  string last_heartbeat_at = 11;
+  // Empty while the run is still going.
+  string ended_at = 12;
+  // The pinned image digest this run ran (display only); empty for exec/env runs.
+  string image_digest = 13;
+}
+
+message ListRunsRequest {
+  // Optional filters; empty string means "no filter on this dimension".
+  string profile_id = 1;
+  string worker_id = 2;
+  // When true, only runs that haven't ended yet (effective state RUNNING or LOST).
+  bool live_only = 3;
+}
+
+message ListRunsResponse {
+  // Newest first.
+  repeated Run runs = 1;
 }
 
 message ListWorkersRequest {}

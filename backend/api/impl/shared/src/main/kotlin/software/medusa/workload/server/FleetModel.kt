@@ -70,6 +70,8 @@ data class Worker(
     // The source IP the worker registered from — recorded for v2 (the defense-in-depth signal on a
     // require_approval pending row); null for v1 workers.
     val sourceIp: String? = null,
+    // When the worker was revoked (M6-B2); null unless status is REVOKED.
+    val revokedAt: Instant? = null,
 )
 
 data class NewWorker(

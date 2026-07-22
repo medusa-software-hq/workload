@@ -26,9 +26,14 @@ import software.medusa.workload.v1.ListProfileRevisionsRequest
 import software.medusa.workload.v1.ListProfileRevisionsResponse
 import software.medusa.workload.v1.ListProfilesRequest
 import software.medusa.workload.v1.ListProfilesResponse
+import software.medusa.workload.v1.ListRunsRequest
+import software.medusa.workload.v1.ListRunsResponse
 import software.medusa.workload.v1.ListWorkersRequest
 import software.medusa.workload.v1.ListWorkersResponse
 import software.medusa.workload.v1.Profile as ProfileProto
+import software.medusa.workload.v1.Run as RunProto
+import software.medusa.workload.v1.RunKind as RunKindProto
+import software.medusa.workload.v1.RunState as RunStateProto
 import software.medusa.workload.v1.ProfileRevision as ProfileRevisionProto
 import software.medusa.workload.v1.RejectWorkerRequest
 import software.medusa.workload.v1.RejectWorkerResponse
@@ -89,6 +94,38 @@ private fun Worker.toProto(grantedProfileIds: List<ProfileId>): WorkerProto =
         .addAllGrantedProfileIds(grantedProfileIds.map { it.value })
         .setRegisteredVia(registeredVia.name.lowercase())
         .setSourceIp(sourceIp.orEmpty())
+        .setRevokedAt(revokedAt?.toString().orEmpty())
+        .build()
+
+private fun RunKind.toProto(): RunKindProto =
+    when (this) {
+      RunKind.RUN -> RunKindProto.RUN_KIND_RUN
+      RunKind.EXEC -> RunKindProto.RUN_KIND_EXEC
+    }
+
+private fun RunState.toProto(): RunStateProto =
+    when (this) {
+      RunState.RUNNING -> RunStateProto.RUN_STATE_RUNNING
+      RunState.SUCCEEDED -> RunStateProto.RUN_STATE_SUCCEEDED
+      RunState.FAILED -> RunStateProto.RUN_STATE_FAILED
+      RunState.LOST -> RunStateProto.RUN_STATE_LOST
+    }
+
+private fun Run.toProto(workerName: String): RunProto =
+    RunProto.newBuilder()
+        .setRunId(runId.value.toString())
+        .setWorkerId(workerId.value.toString())
+        .setWorkerName(workerName)
+        .setProfileId(profileId?.value.orEmpty())
+        .setRevision(revision ?: 0)
+        .setKind(kind.toProto())
+        .setState(state.toProto())
+        .setExitCode(exitCode ?: 0)
+        .setHasExitCode(exitCode != null)
+        .setStartedAt(startedAt.toString())
+        .setLastHeartbeatAt(lastHeartbeatAt.toString())
+        .setEndedAt(endedAt?.toString().orEmpty())
+        .setImageDigest(imageDigest.orEmpty())
         .build()
 
 private fun Profile.toProto(): ProfileProto =
@@ -303,6 +340,21 @@ class FleetServiceImpl(
 
   private suspend fun toProto(worker: Worker): WorkerProto =
       worker.toProto(fleetStore.listGrantedProfileIds(worker.workerId))
+
+  override suspend fun listRuns(request: ListRunsRequest): ListRunsResponse {
+    val filter =
+        RunFilter(
+            workerId = request.workerId.ifBlank { null }?.let { parseWorkerId(it) },
+            profileId = request.profileId.ifBlank { null }?.let { parseProfileId(it) },
+            liveOnly = request.liveOnly,
+        )
+    val runs = fleetStore.listRuns(filter)
+    // Denormalize the worker name for display — one listWorkers, not a lookup per run.
+    val workerNames = fleetStore.listWorkers().associate { it.workerId to it.name }
+    return ListRunsResponse.newBuilder()
+        .addAllRuns(runs.map { it.toProto(workerName = workerNames[it.workerId].orEmpty()) })
+        .build()
+  }
 
   override suspend fun listProfiles(request: ListProfilesRequest): ListProfilesResponse =
       ListProfilesResponse.newBuilder()
