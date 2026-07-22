@@ -46,8 +46,26 @@ jobs:
             --format='value(status.url)')
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
+      # Mint a real s2s admin credential the way a service caller would: impersonate the dedicated
+      # admin principal (workload-ci-admin) via the *same* WIF provider — its workloadIdentityUser
+      # binding admits this repo — and have Google mint an ID token whose audience is the API URL and
+      # that carries the SA's email. That is exactly the shape the server's GooglePrincipalVerifier
+      # accepts as a service principal (audience = API URL, email ∈ allowlist). No browser, no secret.
+      # create_credentials_file: false so this does not clobber the CI/CD ADC written above.
+      - name: Mint an admin ID token as workload-ci-admin (WIF)
+        id: adminauth
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CI_ADMIN_SA_EMAIL }}
+          token_format: id_token
+          id_token_audience: ${{ vars.API_URL }}
+          id_token_include_email: true
+          create_credentials_file: false
+
       - name: Run the smoke suite
         env:
           API_URL: ${{ vars.API_URL }}
           RUN_APP_URL: ${{ steps.origin.outputs.url }}
+          ADMIN_ID_TOKEN: ${{ steps.adminauth.outputs.id_token }}
         run: ./smoke/smoke.sh

@@ -12,13 +12,14 @@
 #   API_URL      the front-door hostname, e.g. https://api.workload-baseline-staging.medusa.software
 #   RUN_APP_URL  the broker's generated Cloud Run origin (https://api-...run.app)
 #
-# Exit non-zero on the first hard failure. Checks 2 (s2s admin) and 3 (gRPC-web) are v1 stubs, marked
-# so and non-fatal until the pieces they need land (s2s principal = M5-05).
+# Exit non-zero on the first hard failure. Check 3 (gRPC-web) is the one remaining v1 stub, marked so
+# and non-fatal; a stricter authenticated streaming assertion is future work.
 
 set -euo pipefail
 
 : "${API_URL:?API_URL not set}"
 : "${RUN_APP_URL:?RUN_APP_URL not set}"
+: "${ADMIN_ID_TOKEN:?ADMIN_ID_TOKEN not set}"
 
 fail() {
   echo "::error::smoke: $*" >&2
@@ -74,12 +75,25 @@ esac
 echo
 
 # ---------------------------------------------------------------------------
-# 2. Admin plane via s2s (read-only RPC as the CI principal). STUB — needs the s2s principal (M5-05):
-#    until the verifier accepts a WIF-minted SA ID token, the CI runner has no admin credential to
-#    make this call with. Marked, non-fatal, so the gate is honest about what it does not yet cover.
+# 2. Admin plane via s2s (read-only RPC as the CI principal). A genuine end-to-end check of the M5-05
+#    service principal: ADMIN_ID_TOKEN is a WIF-minted workload-ci-admin ID token (audience = this
+#    API URL, email included), so the server's GooglePrincipalVerifier must classify it as an
+#    allowlisted service principal and let the read-only ListProfiles through the front door. A 200
+#    proves the whole path — Cloudflare Worker → GFE → app → s2s auth. (The negative cases — wrong
+#    audience, non-allowlisted SA, staging-token-against-prod — are covered by the verifier unit
+#    tests and the registry-auth integration workflow, not re-run here.)
 # ---------------------------------------------------------------------------
-echo "[4/4] admin plane via s2s (read-only RPC)"
-echo "      ::warning::STUB — s2s admin smoke skipped until the s2s principal lands (M5-05)"
+echo "[4/4] admin plane via s2s (read-only ListProfiles as workload-ci-admin)"
+code=$(curl -sS -o /tmp/admin.body -w '%{http_code}' --max-time 30 \
+  -X POST \
+  -H "Authorization: Bearer $ADMIN_ID_TOKEN" \
+  -H 'Content-Type: application/json' \
+  --data '{}' \
+  "$API_URL/medusa.workload.v1.FleetService/ListProfiles" || true)
+body=$(cat /tmp/admin.body 2>/dev/null || true)
+echo "      HTTP $code; body: ${body:0:200}"
+[ "$code" = "200" ] || fail "admin ListProfiles as workload-ci-admin returned HTTP $code (expected 200) — the s2s service principal is not being accepted"
+echo "      ok"
 echo
 
-echo "== smoke passed (checks 1 & 2 enforced; 3 & 4 are marked v1 stubs) =="
+echo "== smoke passed (checks 1, 2 & 4 enforced; 3 is a marked v1 stub) =="
