@@ -728,6 +728,187 @@ abstract class FleetStoreContractTest {
     assertEquals(1, results.filterNotNull().size)
   }
 
+  // Runs (M6-B1).
+
+  private suspend fun aWorker(store: FleetStore, name: String = "run-worker"): WorkerId =
+      store.createWorker(newWorker(name)).workerId
+
+  private suspend fun aProfile(store: FleetStore, id: String): ProfileId {
+    val profileId = ProfileId(id)
+    store.createProfile(
+        profileId,
+        displayName = null,
+        revision =
+            NewProfileRevision("sa@project.iam.gserviceaccount.com", createdBy = "admin@example.com"),
+    )
+    return profileId
+  }
+
+  private fun newRun(workerId: WorkerId, profileId: ProfileId, kind: RunKind = RunKind.RUN) =
+      NewRun(workerId = workerId, profileId = profileId, revision = 1, kind = kind)
+
+  @Test
+  fun `createRun starts RUNNING with its first heartbeat and appears in listRuns`() = test { store ->
+    val workerId = aWorker(store)
+    val profileId = aProfile(store, "run-profile-1")
+    val t0 = java.time.Instant.parse("2026-07-22T10:00:00Z")
+
+    val run = store.createRun(newRun(workerId, profileId).copy(imageDigest = "sha256:abc"), now = t0)
+
+    assertEquals(RunState.RUNNING, run.state)
+    assertEquals(workerId, run.workerId)
+    assertEquals(profileId, run.profileId)
+    assertEquals(1, run.revision)
+    assertEquals(RunKind.RUN, run.kind)
+    assertEquals("sha256:abc", run.imageDigest)
+    assertNull(run.exitCode)
+    assertNull(run.endedAt)
+    assertEquals(t0, run.startedAt)
+    assertEquals(t0, run.lastHeartbeatAt)
+
+    assertEquals(run, store.getRun(run.runId, now = t0))
+    assertTrue(store.listRuns(RunFilter(), now = t0).any { it.runId == run.runId })
+  }
+
+  @Test
+  fun `endRun with exit 0 succeeds, nonzero fails, and records the exit code`() = test { store ->
+    val workerId = aWorker(store)
+    val ok = store.createRun(newRun(workerId, aProfile(store, "run-ok")))
+    val bad = store.createRun(newRun(workerId, aProfile(store, "run-bad")))
+
+    val succeeded = store.endRun(ok.runId, exitCode = 0)
+    assertEquals(RunState.SUCCEEDED, succeeded?.state)
+    assertEquals(0, succeeded?.exitCode)
+    assertNotNull(succeeded?.endedAt)
+
+    val failed = store.endRun(bad.runId, exitCode = 17)
+    assertEquals(RunState.FAILED, failed?.state)
+    assertEquals(17, failed?.exitCode)
+  }
+
+  @Test
+  fun `endRun with an unknown exit code fails with a null code`() = test { store ->
+    val workerId = aWorker(store)
+    val run = store.createRun(newRun(workerId, aProfile(store, "run-unknown-exit")))
+
+    val ended = store.endRun(run.runId, exitCode = null)
+    assertEquals(RunState.FAILED, ended?.state)
+    assertNull(ended?.exitCode)
+  }
+
+  @Test
+  fun `a running run whose heartbeat ages past the grace window derives LOST on read`() =
+      test { store ->
+        val workerId = aWorker(store)
+        val t0 = java.time.Instant.parse("2026-07-22T10:00:00Z")
+        val run = store.createRun(newRun(workerId, aProfile(store, "run-lost")), now = t0)
+
+        // Just inside the window — still RUNNING.
+        val stillFresh = t0.plus(lostAfter).minusSeconds(1)
+        assertEquals(RunState.RUNNING, store.getRun(run.runId, now = stillFresh)?.state)
+
+        // Past the window — LOST, purely from reading (nothing was written).
+        val stale = t0.plus(lostAfter).plusSeconds(1)
+        assertEquals(RunState.LOST, store.getRun(run.runId, now = stale)?.state)
+        assertEquals(RunState.LOST, store.listRuns(RunFilter(), now = stale).single().state)
+      }
+
+  @Test
+  fun `a late heartbeat un-loses a run`() = test { store ->
+    val workerId = aWorker(store)
+    val t0 = java.time.Instant.parse("2026-07-22T10:00:00Z")
+    val run = store.createRun(newRun(workerId, aProfile(store, "run-unlose")), now = t0)
+
+    val stale = t0.plus(lostAfter).plusSeconds(5)
+    assertEquals(RunState.LOST, store.getRun(run.runId, now = stale)?.state)
+
+    // A heartbeat lands even on a `lost` run — its stored state is still RUNNING.
+    val beat = store.heartbeatRun(run.runId, now = stale)
+    assertEquals(RunState.RUNNING, beat?.state)
+    assertEquals(stale, beat?.lastHeartbeatAt)
+    assertEquals(RunState.RUNNING, store.getRun(run.runId, now = stale)?.state)
+  }
+
+  @Test
+  fun `heartbeat and end cannot revive a terminal run`() = test { store ->
+    val workerId = aWorker(store)
+    val run = store.createRun(newRun(workerId, aProfile(store, "run-terminal")))
+    store.endRun(run.runId, exitCode = 0)
+
+    assertNull(store.heartbeatRun(run.runId))
+    assertNull(store.endRun(run.runId, exitCode = 1))
+    // The terminal state and its exit code stand.
+    assertEquals(RunState.SUCCEEDED, store.getRun(run.runId)?.state)
+    assertEquals(0, store.getRun(run.runId)?.exitCode)
+  }
+
+  @Test
+  fun `heartbeat, end, and get on an unknown run return null`() = test { store ->
+    val unknown = RunId(java.util.UUID.randomUUID())
+    assertNull(store.getRun(unknown))
+    assertNull(store.heartbeatRun(unknown))
+    assertNull(store.endRun(unknown, exitCode = 0))
+  }
+
+  @Test
+  fun `listRuns filters by worker, profile, and live-only`() = test { store ->
+    val workerA = aWorker(store, "run-worker-a")
+    val workerB = aWorker(store, "run-worker-b")
+    val profileX = aProfile(store, "run-profile-x")
+    val profileY = aProfile(store, "run-profile-y")
+
+    val aOnX = store.createRun(newRun(workerA, profileX))
+    val aOnY = store.createRun(newRun(workerA, profileY))
+    val bOnX = store.createRun(newRun(workerB, profileX))
+    store.endRun(bOnX.runId, exitCode = 0)
+
+    assertEquals(
+        setOf(aOnX.runId, aOnY.runId),
+        store.listRuns(RunFilter(workerId = workerA)).map { it.runId }.toSet(),
+    )
+    assertEquals(
+        setOf(aOnX.runId, bOnX.runId),
+        store.listRuns(RunFilter(profileId = profileX)).map { it.runId }.toSet(),
+    )
+    // liveOnly excludes the ended run on X.
+    assertEquals(
+        setOf(aOnX.runId, aOnY.runId),
+        store.listRuns(RunFilter(liveOnly = true)).map { it.runId }.toSet(),
+    )
+    assertEquals(
+        setOf(aOnX.runId),
+        store.listRuns(RunFilter(profileId = profileX, liveOnly = true)).map { it.runId }.toSet(),
+    )
+  }
+
+  @Test
+  fun `listRuns returns newest first`() = test { store ->
+    val workerId = aWorker(store)
+    val profileId = aProfile(store, "run-order")
+    val first =
+        store.createRun(
+            newRun(workerId, profileId),
+            now = java.time.Instant.parse("2026-07-22T10:00:00Z"),
+        )
+    val second =
+        store.createRun(
+            newRun(workerId, profileId),
+            now = java.time.Instant.parse("2026-07-22T11:00:00Z"),
+        )
+
+    assertEquals(
+        listOf(second.runId, first.runId),
+        store.listRuns(RunFilter(workerId = workerId)).map { it.runId },
+    )
+  }
+
+  @Test
+  fun `an exec run records its kind`() = test { store ->
+    val workerId = aWorker(store)
+    val run = store.createRun(newRun(workerId, aProfile(store, "run-exec"), kind = RunKind.EXEC))
+    assertEquals(RunKind.EXEC, store.getRun(run.runId)?.kind)
+  }
+
   @Test
   fun `FleetStore exposes no way to mutate or delete an existing revision`() {
     val methodNames = FleetStore::class.java.methods.map { it.name.lowercase() }

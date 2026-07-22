@@ -51,6 +51,7 @@ class WorkerPlaneV2UnprobeableTest {
             workerClaimService = WorkerClaimService(store, FakeTokenMinter),
             selfStatusService = SelfStatusService(store),
             v2RegistrationService = RegistrationServiceV2(store),
+            workerRunService = WorkerRunService(store),
         )
     server.start().join()
     client = WebClient.of("http://127.0.0.1:${server.activeLocalPort()}")
@@ -85,6 +86,7 @@ class WorkerPlaneV2UnprobeableTest {
             post("/worker/v2/registrations", null),
             post("/worker/v2/token", null),
             post("/worker/v2/claim", null),
+            post("/worker/v2/runs", null),
             get("/worker/v2/registrations/self", null),
         )
     for (response in responses) {
@@ -100,6 +102,7 @@ class WorkerPlaneV2UnprobeableTest {
         listOf(
             post("/worker/v2/token", garbage),
             post("/worker/v2/claim", garbage),
+            post("/worker/v2/runs", garbage),
             get("/worker/v2/registrations/self", garbage),
         )) {
       assertEquals(HttpStatus.NOT_FOUND, response.status())

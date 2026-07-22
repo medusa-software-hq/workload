@@ -12,6 +12,7 @@ import kotlinx.serialization.json.Json
 import software.medusa.workload.db.Enrollment_tokens
 import software.medusa.workload.db.Profile_revisions
 import software.medusa.workload.db.Profiles
+import software.medusa.workload.db.Runs
 import software.medusa.workload.db.Worker_profile_grants
 import software.medusa.workload.db.Workers
 import software.medusa.workload.db.WorkloadDatabase
@@ -73,6 +74,21 @@ private fun Worker_profile_grants.toDomain(): Grant =
         profileId = ProfileId(profile_id),
         grantedAt = granted_at.toInstant(),
         grantedBy = granted_by,
+    )
+
+private fun Runs.toDomain(): Run =
+    Run(
+        runId = RunId(run_id),
+        workerId = WorkerId(worker_id),
+        profileId = profile_id?.let { ProfileId(it) },
+        revision = revision,
+        kind = RunKind.valueOf(kind),
+        state = RunState.valueOf(state),
+        exitCode = exit_code,
+        startedAt = started_at.toInstant(),
+        lastHeartbeatAt = last_heartbeat_at.toInstant(),
+        endedAt = ended_at?.toInstant(),
+        imageDigest = image_digest,
     )
 
 private fun Enrollment_tokens.toDomain(): EnrollmentToken =
@@ -407,5 +423,62 @@ class PostgresFleetStore(
             )
             .executeAsOneOrNull()
             ?.toDomain()
+      }
+
+  override suspend fun createRun(run: NewRun, now: Instant): Run =
+      withContext(Dispatchers.IO) {
+        val runId = UUID.randomUUID()
+        database.fleetQueries.insertRun(
+            run_id = runId,
+            worker_id = run.workerId.value,
+            profile_id = run.profileId?.value,
+            revision = run.revision,
+            kind = run.kind.name,
+            started_at = now.toOffsetDateTime(),
+            last_heartbeat_at = now.toOffsetDateTime(),
+            image_digest = run.imageDigest,
+        )
+        database.fleetQueries.selectRunById(runId).executeAsOne().toDomain()
+      }
+
+  override suspend fun heartbeatRun(runId: RunId, now: Instant): Run? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries
+            .heartbeatRun(last_heartbeat_at = now.toOffsetDateTime(), run_id = runId.value)
+            .executeAsOneOrNull()
+            ?.toDomain()
+            ?.let { applyRunStateDerivation(it, now) }
+      }
+
+  override suspend fun endRun(runId: RunId, exitCode: Int?, now: Instant): Run? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries
+            .endRun(
+                state = terminalStateFor(exitCode).name,
+                exit_code = exitCode,
+                ended_at = now.toOffsetDateTime(),
+                run_id = runId.value,
+            )
+            .executeAsOneOrNull()
+            ?.toDomain()
+      }
+
+  override suspend fun getRun(runId: RunId, now: Instant): Run? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.selectRunById(runId.value).executeAsOneOrNull()?.toDomain()?.let {
+          applyRunStateDerivation(it, now)
+        }
+      }
+
+  override suspend fun listRuns(filter: RunFilter, now: Instant): List<Run> =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries
+            .listRuns(
+                workerId = filter.workerId?.value,
+                profileId = filter.profileId?.value,
+                liveOnly = filter.liveOnly,
+            )
+            .executeAsList()
+            .map { applyRunStateDerivation(it.toDomain(), now) }
       }
 }

@@ -125,4 +125,29 @@ interface FleetStore {
       workerId: WorkerId,
       now: Instant,
   ): EnrollmentToken?
+
+  // Runs (M6-B1)
+
+  /** Records the start of a run; it begins `RUNNING` with its first heartbeat at [now]. */
+  suspend fun createRun(run: NewRun, now: Instant = Instant.now()): Run
+
+  /**
+   * Moves a still-running run's last heartbeat to [now], returning the (re-derived) run. Returns
+   * null if the run doesn't exist or has already ended — a heartbeat can revive a `lost` run but
+   * never a terminal one.
+   */
+  suspend fun heartbeatRun(runId: RunId, now: Instant = Instant.now()): Run?
+
+  /**
+   * Ends a still-running run: records [exitCode] (nullable — an abnormal exit whose code is unknown)
+   * and sets the stored terminal state via [terminalStateFor]. Returns the ended run, or null if it
+   * doesn't exist or already ended. Only the reporting process ever writes a terminal state.
+   */
+  suspend fun endRun(runId: RunId, exitCode: Int?, now: Instant = Instant.now()): Run?
+
+  /** Reads a single run with its effective state ([deriveRunState]) applied, or null if unknown. */
+  suspend fun getRun(runId: RunId, now: Instant = Instant.now()): Run?
+
+  /** Lists runs matching [filter], newest first, each with its effective state applied. */
+  suspend fun listRuns(filter: RunFilter, now: Instant = Instant.now()): List<Run>
 }

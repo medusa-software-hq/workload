@@ -68,6 +68,23 @@ CREATE TABLE enrollment_tokens (
     revoked_at          TIMESTAMPTZ
 );
 
+-- Kept in sync with V10__create_runs.sql. `state` stores only RUNNING/SUCCEEDED/FAILED — `lost` is
+-- a read-time derivation (see RunPresence.kt), never persisted. profile_id/revision are nullable to
+-- leave room for M7's agent kind.
+CREATE TABLE runs (
+    run_id            uuid PRIMARY KEY,
+    worker_id         uuid NOT NULL REFERENCES workers,
+    profile_id        text REFERENCES profiles,
+    revision          int,
+    kind              text NOT NULL,
+    state             text NOT NULL,
+    exit_code         int,
+    started_at        TIMESTAMPTZ NOT NULL,
+    last_heartbeat_at TIMESTAMPTZ NOT NULL,
+    ended_at          TIMESTAMPTZ,
+    image_digest      text
+);
+
 insertWorker:
 INSERT INTO workers (worker_id, secret_hash, name, hostname, os, cli_version, status, created_at, registered_via, source_ip)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
@@ -172,3 +189,33 @@ UPDATE enrollment_tokens
 SET used_at = ?, used_by_worker_id = ?
 WHERE token_hash = ? AND used_at IS NULL AND revoked_at IS NULL AND expires_at > ?
 RETURNING *;
+
+-- Runs (M6-B1). A run is born RUNNING with its first heartbeat already set.
+insertRun:
+INSERT INTO runs (run_id, worker_id, profile_id, revision, kind, state, exit_code, started_at, last_heartbeat_at, ended_at, image_digest)
+VALUES (?, ?, ?, ?, ?, 'RUNNING', NULL, ?, ?, NULL, ?);
+
+selectRunById:
+SELECT * FROM runs WHERE run_id = ?;
+
+-- Conditional so a heartbeat only lands on a still-running run (it can revive a `lost` one — its
+-- stored state is still RUNNING — but never a terminal one). RETURNING distinguishes hit from miss.
+heartbeatRun:
+UPDATE runs SET last_heartbeat_at = ?
+WHERE run_id = ? AND ended_at IS NULL AND state = 'RUNNING'
+RETURNING *;
+
+-- Terminal write, guarded the same way: only the first `end` on a running run takes effect.
+endRun:
+UPDATE runs SET state = ?, exit_code = ?, ended_at = ?
+WHERE run_id = ? AND ended_at IS NULL AND state = 'RUNNING'
+RETURNING *;
+
+-- Optional filters via nullable params (casts keep Postgres from having to guess the type in the
+-- IS NULL branch); liveOnly = TRUE narrows to runs that haven't ended. Newest first.
+listRuns:
+SELECT * FROM runs
+WHERE (CAST(:workerId AS uuid) IS NULL OR worker_id = :workerId)
+  AND (CAST(:profileId AS text) IS NULL OR profile_id = :profileId)
+  AND (:liveOnly = FALSE OR ended_at IS NULL)
+ORDER BY started_at DESC;
