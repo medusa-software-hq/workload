@@ -26,16 +26,16 @@ data class AdminCredentials(
     val email: String,
 )
 
-fun adminCredentialsFile(dir: Path = configDir()): Path = dir.resolve(adminCredentialsFileName)
+fun adminCredentialsFile(dir: Path): Path = dir.resolve(adminCredentialsFileName)
 
-fun loadAdminCredentials(dir: Path = configDir()): AdminCredentials? {
+fun loadAdminCredentials(dir: Path): AdminCredentials? {
   val file = adminCredentialsFile(dir)
   if (!Files.exists(file)) return null
   return adminJson.decodeFromString(Files.readString(file))
 }
 
 /** Writes [credentials] with dir 0700 / file 0600, set atomically at creation where supported. */
-fun saveAdminCredentials(credentials: AdminCredentials, dir: Path = configDir()) {
+fun saveAdminCredentials(credentials: AdminCredentials, dir: Path) {
   if (!Files.exists(dir)) {
     runCatching {
           Files.createDirectory(
@@ -58,6 +58,6 @@ fun saveAdminCredentials(credentials: AdminCredentials, dir: Path = configDir())
   Files.writeString(file, adminJson.encodeToString(credentials))
 }
 
-fun deleteAdminCredentials(dir: Path = configDir()) {
+fun deleteAdminCredentials(dir: Path) {
   Files.deleteIfExists(adminCredentialsFile(dir))
 }

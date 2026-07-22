@@ -8,26 +8,29 @@ import java.nio.file.Path
 class AdminNotLoggedInException(message: String) : Exception(message)
 
 /**
- * Default token refresher: mints a fresh ID token via the OAuth client secret this build resolves.
+ * The default token refresher for [env]: mints a fresh ID token via that environment's OAuth client
+ * (id + the secret this build resolves for it).
  */
-private fun defaultRefresher(): (String) -> TokenSet = { refreshToken ->
+internal fun defaultRefresher(env: Environment): (String) -> TokenSet = { refreshToken ->
   val secret =
-      AdminConfig.clientSecret
+      env.oauthClientSecret
           ?: throw AdminNotLoggedInException(
-              "This CLI build has no OAuth client secret; set ${AdminConfig.CLIENT_SECRET_ENV}."
+              "This CLI build has no admin OAuth client secret for ${env.label}; set " +
+                  "${env.oauthClientSecretEnvVar}."
           )
-  AdminOAuth(clientSecret = secret).refresh(refreshToken)
+  AdminOAuth(clientId = env.oauthClientId, clientSecret = secret).refresh(refreshToken)
 }
 
 /**
  * Supplies a currently-valid Google ID token for admin API calls: hands back the cached one while
  * it's still good, and silently refreshes it (no browser) when it's expired. Only a revoked/expired
- * refresh token forces a fresh `admin login`.
+ * refresh token forces a fresh `admin login`. Environment-agnostic by construction — the caller
+ * passes the environment's [dir] and its [refresher] (see [defaultRefresher]).
  */
 class AdminSession(
-    private val dir: Path = configDir(),
+    private val dir: Path,
     private val nowEpochSec: () -> Long = { System.currentTimeMillis() / 1000 },
-    private val refresher: (String) -> TokenSet = defaultRefresher(),
+    private val refresher: (String) -> TokenSet,
 ) {
   fun currentIdToken(): String {
     val credentials =

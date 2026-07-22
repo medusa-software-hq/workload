@@ -6,7 +6,6 @@ import java.nio.file.attribute.PosixFilePermissions
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
-private const val configDirName = "ms-workload"
 private const val configFileName = "config.json"
 
 private val json = Json {
@@ -14,9 +13,10 @@ private val json = Json {
   prettyPrint = true
 }
 
-// No broker URL here: the CLI talks to the one backend endpoint ([BuildConfig.apiBaseUrl]), not a
-// per-worker "broker". Old configs carrying a `brokerBaseUrl` still load (unknown keys are
-// ignored).
+// No broker URL here: the CLI talks to the one backend endpoint for its [Environment]
+// ([Environment.apiBaseUrl]), not a per-worker "broker". Old configs carrying a `brokerBaseUrl`
+// still load (unknown keys are ignored). The [dir] every function takes is the environment's
+// partitioned [Environment.configDir] — there is no ambient default, so state can't be mixed.
 @Serializable
 data class WorkloadConfig(
     val workerId: String,
@@ -24,23 +24,9 @@ data class WorkloadConfig(
     val workerName: String,
 )
 
-/** `$XDG_CONFIG_HOME/ms-workload/`, falling back to `~/.config/ms-workload/` — also on macOS. */
-fun configDir(
-    xdgConfigHome: String? = System.getenv("XDG_CONFIG_HOME"),
-    userHome: String = System.getProperty("user.home"),
-): Path {
-  val base =
-      if (!xdgConfigHome.isNullOrBlank()) {
-        Path.of(xdgConfigHome)
-      } else {
-        Path.of(userHome, ".config")
-      }
-  return base.resolve(configDirName)
-}
+fun configFile(dir: Path): Path = dir.resolve(configFileName)
 
-fun configFile(dir: Path = configDir()): Path = dir.resolve(configFileName)
-
-fun loadConfig(dir: Path = configDir()): WorkloadConfig? {
+fun loadConfig(dir: Path): WorkloadConfig? {
   val file = configFile(dir)
   if (!Files.exists(file)) return null
   return json.decodeFromString(Files.readString(file))
@@ -51,7 +37,7 @@ fun loadConfig(dir: Path = configDir()): WorkloadConfig? {
  * creation where the platform supports POSIX permissions, never as a follow-up chmod that would
  * leave a window with looser permissions.
  */
-fun saveConfig(config: WorkloadConfig, dir: Path = configDir()) {
+fun saveConfig(config: WorkloadConfig, dir: Path) {
   if (!Files.exists(dir)) {
     runCatching {
           Files.createDirectory(
@@ -74,6 +60,6 @@ fun saveConfig(config: WorkloadConfig, dir: Path = configDir()) {
   Files.writeString(file, json.encodeToString(config))
 }
 
-fun deleteConfig(dir: Path = configDir()) {
+fun deleteConfig(dir: Path) {
   Files.deleteIfExists(configFile(dir))
 }

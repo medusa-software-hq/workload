@@ -369,9 +369,13 @@ fun hostPrimaryAddress(): InetAddress =
  */
 fun isTrustedRunPeer(addr: InetAddress): Boolean = addr.isSiteLocalAddress
 
-/** Builds the production [TokenClaimer] that re-claims from the broker for [profileId]. */
-fun brokerTokenClaimer(config: WorkloadConfig, profileId: String): TokenClaimer = TokenClaimer {
-  val claim = claimToken(BuildConfig.apiBaseUrl, config.workerId, config.workerSecret, profileId)
+/** Builds the production [TokenClaimer] that re-claims from [apiBaseUrl] for [profileId]. */
+fun brokerTokenClaimer(
+    apiBaseUrl: String,
+    config: WorkloadConfig,
+    profileId: String,
+): TokenClaimer = TokenClaimer {
+  val claim = claimToken(apiBaseUrl, config.workerId, config.workerSecret, profileId)
   BrokeredToken(
       accessToken = claim.accessToken,
       expiresAt = Instant.parse(claim.expiresAt),
@@ -379,16 +383,14 @@ fun brokerTokenClaimer(config: WorkloadConfig, profileId: String): TokenClaimer 
   )
 }
 
-/** Builds the production [IdTokenClaimer] that claims audience-bound ID tokens from the broker. */
-fun brokerIdTokenClaimer(config: WorkloadConfig, profileId: String): IdTokenClaimer =
-    IdTokenClaimer { audience, includeEmail ->
-      claimIdToken(
-              BuildConfig.apiBaseUrl,
-              config.workerId,
-              config.workerSecret,
-              profileId,
-              audience,
-              includeEmail,
-          )
-          .idToken
-    }
+/**
+ * Builds the production [IdTokenClaimer] that claims audience-bound ID tokens from [apiBaseUrl].
+ */
+fun brokerIdTokenClaimer(
+    apiBaseUrl: String,
+    config: WorkloadConfig,
+    profileId: String,
+): IdTokenClaimer = IdTokenClaimer { audience, includeEmail ->
+  claimIdToken(apiBaseUrl, config.workerId, config.workerSecret, profileId, audience, includeEmail)
+      .idToken
+}

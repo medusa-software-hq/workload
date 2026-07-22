@@ -2,18 +2,20 @@ package software.medusa.workload.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.PrintMessage
+import com.github.ajalt.clikt.core.requireObject
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 
 class TokenCommand : CliktCommand(name = "token") {
+  private val env by requireObject<Environment>()
   private val profileId by
       option("--profile", "-p", help = "The profile to claim a token for").required()
 
   override fun run() {
-    val config = loadConfigOrFail()
+    val config = loadConfigOrFail(env)
     val token =
         try {
-          claimToken(BuildConfig.apiBaseUrl, config.workerId, config.workerSecret, profileId)
+          claimToken(env.apiBaseUrl, config.workerId, config.workerSecret, profileId)
         } catch (e: WorkerApiException) {
           throw PrintMessage(
               tokenClaimErrorMessage(e, profileId),
@@ -32,10 +34,10 @@ class TokenCommand : CliktCommand(name = "token") {
   }
 }
 
-internal fun loadConfigOrFail(): WorkloadConfig =
-    loadConfig()
+internal fun loadConfigOrFail(env: Environment): WorkloadConfig =
+    loadConfig(env.configDir)
         ?: throw PrintMessage(
-            "No config found at ${configFile()}. Run 'workload worker register' first.",
+            "No config found at ${configFile(env.configDir)}. Run 'workload worker register' first.",
             statusCode = 1,
             printError = true,
         )

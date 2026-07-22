@@ -4,6 +4,7 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.core.ProgramResult
+import com.github.ajalt.clikt.core.requireObject
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import java.io.IOException
@@ -240,10 +241,11 @@ class RunCommand : CliktCommand(name = "run") {
       "Run a profile's container image with its environment injected. Streams the container's " +
           "output and exits with the container's exit code."
 
+  private val env by requireObject<Environment>()
   private val profileId by option("--profile", "-p", help = "The profile to run").required()
 
   override fun run() {
-    val config = loadConfigOrFail()
+    val config = loadConfigOrFail(env)
 
     // No `docker` CLI preflight any more: stage 2 pulls through the library, so the only binary
     // `workload worker run` may still invoke is the credential *helper*, and only if config.json
@@ -254,7 +256,7 @@ class RunCommand : CliktCommand(name = "run") {
 
       val claim =
           try {
-            claimWorkload(BuildConfig.apiBaseUrl, config.workerId, config.workerSecret, profileId)
+            claimWorkload(env.apiBaseUrl, config.workerId, config.workerSecret, profileId)
           } catch (e: WorkerApiException) {
             throw PrintMessage(
                 tokenClaimErrorMessage(e, profileId),
@@ -265,7 +267,7 @@ class RunCommand : CliktCommand(name = "run") {
             // An unreachable/misconfigured broker surfaces as a raw transport error; don't let it
             // reach the operator as a stack trace.
             throw PrintMessage(
-                "Cannot reach the broker at ${BuildConfig.apiBaseUrl}: ${e.javaClass.simpleName}" +
+                "Cannot reach the broker at ${env.apiBaseUrl}: ${e.javaClass.simpleName}" +
                     (e.message?.let { ": $it" } ?: "") +
                     "\nCheck your network, or re-run 'workload worker register' if the broker URL changed.",
                 statusCode = 1,
@@ -374,10 +376,10 @@ class RunCommand : CliktCommand(name = "run") {
     val primary = hostPrimaryAddress()
     val emulator =
         MetadataEmulator(
-            RefreshingTokenCache(brokerTokenClaimer(config, profileId)),
+            RefreshingTokenCache(brokerTokenClaimer(env.apiBaseUrl, config, profileId)),
             InetSocketAddress(primary, 0),
             ::isTrustedRunPeer,
-            idTokenClaimer = brokerIdTokenClaimer(config, profileId),
+            idTokenClaimer = brokerIdTokenClaimer(env.apiBaseUrl, config, profileId),
         )
     emulator.start()
     val metadataAddress = "${primary.hostAddress}:${emulator.port}"

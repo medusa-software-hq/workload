@@ -46,24 +46,32 @@ application {
       )
 }
 
-// Bake the admin OAuth client secret + API base URL into the fat jar as a resource. The Publish CLI
-// workflow passes them via `-PadminOauthClientSecret` / `-PadminApiBaseUrl` (from an Actions secret
-// and variable). Absent locally → empty values, and AdminConfig falls back to env vars / a default,
-// so dev builds still work. Neither value is ever committed.
+// Bake the per-environment admin OAuth client secrets into the fat jar as a resource. The Publish
+// CLI workflow passes them via `-PadminOauthClientSecret` (prod) /
+// `-PstagingAdminOauthClientSecret`
+// (staging) from Actions secrets. The backend URLs and OAuth client ids are NOT baked — they're
+// deterministic public values carried as source constants on `Environment`. Absent locally → empty
+// values, and each `Environment` falls back to its `oauthClientSecretEnvVar`, so dev builds still
+// work. A staging secret that isn't wired yet simply bakes empty, and `admin login` under
+// `WORKLOAD_ENVIRONMENT=staging` reports that cleanly rather than misbehaving. Nothing is
+// committed.
 val adminBuildConfigDir = layout.buildDirectory.dir("generated/adminBuildConfig")
 
 val generateAdminBuildConfig by tasks.registering {
   val clientSecret = providers.gradleProperty("adminOauthClientSecret").orElse("")
-  val apiBaseUrl = providers.gradleProperty("adminApiBaseUrl").orElse("")
+  val stagingClientSecret = providers.gradleProperty("stagingAdminOauthClientSecret").orElse("")
   inputs.property("clientSecret", clientSecret)
-  inputs.property("apiBaseUrl", apiBaseUrl)
+  inputs.property("stagingClientSecret", stagingClientSecret)
   outputs.dir(adminBuildConfigDir)
   doLast {
     val file = adminBuildConfigDir.get().file("workload-admin-build.properties").asFile
     file.parentFile.mkdirs()
-    // Both values are known to be properties-safe (a `GOCSPX-…` secret and an https URL — the
-    // `:` and `/` are fine in a value). Written by hand to avoid Properties.store's date comment.
-    file.writeText("oauthClientSecret=${clientSecret.get()}\napiBaseUrl=${apiBaseUrl.get()}\n")
+    // Secrets are properties-safe (`GOCSPX-…` — no `:` `=` or newline). Written by hand to avoid
+    // Properties.store's date comment. An empty value is read back as absent (see BuildConfig).
+    file.writeText(
+        "oauthClientSecret=${clientSecret.get()}\n" +
+            "stagingOauthClientSecret=${stagingClientSecret.get()}\n"
+    )
   }
 }
 
