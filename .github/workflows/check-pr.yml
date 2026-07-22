@@ -29,6 +29,10 @@ jobs:
     name: web (domain mapping)
     uses: ./.github/workflows/check-web-domain-mapping.yml
 
+  check-edge-rules:
+    name: edge rules
+    uses: ./.github/workflows/check-edge-rules.yml
+
   check-web-spa:
     name: web (SPA)
     uses: ./.github/workflows/check-web-spa.yml
