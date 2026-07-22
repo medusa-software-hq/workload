@@ -88,7 +88,9 @@ class InMemoryFleetStore : FleetStore {
       }
 
   override suspend fun revokeWorker(workerId: WorkerId): Worker? =
-      workers.computeIfPresent(workerId) { _, worker -> worker.copy(status = WorkerStatus.REVOKED) }
+      workers.computeIfPresent(workerId) { _, worker ->
+        worker.copy(status = WorkerStatus.REVOKED, revokedAt = Instant.now())
+      }
 
   override suspend fun touchLastSeen(workerId: WorkerId) {
     workers.computeIfPresent(workerId) { _, worker -> worker.copy(lastSeenAt = Instant.now()) }

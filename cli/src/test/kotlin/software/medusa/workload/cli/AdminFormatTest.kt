@@ -54,9 +54,9 @@ class AdminFormatTest {
   }
 
   @Test
-  fun `worker table renders status, grants, and formatted dates`() {
+  fun `worker sections group by state, with activity from live runs`() {
     val table =
-        formatWorkerTable(
+        formatWorkerSections(
             listOf(
                 AdminWorker(
                     workerId = "w-1",
@@ -65,16 +65,138 @@ class AdminFormatTest {
                     grantedProfileIds = listOf("hand-test-1", "test-2"),
                     createdAt = "2026-07-17T14:08:44.5Z",
                 ),
-                AdminWorker(workerId = "w-2", status = "WORKER_STATUS_PENDING"),
+                AdminWorker(
+                    workerId = "w-2",
+                    status = "WORKER_STATUS_PENDING",
+                    sourceIp = "203.0.113.7",
+                    createdAt = "2026-07-18T00:00:00Z",
+                ),
+            ),
+            liveRuns =
+                listOf(AdminRun(workerId = "w-1", state = "RUN_STATE_RUNNING", profileId = "p-1")),
+            includeRevoked = false,
+        )
+    assertTrue(table.contains("Pending approval:"))
+    assertTrue(table.contains("Workers:"))
+    // Active worker: activity is the fresh-running count, grants joined, created formatted.
+    assertTrue(table.contains("jakub-mac"))
+    assertTrue(table.contains("● 1 running"))
+    assertTrue(table.contains("hand-test-1,test-2"))
+    assertTrue(table.contains("2026-07-17 14:08 UTC"))
+    // Pending worker shows its source IP.
+    assertTrue(table.contains("203.0.113.7"))
+  }
+
+  @Test
+  fun `revoked workers are hidden by default with a footnote, shown with the flag`() {
+    val workers =
+        listOf(
+            AdminWorker(workerId = "w-1", name = "active-one", status = "WORKER_STATUS_ACTIVE"),
+            AdminWorker(
+                workerId = "w-2",
+                name = "gone",
+                status = "WORKER_STATUS_REVOKED",
+                revokedAt = "2026-07-19T09:12:00Z",
+                createdAt = "2026-07-10T00:00:00Z",
+            ),
+        )
+    val hidden = formatWorkerSections(workers, emptyList(), includeRevoked = false)
+    assertTrue(!hidden.contains("Revoked workers:"))
+    assertTrue(hidden.contains("--include-revoked"))
+
+    val shown = formatWorkerSections(workers, emptyList(), includeRevoked = true)
+    assertTrue(shown.contains("Revoked workers:"))
+    assertTrue(shown.contains("gone") && shown.contains("2026-07-19 09:12 UTC"))
+  }
+
+  @Test
+  fun `profile table has an ACTIVE RUNS column fed by live runs`() {
+    val table =
+        formatProfileTable(
+            listOf(
+                AdminProfile("flow-worker", "Flow", 4, archived = false, createdAt = "2026-07-20")
+            ),
+            listOf(
+                AdminRun(
+                    workerName = "tux",
+                    state = "RUN_STATE_RUNNING",
+                    profileId = "flow-worker",
+                ),
+                AdminRun(
+                    workerName = "mac",
+                    state = "RUN_STATE_RUNNING",
+                    profileId = "flow-worker",
+                ),
+                // A lost run must NOT count toward "running".
+                AdminRun(workerName = "old", state = "RUN_STATE_LOST", profileId = "flow-worker"),
+            ),
+        )
+    assertTrue(table.lines()[0].contains("ACTIVE RUNS"))
+    assertTrue(table.contains("● 2 (tux, mac)"))
+  }
+
+  @Test
+  fun `run table shows profile@rev, state, and exit, with dashes for lost and no-exit`() {
+    val table =
+        formatRunTable(
+            listOf(
+                AdminRun(
+                    runId = "r-1",
+                    workerName = "tux",
+                    profileId = "flow-worker",
+                    revision = 4,
+                    kind = "RUN_KIND_RUN",
+                    state = "RUN_STATE_RUNNING",
+                    startedAt = "2026-07-22T10:00:00Z",
+                ),
+                AdminRun(
+                    runId = "r-2",
+                    workerName = "mac",
+                    profileId = "hand-test-1",
+                    revision = 5,
+                    kind = "RUN_KIND_EXEC",
+                    state = "RUN_STATE_SUCCEEDED",
+                    exitCode = 0,
+                    hasExitCode = true,
+                    startedAt = "2026-07-22T09:00:00Z",
+                    endedAt = "2026-07-22T09:04:01Z",
+                ),
+                AdminRun(
+                    runId = "r-3",
+                    workerName = "mac",
+                    profileId = "hand-test-1",
+                    revision = 5,
+                    kind = "RUN_KIND_RUN",
+                    state = "RUN_STATE_LOST",
+                    startedAt = "2026-07-19T00:00:00Z",
+                ),
             )
         )
-    val lines = table.lines()
-    assertTrue(lines[0].startsWith("WORKER ID"))
-    assertTrue(lines[1].contains("jakub-mac") && lines[1].contains("active"))
-    assertTrue(lines[1].contains("hand-test-1,test-2"))
-    assertTrue(lines[1].contains("2026-07-17 14:08 UTC"))
-    // Missing name / grants render as em dashes.
-    assertTrue(lines[2].contains("pending") && lines[2].contains("—"))
+    assertTrue(table.lines()[0].startsWith("RUN ID"))
+    assertTrue(
+        table.contains("flow-worker@4") && table.contains("run") && table.contains("running")
+    )
+    // succeeded exec run shows its exit code and a computed duration.
+    assertTrue(
+        table.contains("hand-test-1@5") && table.contains("succeeded") && table.contains("4m01s")
+    )
+    // lost run: no duration, no exit.
+    val lostLine = table.lines().single { it.startsWith("r-3") }
+    assertTrue(lostLine.contains("lost") && lostLine.trimEnd().endsWith("—"))
+  }
+
+  @Test
+  fun `formatRelative and formatRunDuration are human-friendly`() {
+    val now = java.time.Instant.parse("2026-07-22T12:00:00Z")
+    assertEquals("never", formatRelative("", now))
+    assertEquals("30s ago", formatRelative("2026-07-22T11:59:30Z", now))
+    assertEquals("5m ago", formatRelative("2026-07-22T11:55:00Z", now))
+    assertEquals("2h ago", formatRelative("2026-07-22T10:00:00Z", now))
+    assertEquals("3d ago", formatRelative("2026-07-19T12:00:00Z", now))
+
+    assertEquals("45s", formatRunDuration("2026-07-22T11:59:15Z", "", now))
+    assertEquals("4m01s", formatRunDuration("2026-07-22T09:00:00Z", "2026-07-22T09:04:01Z", now))
+    assertEquals("3h12m", formatRunDuration("2026-07-22T08:48:00Z", "", now))
   }
 
   @Test

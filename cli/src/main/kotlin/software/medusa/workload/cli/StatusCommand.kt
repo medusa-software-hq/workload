@@ -2,10 +2,9 @@ package software.medusa.workload.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.PrintMessage
-import com.github.ajalt.clikt.core.requireObject
 
 class StatusCommand : CliktCommand(name = "status") {
-  private val env by requireObject<Environment>()
+  private val env by requireEnvironment()
 
   override fun run() {
     val config =

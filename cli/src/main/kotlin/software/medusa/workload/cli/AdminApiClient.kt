@@ -39,6 +39,30 @@ data class AdminWorker(
     val approvedBy: String = "",
     val lastSeenAt: String = "",
     val grantedProfileIds: List<String> = emptyList(),
+    val sourceIp: String = "",
+    val revokedAt: String = "",
+)
+
+/**
+ * A run as returned by FleetService.ListRuns (proto3 JSON — camelCase). `state`/`kind` arrive as
+ * their proto enum name (e.g. RUN_STATE_RUNNING); [hasExitCode] disambiguates a real exit 0 from
+ * the proto3 default 0 of a still-running run.
+ */
+@Serializable
+data class AdminRun(
+    val runId: String = "",
+    val workerId: String = "",
+    val workerName: String = "",
+    val profileId: String = "",
+    val revision: Int = 0,
+    val kind: String = "",
+    val state: String = "",
+    val exitCode: Int = 0,
+    val hasExitCode: Boolean = false,
+    val startedAt: String = "",
+    val lastHeartbeatAt: String = "",
+    val endedAt: String = "",
+    val imageDigest: String = "",
 )
 
 /** A full profile revision — the read side that the create/update spec mirrors. */
@@ -62,6 +86,15 @@ data class AdminProfileRevision(
 internal data class ListProfilesResponse(val profiles: List<AdminProfile> = emptyList())
 
 @Serializable internal data class ListWorkersResponse(val workers: List<AdminWorker> = emptyList())
+
+@Serializable internal data class ListRunsResponse(val runs: List<AdminRun> = emptyList())
+
+@Serializable
+private data class ListRunsRequest(
+    val profileId: String,
+    val workerId: String,
+    val liveOnly: Boolean,
+)
 
 @Serializable internal data class WorkerResponse(val worker: AdminWorker = AdminWorker())
 
@@ -227,6 +260,26 @@ class AdminApiClient(
 
   fun listWorkers(): List<AdminWorker> =
       apiJson.decodeFromString<ListWorkersResponse>(post("ListWorkers", "{}")).workers
+
+  /**
+   * Lists runs (M6-B2). [profileId]/[workerId] narrow the result (null = no filter); [liveOnly]
+   * returns only runs that haven't ended (effective state RUNNING or LOST). Newest first.
+   */
+  fun listRuns(
+      profileId: String? = null,
+      workerId: String? = null,
+      liveOnly: Boolean = false,
+  ): List<AdminRun> =
+      apiJson
+          .decodeFromString<ListRunsResponse>(
+              post(
+                  "ListRuns",
+                  apiJson.encodeToString(
+                      ListRunsRequest(profileId.orEmpty(), workerId.orEmpty(), liveOnly)
+                  ),
+              )
+          )
+          .runs
 
   fun approveWorker(workerId: String): AdminWorker = worker("ApproveWorker", workerId)
 

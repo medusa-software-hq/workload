@@ -4,7 +4,6 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.core.ProgramResult
-import com.github.ajalt.clikt.core.requireObject
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.arguments.multiple
 import com.github.ajalt.clikt.parameters.options.option
@@ -45,7 +44,7 @@ class ExecCommand : CliktCommand(name = "exec") {
       "Run a command with the profile's environment injected. Put -- before the command if it " +
           "takes its own flags, e.g. workload worker exec -p my-profile-1 -- gsutil ls gs://bucket"
 
-  private val env by requireObject<Environment>()
+  private val env by requireEnvironment()
   private val profileId by option("--profile", "-p", help = "The profile to run under").required()
 
   private val command by argument(name = "command").multiple(required = true)

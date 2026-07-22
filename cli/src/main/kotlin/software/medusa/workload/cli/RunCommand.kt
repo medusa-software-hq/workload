@@ -4,7 +4,6 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.core.ProgramResult
-import com.github.ajalt.clikt.core.requireObject
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import java.io.IOException
@@ -241,7 +240,7 @@ class RunCommand : CliktCommand(name = "run") {
       "Run a profile's container image with its environment injected. Streams the container's " +
           "output and exits with the container's exit code."
 
-  private val env by requireObject<Environment>()
+  private val env by requireEnvironment()
   private val profileId by option("--profile", "-p", help = "The profile to run").required()
 
   override fun run() {

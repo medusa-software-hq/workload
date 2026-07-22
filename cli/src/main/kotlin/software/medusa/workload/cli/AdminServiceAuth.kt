@@ -12,13 +12,15 @@ import java.io.IOException
  * `GooglePrincipalVerifier` accepts as a service principal (audience = API URL, issuer Google,
  * email ∈ the allowlist). No browser, no cached refresh token.
  *
- * Returns null — rather than throwing — when this environment has **no** credential that can mint
- * an ID token, so `--auth=auto` can quietly fall back to the human sign-in. That is the common dev
- * case: `gcloud auth application-default login` yields user credentials, which are not an
- * [IdTokenProvider] (only service accounts, impersonated SAs, and WIF external accounts are), so
- * auto correctly prefers the browser flow there. A present-but-broken credential (e.g. missing
- * token-creator IAM) still surfaces its failure — lazily, when the token is first minted on a real
- * call.
+ * Returns null — rather than throwing — when this environment has **no** ADC at all, or an ADC that
+ * cannot mint an ID token, so the caller can report a clean "no service credentials" error under
+ * `sa`. Note that `gcloud auth application-default login` user credentials **can** mint ID tokens
+ * in this `google-auth` version (they *are* an [IdTokenProvider]) — so a developer's ADC would
+ * produce a token whose identity is their human account, which the admin plane's service-account
+ * allowlist rejects. That is exactly why auth is chosen explicitly ([AdminAuthMethod]) and defaults
+ * to human sign-in, rather than auto-detected from whatever ADC happens to be present. A
+ * present-but-broken credential (e.g. missing token-creator IAM) still surfaces its failure lazily,
+ * when the token is first minted on a real call.
  *
  * [loadCredentials] is injectable so the resolution logic is unit-testable without real ADC.
  */
