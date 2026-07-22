@@ -1,5 +1,8 @@
 package software.medusa.workload.cli
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.URI
@@ -283,5 +286,66 @@ class RefreshingTokenCacheTest {
     cache.forceExpire()
     cache.current()
     assertEquals(2, calls.get())
+  }
+
+  @Test
+  fun `refreshCount advances once per re-claim and stays flat on a cache hit`() {
+    val now = Instant.parse("2026-07-18T00:00:00Z")
+    val clock = Clock.fixed(now, ZoneOffset.UTC)
+    // Freshly-minted tokens live an hour — well outside the skew — so only cold claims re-claim.
+    val cache =
+        RefreshingTokenCache(
+            { token(expiresAt = now.plusSeconds(3600)) },
+            clock = clock,
+        )
+    assertEquals(0, cache.refreshCount, "no claim yet")
+    cache.current()
+    assertEquals(1, cache.refreshCount, "cold claim counts")
+    cache.current() // still fresh — a cache hit, not a re-claim
+    assertEquals(1, cache.refreshCount, "a cache hit must not advance the counter")
+    cache.forceExpire()
+    cache.current()
+    assertEquals(2, cache.refreshCount, "the post-expiry re-claim counts")
+  }
+
+  @Test
+  fun `each re-claim emits a structured beacon refresh line with reason and running count`() {
+    val logger =
+        org.slf4j.LoggerFactory.getLogger(RefreshingTokenCache::class.java)
+            as ch.qos.logback.classic.Logger
+    val previousLevel = logger.level
+    val appender = ListAppender<ILoggingEvent>().also { it.start() }
+    logger.level = Level.INFO
+    logger.addAppender(appender)
+    try {
+      val now = Instant.parse("2026-07-18T00:00:00Z")
+      val clock = Clock.fixed(now, ZoneOffset.UTC)
+      // First token expires 60s out, inside the 120s skew, so the second read is a genuine renewal.
+      val cache =
+          RefreshingTokenCache(
+              {
+                token(sa = "target@proj.iam.gserviceaccount.com", expiresAt = now.plusSeconds(60))
+              },
+              refreshSkew = Duration.ofMinutes(2),
+              clock = clock,
+          )
+      cache.current() // cold
+      cache.current() // renewal
+
+      val lines =
+          appender.list
+              .map { it.formattedMessage }
+              .filter { it.startsWith("event=beacon.token.refresh") }
+      assertEquals(2, lines.size, "expected one line per (re-)claim, got: $lines")
+      assertTrue("reason=cold" in lines[0] && "count=1" in lines[0], lines[0])
+      assertTrue("reason=renewal" in lines[1] && "count=2" in lines[1], lines[1])
+      assertTrue(
+          lines.all { "sa=target@proj.iam.gserviceaccount.com" in it && "expires_in=" in it },
+          "every line carries the identity and freshness: $lines",
+      )
+    } finally {
+      logger.detachAppender(appender)
+      logger.level = previousLevel
+    }
   }
 }
