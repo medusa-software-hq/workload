@@ -61,7 +61,26 @@ data class WorkerIdTokenClaimResponse(
     val audience: String,
 )
 
+/**
+ * `{runId, heartbeatIntervalSeconds}` — the broker-minted run id and the cadence to heartbeat on.
+ */
+@Serializable
+data class CreateRunResponse(
+    val runId: String,
+    val heartbeatIntervalSeconds: Long,
+)
+
 @Serializable private data class RegisterWorkerRequest(val name: String, val hostname: String?)
+
+@Serializable
+private data class CreateRunRequest(
+    val profileId: String?,
+    val revision: Int?,
+    val kind: String,
+    val imageDigest: String?,
+)
+
+@Serializable private data class EndRunRequest(val exitCode: Int?)
 
 @Serializable private data class TokenClaimRequest(val profileId: String)
 
@@ -239,6 +258,81 @@ fun claimWorkload(
     throw WorkerApiException(response.statusCode(), errorReason(response.body()))
   }
   return json.decodeFromString(response.body())
+}
+
+/**
+ * Calls `POST <brokerBaseUrl>/worker/v2/runs`: records the start of a run (M6-B1), returning its id
+ * and the server-controlled heartbeat cadence. Called after a successful claim, right before the
+ * workload launches.
+ */
+fun createRun(
+    brokerBaseUrl: String,
+    workerId: String,
+    workerSecret: String,
+    profileId: String,
+    revision: Int,
+    kind: String,
+    imageDigest: String?,
+): CreateRunResponse {
+  val request =
+      HttpRequest.newBuilder()
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/runs"))
+          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Content-Type", "application/json")
+          .timeout(Duration.ofSeconds(10))
+          .POST(
+              HttpRequest.BodyPublishers.ofString(
+                  json.encodeToString(CreateRunRequest(profileId, revision, kind, imageDigest))
+              )
+          )
+          .build()
+
+  val response = send(request)
+  if (response.statusCode() != 200) {
+    throw WorkerApiException(response.statusCode(), errorReason(response.body()))
+  }
+  return json.decodeFromString(response.body())
+}
+
+/** Calls `POST <brokerBaseUrl>/worker/v2/runs/{runId}/heartbeat` — keeps a run live (204). */
+fun heartbeatRun(brokerBaseUrl: String, workerId: String, workerSecret: String, runId: String) {
+  val request =
+      HttpRequest.newBuilder()
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/runs/$runId/heartbeat"))
+          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .timeout(Duration.ofSeconds(10))
+          .POST(HttpRequest.BodyPublishers.noBody())
+          .build()
+
+  val response = send(request)
+  if (response.statusCode() != 204) {
+    throw WorkerApiException(response.statusCode(), errorReason(response.body()))
+  }
+}
+
+/**
+ * Calls `POST <brokerBaseUrl>/worker/v2/runs/{runId}/end` with the exit code — the terminal report.
+ */
+fun endRun(
+    brokerBaseUrl: String,
+    workerId: String,
+    workerSecret: String,
+    runId: String,
+    exitCode: Int?,
+) {
+  val request =
+      HttpRequest.newBuilder()
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/runs/$runId/end"))
+          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Content-Type", "application/json")
+          .timeout(Duration.ofSeconds(10))
+          .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(EndRunRequest(exitCode))))
+          .build()
+
+  val response = send(request)
+  if (response.statusCode() != 204) {
+    throw WorkerApiException(response.statusCode(), errorReason(response.body()))
+  }
 }
 
 private fun errorReason(body: String): String =

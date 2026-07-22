@@ -101,6 +101,7 @@ fun main() {
           workerClaimService = workerClaimService,
           selfStatusService = SelfStatusService(fleetStore),
           v2RegistrationService = RegistrationServiceV2(fleetStore),
+          workerRunService = WorkerRunService(fleetStore),
       )
       .start()
       .join()

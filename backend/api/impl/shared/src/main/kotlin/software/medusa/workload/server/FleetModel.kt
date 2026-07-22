@@ -191,3 +191,67 @@ data class NewEnrollmentToken(
     val expiresAt: Instant,
     val requireApproval: Boolean,
 )
+
+// Runs (M6-B1) — the "who is running what" noun. Presence is derived from live runs, never stored.
+
+@JvmInline
+value class RunId(
+    val value: UUID,
+)
+
+/**
+ * What kind of workload a run represents. Extensible: M7 adds `AGENT` (a long-lived agent session,
+ * with no profile/revision), which is why [Run.profileId]/[Run.revision] are nullable.
+ */
+enum class RunKind {
+  RUN,
+  EXEC,
+}
+
+/**
+ * A run's lifecycle state. [RUNNING], [SUCCEEDED], and [FAILED] are the only values ever *stored*;
+ * [LOST] is derived at read time — a still-`RUNNING` run whose last heartbeat has aged past the
+ * grace window (see [deriveRunState]). Nothing false is ever written, so a late heartbeat un-loses
+ * a run for free, exactly like [applyPendingExpiry] for pending workers.
+ */
+enum class RunState {
+  RUNNING,
+  SUCCEEDED,
+  FAILED,
+  LOST,
+}
+
+data class Run(
+    val runId: RunId,
+    val workerId: WorkerId,
+    // Nullable to accommodate M7's `AGENT` kind; always set for RUN/EXEC.
+    val profileId: ProfileId?,
+    val revision: Int?,
+    val kind: RunKind,
+    // The *effective* state as returned by the store: read paths apply [deriveRunState], so this
+    // may
+    // be [RunState.LOST] even though only RUNNING/SUCCEEDED/FAILED are persisted.
+    val state: RunState,
+    val exitCode: Int?,
+    val startedAt: Instant,
+    val lastHeartbeatAt: Instant,
+    val endedAt: Instant?,
+    val imageDigest: String?,
+)
+
+data class NewRun(
+    val workerId: WorkerId,
+    val profileId: ProfileId?,
+    val revision: Int?,
+    val kind: RunKind,
+    val imageDigest: String? = null,
+)
+
+/** Filters for [FleetStore.listRuns]; every field is an independent, ANDed narrowing. */
+data class RunFilter(
+    val workerId: WorkerId? = null,
+    val profileId: ProfileId? = null,
+    // Only runs that haven't ended yet (effective state RUNNING or LOST). The presence queries and
+    // the console's live view build on this; the default runs list passes false to include history.
+    val liveOnly: Boolean = false,
+)

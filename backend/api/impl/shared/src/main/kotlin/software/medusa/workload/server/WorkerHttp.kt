@@ -37,6 +37,10 @@ internal data class AuditLogEntry(
     val audience: String? = null,
     // The surrogate id of an enrollment token (not the token or its hash — safe to log).
     val enrollmentTokenId: String? = null,
+    // The surrogate id of a run (M6-B1) — a broker-minted UUID, safe to log.
+    val runId: String? = null,
+    val kind: String? = null,
+    val exitCode: Int? = null,
     val reason: String? = null,
 )
 

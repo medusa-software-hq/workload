@@ -10,6 +10,7 @@ class InMemoryFleetStore : FleetStore {
   private val revisions = ConcurrentHashMap<ProfileId, MutableList<ProfileRevision>>()
   private val grants = ConcurrentHashMap<Pair<WorkerId, ProfileId>, Grant>()
   private val enrollmentTokens = ConcurrentHashMap<EnrollmentTokenId, EnrollmentToken>()
+  private val runs = ConcurrentHashMap<RunId, Run>()
 
   override suspend fun createWorker(worker: NewWorker): Worker {
     val created =
@@ -278,4 +279,66 @@ class InMemoryFleetStore : FleetStore {
     }
     return burned
   }
+
+  override suspend fun createRun(run: NewRun, now: Instant): Run {
+    val created =
+        Run(
+            runId = RunId(UUID.randomUUID()),
+            workerId = run.workerId,
+            profileId = run.profileId,
+            revision = run.revision,
+            kind = run.kind,
+            state = RunState.RUNNING,
+            exitCode = null,
+            startedAt = now,
+            lastHeartbeatAt = now,
+            endedAt = null,
+            imageDigest = run.imageDigest,
+        )
+    runs[created.runId] = created
+    return created
+  }
+
+  override suspend fun heartbeatRun(runId: RunId, now: Instant): Run? {
+    // computeIfPresent applies the remap atomically per key; a heartbeat only lands on a run that
+    // is
+    // still stored `RUNNING` (never ended), so a terminal run is left untouched and reported
+    // absent.
+    var updated: Run? = null
+    runs.computeIfPresent(runId) { _, run ->
+      if (run.endedAt == null && run.state == RunState.RUNNING) {
+        run.copy(lastHeartbeatAt = now).also { updated = it }
+      } else {
+        run
+      }
+    }
+    return updated?.let { applyRunStateDerivation(it, now) }
+  }
+
+  override suspend fun endRun(runId: RunId, exitCode: Int?, now: Instant): Run? {
+    var ended: Run? = null
+    runs.computeIfPresent(runId) { _, run ->
+      if (run.endedAt == null && run.state == RunState.RUNNING) {
+        run.copy(state = terminalStateFor(exitCode), exitCode = exitCode, endedAt = now).also {
+          ended = it
+        }
+      } else {
+        run
+      }
+    }
+    return ended
+  }
+
+  override suspend fun getRun(runId: RunId, now: Instant): Run? =
+      runs[runId]?.let { applyRunStateDerivation(it, now) }
+
+  override suspend fun listRuns(filter: RunFilter, now: Instant): List<Run> =
+      runs.values
+          .asSequence()
+          .filter { filter.workerId == null || it.workerId == filter.workerId }
+          .filter { filter.profileId == null || it.profileId == filter.profileId }
+          .filter { !filter.liveOnly || it.endedAt == null }
+          .map { applyRunStateDerivation(it, now) }
+          .sortedByDescending { it.startedAt }
+          .toList()
 }

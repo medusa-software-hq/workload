@@ -81,6 +81,7 @@ fun buildServer(
     workerClaimService: HttpService? = null,
     selfStatusService: HttpService? = null,
     v2RegistrationService: HttpService? = null,
+    workerRunService: HttpService? = null,
 ): Server {
   val cors =
       CorsService.builderForOriginRegex(originRegex)
@@ -178,6 +179,25 @@ fun buildServer(
           route()
               .methods(HttpMethod.GET)
               .path("/worker/v2/registrations/self")
+              .build(it.decorate(v2WorkerCredentialDrop))
+        }
+        // The run lifecycle (M6-B1): create, heartbeat, end. Cheap DB writes (unlike the throttled
+        // minting endpoints), but worker-authenticated all the same, so they ride the same
+        // credential-drop decorator that keeps the plane unprobeable. One service instance backs
+        // all
+        // three routes; it dispatches on the {runId} path param and the /heartbeat|/end suffix.
+        workerRunService?.let {
+          route()
+              .methods(HttpMethod.POST)
+              .path("/worker/v2/runs")
+              .build(it.decorate(v2WorkerCredentialDrop))
+          route()
+              .methods(HttpMethod.POST)
+              .path("/worker/v2/runs/{runId}/heartbeat")
+              .build(it.decorate(v2WorkerCredentialDrop))
+          route()
+              .methods(HttpMethod.POST)
+              .path("/worker/v2/runs/{runId}/end")
               .build(it.decorate(v2WorkerCredentialDrop))
         }
 

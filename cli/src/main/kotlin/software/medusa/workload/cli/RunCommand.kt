@@ -385,29 +385,45 @@ class RunCommand : CliktCommand(name = "run") {
     val metadataAddress = "${primary.hostAddress}:${emulator.port}"
     echo("Metadata:     http://$metadataAddress (tokens refresh automatically)", err = true)
 
+    // Record the run + start heartbeating (M6-B1). Best-effort: a broker hiccup here never stops
+    // the
+    // container — reporter is null / its calls warn, and the workload runs regardless.
+    val reporter =
+        RunReporter.start(
+            brokerBaseUrl = env.apiBaseUrl,
+            workerId = config.workerId,
+            workerSecret = config.workerSecret,
+            profileId = claim.profileId,
+            revision = claim.revision,
+            kind = "run",
+            imageDigest = claim.image?.digest,
+            warn = { echo(it, err = true) },
+        )
+
     return try {
       runBlocking {
-        runContainerToCompletion(
-            connector = connector,
-            image = pinnedRef,
-            env =
-                buildMetadataContainerEnv(
-                    claim.envVars + secretValues,
-                    metadataPointerEnv(metadataAddress),
-                ),
-            labels = containerLabels(claim, config.workerId),
-            extraHosts = listOf("metadata.google.internal:${primary.hostAddress}"),
-            onCreated = { id -> hook = stopOnShutdownHook(connector, id, emulator) },
-            onStdout = {
-              System.out.write(it)
-              System.out.flush()
-            },
-            onStderr = {
-              System.err.write(it)
-              System.err.flush()
-            },
-        )
-      }
+            runContainerToCompletion(
+                connector = connector,
+                image = pinnedRef,
+                env =
+                    buildMetadataContainerEnv(
+                        claim.envVars + secretValues,
+                        metadataPointerEnv(metadataAddress),
+                    ),
+                labels = containerLabels(claim, config.workerId),
+                extraHosts = listOf("metadata.google.internal:${primary.hostAddress}"),
+                onCreated = { id -> hook = stopOnShutdownHook(connector, id, emulator) },
+                onStdout = {
+                  System.out.write(it)
+                  System.out.flush()
+                },
+                onStderr = {
+                  System.err.write(it)
+                  System.err.flush()
+                },
+            )
+          }
+          .also { reporter?.reportEnd(it) }
     } catch (e: DockerConnectorException) {
       throw PrintMessage(
           "Failed to run the container: ${e.message}",
@@ -415,6 +431,9 @@ class RunCommand : CliktCommand(name = "run") {
           printError = true,
       )
     } finally {
+      // Reports a failure-end if the container threw before reporting one, and unregisters the
+      // hook.
+      reporter?.close()
       hook?.let { runCatching { Runtime.getRuntime().removeShutdownHook(it) } }
       runCatching { emulator.close() }
     }
