@@ -211,11 +211,13 @@ UPDATE runs SET state = ?, exit_code = ?, ended_at = ?
 WHERE run_id = ? AND ended_at IS NULL AND state = 'RUNNING'
 RETURNING *;
 
--- Optional filters via nullable params (casts keep Postgres from having to guess the type in the
--- IS NULL branch); liveOnly = TRUE narrows to runs that haven't ended. Newest first.
+-- Optional filters via nullable params. Every occurrence is wrapped in a CAST: it fixes the type
+-- for Postgres in the IS NULL branch AND keeps SQLDelight from rewriting `col = :param` into the
+-- Postgres-invalid `col IS $n` that its nullable-param handling would otherwise emit. liveOnly =
+-- TRUE narrows to runs that haven't ended. Newest first.
 listRuns:
 SELECT * FROM runs
-WHERE (CAST(:workerId AS uuid) IS NULL OR worker_id = :workerId)
-  AND (CAST(:profileId AS text) IS NULL OR profile_id = :profileId)
+WHERE (CAST(:workerId AS uuid) IS NULL OR worker_id = CAST(:workerId AS uuid))
+  AND (CAST(:profileId AS text) IS NULL OR profile_id = CAST(:profileId AS text))
   AND (:liveOnly = FALSE OR ended_at IS NULL)
 ORDER BY started_at DESC;
