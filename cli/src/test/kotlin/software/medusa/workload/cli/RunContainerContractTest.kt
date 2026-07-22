@@ -96,22 +96,22 @@ class RunContainerContractTest {
   }
 
   @Test
-  fun `profile env and the brokered token reach the container`() = withConnector { c ->
-    val env = buildContainerEnv(mapOf("MODE" to "batch", "API_KEY" to "resolved-secret"), "tok-123")
+  fun `profile env and the metadata pointers reach the container`() = withConnector { c ->
+    val env =
+        buildMetadataContainerEnv(
+            mapOf("MODE" to "batch", "API_KEY" to "resolved-secret"),
+            metadataPointerEnv("169.254.169.254:80"),
+        )
     val (exit, out, _) =
         run(
             c,
-            listOf(
-                "sh",
-                "-c",
-                "echo \"MODE=\$MODE key=\$API_KEY tok=\$$googleOauthAccessTokenEnvVar\"",
-            ),
+            listOf("sh", "-c", "echo \"MODE=\$MODE key=\$API_KEY md=\$GCE_METADATA_HOST\""),
             env = env,
         )
     assertEquals(0, exit)
     assertTrue("MODE=batch" in out, out)
     assertTrue("key=resolved-secret" in out, out)
-    assertTrue("tok=tok-123" in out, out)
+    assertTrue("md=169.254.169.254:80" in out, out)
   }
 
   @Test
@@ -119,7 +119,11 @@ class RunContainerContractTest {
     // The AC: `ps` on the host must never show the values. We pass a distinctive secret through the
     // create body, then scan every process's command line on this host while it runs.
     val marker = "supersecret-$runToken"
-    val env = buildContainerEnv(mapOf("API_KEY" to marker), marker)
+    val env =
+        buildMetadataContainerEnv(
+            mapOf("API_KEY" to marker),
+            metadataPointerEnv("169.254.169.254:80"),
+        )
     val (exit, _, _) = run(c, listOf("sh", "-c", "sleep 1; exit 0"), env = env)
     assertEquals(0, exit)
 

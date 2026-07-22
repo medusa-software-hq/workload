@@ -4,7 +4,6 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.core.ProgramResult
-import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import java.io.IOException
@@ -111,23 +110,6 @@ internal fun buildMetadataContainerEnv(
     profileEnv: Map<String, String>,
     pointerEnv: Map<String, String>,
 ): List<String> = (profileEnv + pointerEnv).map { (name, value) -> "$name=$value" }
-
-/**
- * The container's environment for the legacy `--static-token` path: the profile vars + the brokered
- * token injected under both names google-auth libraries and gcloud look for. One static 15-minute
- * token in the env, no refresh — the pre-Beacon behavior, kept for one release for debugging.
- * Deliberately does **not** inherit this host's environment.
- */
-internal fun buildContainerEnv(
-    profileEnv: Map<String, String>,
-    accessToken: String,
-): List<String> =
-    (profileEnv +
-            mapOf(
-                googleOauthAccessTokenEnvVar to accessToken,
-                cloudsdkAuthAccessTokenEnvVar to accessToken,
-            ))
-        .map { (name, value) -> "$name=$value" }
 
 /**
  * Whether a failed `docker pull`'s output reads like a registry auth problem, as opposed to (say) a
@@ -260,15 +242,6 @@ class RunCommand : CliktCommand(name = "run") {
 
   private val profileId by option("--profile", "-p", help = "The profile to run").required()
 
-  private val staticToken by
-      option(
-              "--static-token",
-              help =
-                  "Deprecated: inject one static 15-minute token into the container env instead of " +
-                      "running the refreshing metadata server. Removed next release.",
-          )
-          .flag()
-
   override fun run() {
     val config = loadConfigOrFail()
 
@@ -328,7 +301,7 @@ class RunCommand : CliktCommand(name = "run") {
 
       pullImage(connector, pinnedRef, claim)
 
-      val exitCode = runContainer(connector, config, claim, pinnedRef, secretValues)
+      val exitCode = runContainerWithMetadata(connector, config, claim, pinnedRef, secretValues)
       throw ProgramResult(exitCode)
     }
   }
@@ -366,19 +339,6 @@ class RunCommand : CliktCommand(name = "run") {
       )
     }
   }
-
-  private fun runContainer(
-      connector: DockerConnector,
-      config: WorkloadConfig,
-      claim: WorkerClaimResponse,
-      pinnedRef: String,
-      secretValues: Map<String, String>,
-  ): Int =
-      if (staticToken) {
-        runContainerStaticToken(connector, claim, pinnedRef, config.workerId, secretValues)
-      } else {
-        runContainerWithMetadata(connector, config, claim, pinnedRef, secretValues)
-      }
 
   private fun containerLabels(claim: WorkerClaimResponse, workerId: String): Map<String, String> =
       mapOf(
@@ -458,72 +418,13 @@ class RunCommand : CliktCommand(name = "run") {
     }
   }
 
-  /** Legacy `--static-token` path: one static 15-minute token in the container env, no refresh. */
-  private fun runContainerStaticToken(
-      connector: DockerConnector,
-      claim: WorkerClaimResponse,
-      pinnedRef: String,
-      workerId: String,
-      secretValues: Map<String, String>,
-  ): Int {
-    echo(
-        "Warning: --static-token injects one 15-minute token and does not refresh; a longer job " +
-            "will lose GCP access mid-run. This flag is deprecated and goes away next release.",
-        err = true,
-    )
-    var hook: Thread? = null
-    return try {
-      runBlocking {
-        runContainerToCompletion(
-            connector = connector,
-            image = pinnedRef,
-            env = buildContainerEnv(claim.envVars + secretValues, claim.accessToken),
-            labels = containerLabels(claim, workerId),
-            onCreated = { id -> hook = stopOnShutdownHook(connector, id) },
-            onStdout = {
-              System.out.write(it)
-              System.out.flush()
-            },
-            onStderr = {
-              System.err.write(it)
-              System.err.flush()
-            },
-        )
-      }
-    } catch (e: DockerConnectorException) {
-      throw PrintMessage(
-          "Failed to run the container: ${e.message}",
-          statusCode = 1,
-          printError = true,
-      )
-    } finally {
-      hook?.let { runCatching { Runtime.getRuntime().removeShutdownHook(it) } }
-    }
-  }
-
   /**
    * Best-effort teardown on Ctrl-C/SIGTERM: stop the container (SIGTERM, then SIGKILL after the
-   * grace) and remove it. The JVM exits through this hook rather than unwinding, so the `finally`
-   * in [runContainerToCompletion] may never run — this is what actually cleans up on Ctrl-C. It's
-   * the accepted teardown boundary: a `kill -9` of this JVM leaves the container behind.
-   */
-  private fun stopOnShutdownHook(connector: DockerConnector, containerId: String): Thread {
-    val hook = Thread {
-      runCatching {
-        runBlocking {
-          connector.containers.stop(containerId, containerStopGrace)
-          connector.containers.remove(containerId, force = true)
-        }
-      }
-    }
-    Runtime.getRuntime().addShutdownHook(hook)
-    return hook
-  }
-
-  /**
-   * Beacon-path shutdown hook: the container teardown above, plus closing the metadata emulator.
-   * Same accepted boundary — a `kill -9` of this JVM can still leave a container behind, which
-   * `workload ps --reap` clears; the emulator dies with the process regardless.
+   * grace) and remove it, plus close the metadata emulator. The JVM exits through this hook rather
+   * than unwinding, so the `finally` in [runContainerToCompletion] may never run — this is what
+   * actually cleans up on Ctrl-C. Accepted teardown boundary: a `kill -9` of this JVM can still
+   * leave a container behind, which `workload ps --reap` clears; the emulator dies with the process
+   * regardless.
    */
   private fun stopOnShutdownHook(
       connector: DockerConnector,
