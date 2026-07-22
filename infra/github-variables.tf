@@ -24,10 +24,15 @@ locals {
     GCP_API_RUN_SERVICE_NAME = module.common.gcp_api_run_service_name
     GCP_WEB_RUN_SERVICE_NAME = module.common.gcp_web_run_service_name
     GCP_CICD_SA_EMAIL        = google_service_account.cicd_sa.email
-    GCP_AR_REPO_HOSTNAME     = split("/", google_artifact_registry_repository.primary.registry_uri)[0]
-    GCP_AR_REPO_ENDPOINT     = local.gcp_ar_repo_endpoint
-    GOOGLE_CLIENT_ID         = module.common.google_client_id
-    GOOGLE_ALLOWED_DOMAIN    = module.common.organization_domain
+    # The dedicated admin-plane principal the staging smoke impersonates via WIF to make a real
+    # s2s admin call (M5-05). Separate from GCP_CICD_SA_EMAIL: the CI/CD identity is never the
+    # identity under test. Env-scoped only (no legacy repo-level twin) — its sole consumer, the
+    # smoke job, already declares `environment:`.
+    GCP_CI_ADMIN_SA_EMAIL = google_service_account.ci_admin.email
+    GCP_AR_REPO_HOSTNAME  = split("/", google_artifact_registry_repository.primary.registry_uri)[0]
+    GCP_AR_REPO_ENDPOINT  = local.gcp_ar_repo_endpoint
+    GOOGLE_CLIENT_ID      = module.common.google_client_id
+    GOOGLE_ALLOWED_DOMAIN = module.common.organization_domain
   }
 }
 
