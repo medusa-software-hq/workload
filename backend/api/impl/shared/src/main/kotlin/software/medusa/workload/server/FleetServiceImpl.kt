@@ -31,9 +31,6 @@ import software.medusa.workload.v1.ListRunsResponse
 import software.medusa.workload.v1.ListWorkersRequest
 import software.medusa.workload.v1.ListWorkersResponse
 import software.medusa.workload.v1.Profile as ProfileProto
-import software.medusa.workload.v1.Run as RunProto
-import software.medusa.workload.v1.RunKind as RunKindProto
-import software.medusa.workload.v1.RunState as RunStateProto
 import software.medusa.workload.v1.ProfileRevision as ProfileRevisionProto
 import software.medusa.workload.v1.RejectWorkerRequest
 import software.medusa.workload.v1.RejectWorkerResponse
@@ -45,6 +42,9 @@ import software.medusa.workload.v1.RevokeProfileGrantRequest
 import software.medusa.workload.v1.RevokeProfileGrantResponse
 import software.medusa.workload.v1.RevokeWorkerRequest
 import software.medusa.workload.v1.RevokeWorkerResponse
+import software.medusa.workload.v1.Run as RunProto
+import software.medusa.workload.v1.RunKind as RunKindProto
+import software.medusa.workload.v1.RunState as RunStateProto
 import software.medusa.workload.v1.UpdateProfileRequest
 import software.medusa.workload.v1.UpdateProfileResponse
 import software.medusa.workload.v1.VerificationStatus as VerificationStatusProto

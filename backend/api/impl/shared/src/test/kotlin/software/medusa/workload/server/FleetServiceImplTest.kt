@@ -22,10 +22,10 @@ import software.medusa.workload.v1.ListEnrollmentTokensRequest
 import software.medusa.workload.v1.ListProfilesRequest
 import software.medusa.workload.v1.ListRunsRequest
 import software.medusa.workload.v1.ListWorkersRequest
-import software.medusa.workload.v1.RunState as RunStateProto
 import software.medusa.workload.v1.RevokeEnrollmentTokenRequest
 import software.medusa.workload.v1.RevokeProfileGrantRequest
 import software.medusa.workload.v1.RevokeWorkerRequest
+import software.medusa.workload.v1.RunState as RunStateProto
 import software.medusa.workload.v1.VerificationStatus
 import software.medusa.workload.v1.VerifyProfileRequest
 import software.medusa.workload.v1.WorkerStatus
@@ -751,8 +751,7 @@ class FleetServiceImplTest {
     val byWorker =
         stub.listRuns(ListRunsRequest.newBuilder().setWorkerId(tux.value.toString()).build())
     assertEquals(2, byWorker.runsList.size)
-    val byProfile =
-        stub.listRuns(ListRunsRequest.newBuilder().setProfileId("hand-test-1").build())
+    val byProfile = stub.listRuns(ListRunsRequest.newBuilder().setProfileId("hand-test-1").build())
     assertEquals(1, byProfile.runsList.size)
     val live = stub.listRuns(ListRunsRequest.newBuilder().setLiveOnly(true).build())
     assertEquals(2, live.runsList.size)
