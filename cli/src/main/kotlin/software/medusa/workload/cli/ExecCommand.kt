@@ -6,13 +6,15 @@ import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.arguments.multiple
-import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.TimeUnit
 
+// The two env var names google-auth libraries and gcloud read an OAuth access token from. The
+// Beacon path deliberately never sets them (the token lives in the metadata emulator, not the
+// child's env); kept as the canonical names the token-absence tests assert against.
 internal const val googleOauthAccessTokenEnvVar = "GOOGLE_OAUTH_ACCESS_TOKEN"
 internal const val cloudsdkAuthAccessTokenEnvVar = "CLOUDSDK_AUTH_ACCESS_TOKEN"
 private const val childTerminationGraceSeconds = 5L
@@ -37,40 +39,12 @@ internal fun buildChildEnvWithMetadata(
     pointerEnv: Map<String, String>,
 ): ChildEnv = childEnv(inherited, profileEnv, pointerEnv)
 
-/**
- * Child env for the legacy `--static-token` path: the brokered token under both
- * `GOOGLE_OAUTH_ACCESS_TOKEN` and `CLOUDSDK_AUTH_ACCESS_TOKEN`. One static 15-minute token, no
- * refresh — kept for one release for debugging.
- */
-internal fun buildChildEnv(
-    inherited: Map<String, String>,
-    profileEnv: Map<String, String>,
-    accessToken: String,
-): ChildEnv =
-    childEnv(
-        inherited,
-        profileEnv,
-        mapOf(
-            googleOauthAccessTokenEnvVar to accessToken,
-            cloudsdkAuthAccessTokenEnvVar to accessToken,
-        ),
-    )
-
 class ExecCommand : CliktCommand(name = "exec") {
   override fun help(context: Context) =
       "Run a command with the profile's environment injected. Put -- before the command if it " +
           "takes its own flags, e.g. workload worker exec -p my-profile-1 -- gsutil ls gs://bucket"
 
   private val profileId by option("--profile", "-p", help = "The profile to run under").required()
-
-  private val staticToken by
-      option(
-              "--static-token",
-              help =
-                  "Deprecated: inject one static 15-minute token into the child env instead of a " +
-                      "refreshing metadata server. Removed next release.",
-          )
-          .flag()
 
   private val command by argument(name = "command").multiple(required = true)
 
@@ -101,13 +75,7 @@ class ExecCommand : CliktCommand(name = "exec") {
     echo("Profile:     ${claim.profileId} (revision ${claim.revision})", err = true)
     echo("Service acct: ${claim.serviceAccount}", err = true)
 
-    val exitCode =
-        if (staticToken) {
-          execStaticToken(config, claim, secretValues)
-        } else {
-          execWithMetadata(config, claim, secretValues)
-        }
-    throw ProgramResult(exitCode)
+    throw ProgramResult(execWithMetadata(config, claim, secretValues))
   }
 
   /**
@@ -140,21 +108,6 @@ class ExecCommand : CliktCommand(name = "exec") {
           )
       runChild(childEnv)
     }
-  }
-
-  /** Legacy `--static-token` path: one static 15-minute token in the child env, no refresh. */
-  private fun execStaticToken(
-      config: WorkloadConfig,
-      claim: WorkerClaimResponse,
-      secretValues: Map<String, String>,
-  ): Int {
-    echo(
-        "Warning: --static-token injects one 15-minute token and does not refresh; a longer job " +
-            "will lose GCP access mid-run. This flag is deprecated and goes away next release.",
-        err = true,
-    )
-    val childEnv = buildChildEnv(System.getenv(), claim.envVars + secretValues, claim.accessToken)
-    return runChild(childEnv)
   }
 
   private fun runChild(childEnv: ChildEnv): Int {

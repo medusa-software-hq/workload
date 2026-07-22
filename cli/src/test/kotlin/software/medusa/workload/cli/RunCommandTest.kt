@@ -47,28 +47,6 @@ class RunCommandTest {
   }
 
   @Test
-  fun `container env carries profile vars, secrets, and the token under both names`() {
-    val env =
-        buildContainerEnv(
-            profileEnv = mapOf("MODE" to "batch", "API_KEY" to "resolved-secret"),
-            accessToken = "abc123",
-        )
-
-    assertTrue("MODE=batch" in env)
-    assertTrue("API_KEY=resolved-secret" in env)
-    assertTrue("$googleOauthAccessTokenEnvVar=abc123" in env)
-    assertTrue("$cloudsdkAuthAccessTokenEnvVar=abc123" in env)
-  }
-
-  @Test
-  fun `container env does not inherit the host environment`() {
-    // A container starts from its image's env; the operator's shell must not leak in.
-    val env = buildContainerEnv(profileEnv = emptyMap(), accessToken = "t")
-    val names = env.map { it.substringBefore('=') }.toSet()
-    assertEquals(setOf(googleOauthAccessTokenEnvVar, cloudsdkAuthAccessTokenEnvVar), names)
-  }
-
-  @Test
   fun `metadata container env carries pointers and profile vars but no token`() {
     val env =
         buildMetadataContainerEnv(
