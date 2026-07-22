@@ -108,7 +108,23 @@ class ExecCommand : CliktCommand(name = "exec") {
               claim.envVars + secretValues,
               metadataPointerEnv(emulator.hostPort),
           )
-      runChild(childEnv)
+      // Record the run + heartbeat (M6-B1). Best-effort: never blocks or kills the child.
+      val reporter =
+          RunReporter.start(
+              brokerBaseUrl = env.apiBaseUrl,
+              workerId = config.workerId,
+              workerSecret = config.workerSecret,
+              profileId = claim.profileId,
+              revision = claim.revision,
+              kind = "exec",
+              imageDigest = null,
+              warn = { echo(it, err = true) },
+          )
+      try {
+        runChild(childEnv).also { reporter?.reportEnd(it) }
+      } finally {
+        reporter?.close()
+      }
     }
   }
 
