@@ -10,6 +10,7 @@ import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -57,6 +58,17 @@ class RefreshingTokenCache(
 ) {
   private val lock = Any()
   private var cached: BrokeredToken? = null
+  private val refreshes = AtomicLong(0)
+
+  /**
+   * How many times this cache has actually (re-)claimed a token from the broker — the Beacon
+   * refresh counter (M6-A4 observability). Each increment also emits the
+   * `event=beacon.token.refresh` log line, so "did the brokered credential refresh, and how often?"
+   * is answerable from a past run's logs alone; this getter is the in-process surface for tests and
+   * a future metric on the GCE node.
+   */
+  val refreshCount: Long
+    get() = refreshes.get()
 
   /**
    * The current token, re-claiming if the cached one is missing or within [refreshSkew] of expiry.
@@ -69,8 +81,21 @@ class RefreshingTokenCache(
         ) {
           return existing
         }
+        // `cold` = first claim (or after forceExpire); `renewal` = a near-expiry re-claim replacing
+        // a live token. The >15-min nightly leg proves a genuine *renewal* happened, not just the
+        // initial fetch, so the distinction is carried in the log rather than collapsed into a
+        // count.
+        val reason = if (existing == null) "cold" else "renewal"
         val fresh = claimer.claim()
         cached = fresh
+        val count = refreshes.incrementAndGet()
+        log.info(
+            "event=beacon.token.refresh reason={} count={} sa={} expires_in={}s",
+            reason,
+            count,
+            fresh.serviceAccountEmail,
+            expiresInSeconds(fresh),
+        )
         fresh
       }
 
@@ -81,6 +106,10 @@ class RefreshingTokenCache(
   /** Test/refresh hook: drop the cached token so the next [current] re-claims. */
   fun forceExpire() {
     synchronized(lock) { cached = null }
+  }
+
+  private companion object {
+    val log = LoggerFactory.getLogger(RefreshingTokenCache::class.java)
   }
 }
 
@@ -385,6 +414,14 @@ fun brokerTokenClaimer(
 
 /**
  * Builds the production [IdTokenClaimer] that claims audience-bound ID tokens from [apiBaseUrl].
+ *
+ * **No per-audience ID-token cache (M4 follow-up, re-deferred M6-A4).** Unlike the access token —
+ * cached and refreshed by [RefreshingTokenCache] because *every* GCP call fetches it — ID tokens go
+ * through the `identity` endpoint, which google-auth already caches client-side per audience. No
+ * chatty consumer has appeared to justify a second cache here (the reference workload re-mints once
+ * per heartbeat, ~30s; the broker call is cheap next to that). Add a cache only if a real consumer
+ * makes the `identity` endpoint hot; until then a fresh claim per request is the simpler correct
+ * choice, and the extra invalidation surface isn't worth carrying.
  */
 fun brokerIdTokenClaimer(
     apiBaseUrl: String,

@@ -17,6 +17,14 @@
 
   <logger name="io.netty" level="ERROR" />
 
+  <!--
+    Beacon token refreshes are operator signal, not framework noise (M6-A4 observability): one INFO
+    line per (re-)claim ("event=beacon.token.refresh …") so "did the brokered credential refresh?"
+    is answerable from a run's logs without reproduction. Named to INFO so it surfaces while the root
+    stays quiet at WARN. Rare in practice — one line per token lifetime (~hourly), not per request.
+  -->
+  <logger name="software.medusa.workload.cli.RefreshingTokenCache" level="INFO" />
+
   <root level="WARN">
     <appender-ref ref="STDERR" />
   </root>
