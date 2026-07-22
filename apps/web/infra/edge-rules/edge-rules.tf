@@ -71,6 +71,11 @@ resource "cloudflare_ruleset" "worker_plane_country_allowlist" {
 # legitimate CLI/worker/registration traffic and the handful of smoke requests never trip it, but it
 # caps a single source's burst. Counted per (client IP, edge colo) — Cloudflare's default, available
 # on every plan tier.
+#
+# NOTE ON THE 10s WINDOW: the zone is on a plan that only entitles a rate-limit `period`/
+# `mitigation_timeout` of 10s (the API rejects 60 with "can only use a period among [10]"). So the
+# limit is expressed as 50 requests / 10s — the same sustained 300 req/min the design calls for — and
+# the block lifts after 10s. A paid plan would allow a longer window + mitigation; revisit then.
 resource "cloudflare_ruleset" "api_rate_limit" {
   zone_id     = var.cloudflare_zone_id
   name        = "workload api per-IP rate limit"
@@ -81,15 +86,15 @@ resource "cloudflare_ruleset" "api_rate_limit" {
   rules = [
     {
       ref         = "api_per_ip_rate_limit"
-      description = "API front door: per-IP request rate limit"
+      description = "API front door: per-IP request rate limit (50/10s = 300/min)"
       action      = "block"
       enabled     = true
       expression  = local.rate_limit_scope_expression
       ratelimit = {
         characteristics     = ["ip.src", "cf.colo.id"]
-        period              = 60
-        requests_per_period = 300
-        mitigation_timeout  = 60
+        period              = 10
+        requests_per_period = 50
+        mitigation_timeout  = 10
       }
     }
   ]
