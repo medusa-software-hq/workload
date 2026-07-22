@@ -4,6 +4,7 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.core.ProgramResult
+import com.github.ajalt.clikt.core.requireObject
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.arguments.multiple
 import com.github.ajalt.clikt.parameters.options.option
@@ -44,15 +45,16 @@ class ExecCommand : CliktCommand(name = "exec") {
       "Run a command with the profile's environment injected. Put -- before the command if it " +
           "takes its own flags, e.g. workload worker exec -p my-profile-1 -- gsutil ls gs://bucket"
 
+  private val env by requireObject<Environment>()
   private val profileId by option("--profile", "-p", help = "The profile to run under").required()
 
   private val command by argument(name = "command").multiple(required = true)
 
   override fun run() {
-    val config = loadConfigOrFail()
+    val config = loadConfigOrFail(env)
     val claim =
         try {
-          claimWorkload(BuildConfig.apiBaseUrl, config.workerId, config.workerSecret, profileId)
+          claimWorkload(env.apiBaseUrl, config.workerId, config.workerSecret, profileId)
         } catch (e: WorkerApiException) {
           throw PrintMessage(
               tokenClaimErrorMessage(e, profileId),
@@ -92,10 +94,10 @@ class ExecCommand : CliktCommand(name = "exec") {
   ): Int {
     val emulator =
         MetadataEmulator(
-            RefreshingTokenCache(brokerTokenClaimer(config, profileId)),
+            RefreshingTokenCache(brokerTokenClaimer(env.apiBaseUrl, config, profileId)),
             InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
             InetAddress::isLoopbackAddress,
-            idTokenClaimer = brokerIdTokenClaimer(config, profileId),
+            idTokenClaimer = brokerIdTokenClaimer(env.apiBaseUrl, config, profileId),
         )
     emulator.start()
     echo("Metadata:    http://${emulator.hostPort} (tokens refresh automatically)", err = true)

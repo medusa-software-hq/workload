@@ -2,6 +2,7 @@ package software.medusa.workload.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.PrintMessage
+import com.github.ajalt.clikt.core.requireObject
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.prompt
@@ -11,6 +12,7 @@ private const val pollIntervalStartSeconds = 2L
 private const val pollIntervalMaxSeconds = 15L
 
 class RegisterCommand : CliktCommand(name = "register") {
+  private val env by requireObject<Environment>()
   private val name by option("--name", help = "Defaults to <user>-<hostname>")
   private val enrollmentToken by
       option(
@@ -22,16 +24,16 @@ class RegisterCommand : CliktCommand(name = "register") {
   private val force by option("--force").flag(default = false)
 
   override fun run() {
-    if (!force && loadConfig() != null) {
+    if (!force && loadConfig(env.configDir) != null) {
       throw PrintMessage(
-          "A config already exists at ${configFile()}. Use --force to overwrite it.",
+          "A config already exists at ${configFile(env.configDir)}. Use --force to overwrite it.",
           statusCode = 1,
           printError = true,
       )
     }
 
     val workerName = name ?: defaultWorkerName()
-    val apiBaseUrl = BuildConfig.apiBaseUrl
+    val apiBaseUrl = env.apiBaseUrl
 
     val registered =
         try {
@@ -45,7 +47,8 @@ class RegisterCommand : CliktCommand(name = "register") {
             workerId = registered.workerId,
             workerSecret = registered.workerSecret,
             workerName = workerName,
-        )
+        ),
+        env.configDir,
     )
 
     echo("Registered as '$workerName'.")

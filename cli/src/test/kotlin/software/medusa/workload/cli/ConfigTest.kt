@@ -18,20 +18,20 @@ class ConfigTest {
   }
 
   @Test
-  fun `configDir prefers XDG_CONFIG_HOME when set`() {
-    val dir = configDir(xdgConfigHome = "/xdg/config", userHome = "/home/someone")
+  fun `configBaseDir prefers XDG_CONFIG_HOME when set`() {
+    val dir = configBaseDir(xdgConfigHome = "/xdg/config", userHome = "/home/someone")
     assertEquals("/xdg/config/ms-workload", dir.toString())
   }
 
   @Test
-  fun `configDir falls back to userHome slash config`() {
-    val dir = configDir(xdgConfigHome = null, userHome = "/home/someone")
+  fun `configBaseDir falls back to userHome slash config`() {
+    val dir = configBaseDir(xdgConfigHome = null, userHome = "/home/someone")
     assertEquals("/home/someone/.config/ms-workload", dir.toString())
   }
 
   @Test
-  fun `configDir treats a blank XDG_CONFIG_HOME as unset`() {
-    val dir = configDir(xdgConfigHome = "", userHome = "/home/someone")
+  fun `configBaseDir treats a blank XDG_CONFIG_HOME as unset`() {
+    val dir = configBaseDir(xdgConfigHome = "", userHome = "/home/someone")
     assertEquals("/home/someone/.config/ms-workload", dir.toString())
   }
 

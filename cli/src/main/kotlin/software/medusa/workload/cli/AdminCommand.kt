@@ -4,6 +4,7 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.NoOpCliktCommand
 import com.github.ajalt.clikt.core.PrintMessage
+import com.github.ajalt.clikt.core.requireObject
 import com.github.ajalt.clikt.parameters.arguments.argument
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
@@ -15,9 +16,9 @@ import java.io.File
 // Shared plumbing
 // ---------------------------------------------------------------------------
 
-private fun adminClient(): AdminApiClient {
-  val session = AdminSession()
-  return AdminApiClient(AdminConfig.apiBaseUrl, idTokenProvider = { session.currentIdToken() })
+private fun adminClient(env: Environment): AdminApiClient {
+  val session = AdminSession(dir = env.configDir, refresher = defaultRefresher(env))
+  return AdminApiClient(env.apiBaseUrl, idTokenProvider = { session.currentIdToken() })
 }
 
 /** Turns the two expected admin failures into clean, actionable CLI errors. */
@@ -92,22 +93,25 @@ class AdminCommand : NoOpCliktCommand(name = "admin") {
 
 /** `admin login` — the loopback + PKCE browser sign-in; caches the refresh token for later. */
 class AdminLoginCommand : CliktCommand(name = "login") {
+  private val env by requireObject<Environment>()
+
   override fun help(context: Context) =
       "Sign in with your medusa.software Google account and cache the session."
 
   override fun run() {
     val secret =
-        AdminConfig.clientSecret
+        env.oauthClientSecret
             ?: throw PrintMessage(
-                "This CLI build has no admin OAuth client secret and ${AdminConfig.CLIENT_SECRET_ENV}" +
-                    " is not set. Install a released build, or set that env var for a local build.",
+                "This CLI build has no admin OAuth client secret for ${env.label} and " +
+                    "${env.oauthClientSecretEnvVar} is not set. Install a released build, or set " +
+                    "that env var for a local build.",
                 statusCode = 1,
                 printError = true,
             )
 
     val tokens =
         try {
-          AdminOAuth(clientSecret = secret).login(echo = { echo(it) })
+          AdminOAuth(clientId = env.oauthClientId, clientSecret = secret).login(echo = { echo(it) })
         } catch (e: AdminOAuthException) {
           throw PrintMessage("Sign-in failed: ${e.message}", statusCode = 1, printError = true)
         }
@@ -121,7 +125,8 @@ class AdminLoginCommand : CliktCommand(name = "login") {
             )
     val email = AdminJwt.email(tokens.idToken) ?: "unknown"
     saveAdminCredentials(
-        AdminCredentials(refreshToken, tokens.idToken, tokens.expiresAtEpochSec, email)
+        AdminCredentials(refreshToken, tokens.idToken, tokens.expiresAtEpochSec, email),
+        env.configDir,
     )
     echo("Signed in as $email")
   }
@@ -129,10 +134,12 @@ class AdminLoginCommand : CliktCommand(name = "login") {
 
 /** `admin logout` — forget the cached session. */
 class AdminLogoutCommand : CliktCommand(name = "logout") {
+  private val env by requireObject<Environment>()
+
   override fun help(context: Context) = "Forget the cached admin session on this machine."
 
   override fun run() {
-    deleteAdminCredentials()
+    deleteAdminCredentials(env.configDir)
     echo("Signed out.")
   }
 }
@@ -146,14 +153,17 @@ class AdminProfilesCommand : NoOpCliktCommand(name = "profiles") {
 }
 
 class AdminProfilesListCommand : CliktCommand(name = "list") {
+  private val env by requireObject<Environment>()
+
   override fun help(context: Context) = "List all profiles."
 
   override fun run() {
-    echo(formatProfileTable(runAdmin { adminClient().listProfiles() }))
+    echo(formatProfileTable(runAdmin { adminClient(env).listProfiles() }))
   }
 }
 
 class AdminProfilesShowCommand : CliktCommand(name = "show") {
+  private val env by requireObject<Environment>()
   private val profileId by argument(name = "profile-id")
   private val revisionNumber by
       option("--revision", "-r", help = "Show a specific revision (default: latest)").int()
@@ -165,7 +175,7 @@ class AdminProfilesShowCommand : CliktCommand(name = "show") {
 
   override fun run() {
     val revisions =
-        runAdmin { adminClient().listProfileRevisions(profileId) }.sortedBy { it.revision }
+        runAdmin { adminClient(env).listProfileRevisions(profileId) }.sortedBy { it.revision }
     if (revisions.isEmpty()) {
       throw PrintMessage(
           "No such profile, or it has no revisions: $profileId",
@@ -201,6 +211,7 @@ class AdminProfilesShowCommand : CliktCommand(name = "show") {
 }
 
 class AdminProfilesCreateCommand : CliktCommand(name = "create") {
+  private val env by requireObject<Environment>()
   private val profileId by argument(name = "profile-id")
   private val displayName by
       option("--display-name", help = "Human-friendly name (defaults to the profile id).")
@@ -213,13 +224,14 @@ class AdminProfilesCreateCommand : CliktCommand(name = "create") {
   override fun run() {
     val spec = readSpec(file) { System.`in`.readBytes().toString(Charsets.UTF_8) }
     val revision = runAdmin {
-      adminClient().createProfile(profileId, displayName ?: profileId, spec)
+      adminClient(env).createProfile(profileId, displayName ?: profileId, spec)
     }
     echoRevisionResult("Created", profileId, revision)
   }
 }
 
 class AdminProfilesUpdateCommand : CliktCommand(name = "update") {
+  private val env by requireObject<Environment>()
   private val profileId by argument(name = "profile-id")
   private val file by
       option("-f", "--file", help = "Revision spec JSON file, or - for stdin.").required()
@@ -228,18 +240,19 @@ class AdminProfilesUpdateCommand : CliktCommand(name = "update") {
 
   override fun run() {
     val spec = readSpec(file) { System.`in`.readBytes().toString(Charsets.UTF_8) }
-    val revision = runAdmin { adminClient().updateProfile(profileId, spec) }
+    val revision = runAdmin { adminClient(env).updateProfile(profileId, spec) }
     echoRevisionResult("Updated", profileId, revision)
   }
 }
 
 class AdminProfilesVerifyCommand : CliktCommand(name = "verify") {
+  private val env by requireObject<Environment>()
   private val profileId by argument(name = "profile-id")
 
   override fun help(context: Context) = "Re-verify a profile's latest revision against live GCP."
 
   override fun run() {
-    val revision = runAdmin { adminClient().verifyProfile(profileId) }
+    val revision = runAdmin { adminClient(env).verifyProfile(profileId) }
     val image =
         if (revision.dockerImage.isNotBlank()) ", image ${shortEnum(revision.imageStatus)}" else ""
     echo(
@@ -250,36 +263,39 @@ class AdminProfilesVerifyCommand : CliktCommand(name = "verify") {
 }
 
 class AdminProfilesArchiveCommand : CliktCommand(name = "archive") {
+  private val env by requireObject<Environment>()
   private val profileId by argument(name = "profile-id")
 
   override fun help(context: Context) = "Archive a profile (no longer grantable)."
 
   override fun run() {
-    val profile = runAdmin { adminClient().archiveProfile(profileId) }
+    val profile = runAdmin { adminClient(env).archiveProfile(profileId) }
     echo("Archived ${profile.profileId}.")
   }
 }
 
 class AdminProfilesGrantCommand : CliktCommand(name = "grant") {
+  private val env by requireObject<Environment>()
   private val profileId by argument(name = "profile-id")
   private val workerId by argument(name = "worker-id")
 
   override fun help(context: Context) = "Grant a profile to a worker."
 
   override fun run() {
-    runAdmin { adminClient().grantProfile(workerId, profileId) }
+    runAdmin { adminClient(env).grantProfile(workerId, profileId) }
     echo("Granted $profileId to $workerId.")
   }
 }
 
 class AdminProfilesRevokeGrantCommand : CliktCommand(name = "revoke") {
+  private val env by requireObject<Environment>()
   private val profileId by argument(name = "profile-id")
   private val workerId by argument(name = "worker-id")
 
   override fun help(context: Context) = "Revoke a worker's grant of a profile."
 
   override fun run() {
-    runAdmin { adminClient().revokeProfileGrant(workerId, profileId) }
+    runAdmin { adminClient(env).revokeProfileGrant(workerId, profileId) }
     echo("Revoked $profileId from $workerId.")
   }
 }
@@ -293,35 +309,40 @@ class AdminWorkersCommand : NoOpCliktCommand(name = "workers") {
 }
 
 class AdminWorkersListCommand : CliktCommand(name = "list") {
+  private val env by requireObject<Environment>()
+
   override fun help(context: Context) = "List all workers."
 
   override fun run() {
-    echo(formatWorkerTable(runAdmin { adminClient().listWorkers() }))
+    echo(formatWorkerTable(runAdmin { adminClient(env).listWorkers() }))
   }
 }
 
 class AdminWorkersApproveCommand : CliktCommand(name = "approve") {
+  private val env by requireObject<Environment>()
   private val workerId by argument(name = "worker-id")
 
   override fun help(context: Context) = "Approve a pending worker."
 
-  override fun run() = echoWorker(runAdmin { adminClient().approveWorker(workerId) }, "Approved")
+  override fun run() = echoWorker(runAdmin { adminClient(env).approveWorker(workerId) }, "Approved")
 }
 
 class AdminWorkersRejectCommand : CliktCommand(name = "reject") {
+  private val env by requireObject<Environment>()
   private val workerId by argument(name = "worker-id")
 
   override fun help(context: Context) = "Reject a pending worker."
 
-  override fun run() = echoWorker(runAdmin { adminClient().rejectWorker(workerId) }, "Rejected")
+  override fun run() = echoWorker(runAdmin { adminClient(env).rejectWorker(workerId) }, "Rejected")
 }
 
 class AdminWorkersRevokeCommand : CliktCommand(name = "revoke") {
+  private val env by requireObject<Environment>()
   private val workerId by argument(name = "worker-id")
 
   override fun help(context: Context) = "Revoke an active worker's access."
 
-  override fun run() = echoWorker(runAdmin { adminClient().revokeWorker(workerId) }, "Revoked")
+  override fun run() = echoWorker(runAdmin { adminClient(env).revokeWorker(workerId) }, "Revoked")
 }
 
 private fun CliktCommand.echoWorker(worker: AdminWorker, verb: String) {
@@ -338,6 +359,7 @@ class AdminEnrollmentCommand : NoOpCliktCommand(name = "enrollment") {
 }
 
 class AdminEnrollmentCreateCommand : CliktCommand(name = "create") {
+  private val env by requireObject<Environment>()
   private val note by
       option("--note", help = "Free-text label recorded with the token, e.g. \"for Kuba's MBP\".")
   private val expiresInDays by
@@ -355,7 +377,7 @@ class AdminEnrollmentCreateCommand : CliktCommand(name = "create") {
 
   override fun run() {
     val result = runAdmin {
-      adminClient().createEnrollmentToken(note ?: "", expiresInDays ?: 0, requireApproval)
+      adminClient(env).createEnrollmentToken(note ?: "", expiresInDays ?: 0, requireApproval)
     }
     // The token goes to stdout alone (so it can be piped/copied); everything else is context on
     // stderr — the same split as 'workload worker token'.
@@ -372,22 +394,25 @@ class AdminEnrollmentCreateCommand : CliktCommand(name = "create") {
 }
 
 class AdminEnrollmentListCommand : CliktCommand(name = "list") {
+  private val env by requireObject<Environment>()
+
   override fun help(context: Context) =
       "List outstanding (unused, unexpired, unrevoked) enrollment tokens."
 
   override fun run() {
-    echo(formatEnrollmentTokenTable(runAdmin { adminClient().listEnrollmentTokens() }))
+    echo(formatEnrollmentTokenTable(runAdmin { adminClient(env).listEnrollmentTokens() }))
   }
 }
 
 class AdminEnrollmentRevokeCommand : CliktCommand(name = "revoke") {
+  private val env by requireObject<Environment>()
   private val enrollmentTokenId by argument(name = "enrollment-token-id")
 
   override fun help(context: Context) =
       "Revoke an outstanding enrollment token so it can no longer be redeemed."
 
   override fun run() {
-    runAdmin { adminClient().revokeEnrollmentToken(enrollmentTokenId) }
+    runAdmin { adminClient(env).revokeEnrollmentToken(enrollmentTokenId) }
     echo("Revoked enrollment token $enrollmentTokenId.")
   }
 }

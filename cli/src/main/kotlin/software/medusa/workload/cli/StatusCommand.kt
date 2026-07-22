@@ -2,20 +2,23 @@ package software.medusa.workload.cli
 
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.PrintMessage
+import com.github.ajalt.clikt.core.requireObject
 
 class StatusCommand : CliktCommand(name = "status") {
+  private val env by requireObject<Environment>()
+
   override fun run() {
     val config =
-        loadConfig()
+        loadConfig(env.configDir)
             ?: throw PrintMessage(
-                "No config found at ${configFile()}. Run 'workload worker register' first.",
+                "No config found at ${configFile(env.configDir)}. Run 'workload worker register' first.",
                 statusCode = 1,
                 printError = true,
             )
 
     val status =
         try {
-          fetchSelfStatus(BuildConfig.apiBaseUrl, config.workerId, config.workerSecret)
+          fetchSelfStatus(env.apiBaseUrl, config.workerId, config.workerSecret)
         } catch (e: WorkerApiException) {
           throw PrintMessage(
               "Status poll failed: ${e.message}. The worker may have been rejected or revoked.",

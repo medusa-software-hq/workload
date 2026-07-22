@@ -102,17 +102,6 @@ class AdminJwtTest {
   }
 }
 
-class BuildConfigResolveTest {
-  @Test
-  fun `env overrides baked overrides default, and blanks are skipped`() {
-    assertEquals("env", BuildConfig.resolve("env", "baked", "default"))
-    assertEquals("baked", BuildConfig.resolve(null, "baked", "default"))
-    assertEquals("baked", BuildConfig.resolve("  ", "baked", "default"))
-    assertEquals("default", BuildConfig.resolve(null, "", "default"))
-    assertNull(BuildConfig.resolve(null, null, null))
-  }
-}
-
 class AdminProfileTableTest {
   @Test
   fun `empty profiles renders a friendly note`() {

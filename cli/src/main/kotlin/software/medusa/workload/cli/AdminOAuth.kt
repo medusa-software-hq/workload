@@ -175,8 +175,8 @@ internal fun openInBrowser(url: String): Boolean {
 
 /** Drives the human OAuth sign-in and token refresh for the `admin` commands. */
 class AdminOAuth(
+    private val clientId: String,
     private val clientSecret: String,
-    private val clientId: String = AdminConfig.CLIENT_ID,
     private val httpClient: HttpClient = HttpClient.newHttpClient(),
     private val tokenEndpointUrl: String = tokenEndpoint,
 ) {
