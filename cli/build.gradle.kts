@@ -14,6 +14,12 @@ dependencies {
   implementation(libs.clikt)
   implementation(libs.kotlinx.serialization.json)
 
+  // `workload admin --auth=service|auto` mints a Google ID token from ambient credentials (ADC on a
+  // dev box, WIF in CI) for the API-URL audience, so a service account can drive the admin plane
+  // with no browser. Version managed by the same BOM the backend uses.
+  implementation(platform(libs.google.cloud.libraries.bom))
+  implementation(libs.google.auth.oauth2.http)
+
   // Container lifecycle + log streaming for `workload run`. Brings Armeria and the Netty native
   // UDS transports (epoll on Linux) with it, so the shadow jar can talk to the daemon socket.
   implementation(project(":libraries:docker-connector"))
