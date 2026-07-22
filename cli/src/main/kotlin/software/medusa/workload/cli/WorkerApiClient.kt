@@ -61,7 +61,9 @@ data class WorkerIdTokenClaimResponse(
     val audience: String,
 )
 
-/** `{runId, heartbeatIntervalSeconds}` — the broker-minted run id and the cadence to heartbeat on. */
+/**
+ * `{runId, heartbeatIntervalSeconds}` — the broker-minted run id and the cadence to heartbeat on.
+ */
 @Serializable
 data class CreateRunResponse(
     val runId: String,
@@ -308,7 +310,9 @@ fun heartbeatRun(brokerBaseUrl: String, workerId: String, workerSecret: String, 
   }
 }
 
-/** Calls `POST <brokerBaseUrl>/worker/v2/runs/{runId}/end` with the exit code — the terminal report. */
+/**
+ * Calls `POST <brokerBaseUrl>/worker/v2/runs/{runId}/end` with the exit code — the terminal report.
+ */
 fun endRun(
     brokerBaseUrl: String,
     workerId: String,

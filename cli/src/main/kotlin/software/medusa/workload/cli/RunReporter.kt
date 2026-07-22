@@ -7,8 +7,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Reports a run's presence to the broker (M6-B1): it heartbeats on a daemon thread while the
- * workload runs and reports the terminal exit code when it finishes — including the Ctrl-C path, via
- * a shutdown hook.
+ * workload runs and reports the terminal exit code when it finishes — including the Ctrl-C path,
+ * via a shutdown hook.
  *
  * **Observability must never reduce availability.** Every broker call here is best-effort: a failed
  * heartbeat or end report warns and is otherwise swallowed — it never aborts, kills, or delays the
@@ -44,7 +44,9 @@ internal constructor(
   internal fun beatOnce() {
     if (ended.get()) return
     runCatching { heartbeat() }
-        .onFailure { warn("workload: run heartbeat failed (${it.message}); the job keeps running.") }
+        .onFailure {
+          warn("workload: run heartbeat failed (${it.message}); the job keeps running.")
+        }
   }
 
   /** Reports the run's end exactly once. Safe from the normal path and from the shutdown hook. */

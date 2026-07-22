@@ -183,7 +183,8 @@ fun buildServer(
         }
         // The run lifecycle (M6-B1): create, heartbeat, end. Cheap DB writes (unlike the throttled
         // minting endpoints), but worker-authenticated all the same, so they ride the same
-        // credential-drop decorator that keeps the plane unprobeable. One service instance backs all
+        // credential-drop decorator that keeps the plane unprobeable. One service instance backs
+        // all
         // three routes; it dispatches on the {runId} path param and the /heartbeat|/end suffix.
         workerRunService?.let {
           route()

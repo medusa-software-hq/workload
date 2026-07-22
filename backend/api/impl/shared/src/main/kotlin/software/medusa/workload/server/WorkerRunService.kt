@@ -40,10 +40,10 @@ internal data class CreateRunResponse(
  *
  * Worker-authenticated by the same `Bearer <workerId>.<secret>` credential as the rest of the v2
  * plane; auth failures come back as `401` (rewritten to a bare `404` by the credential-drop
- * decorator, keeping the plane unprobeable). Post-auth, a run belongs to the authenticated worker: a
- * heartbeat/end for a run owned by someone else is `403`, an unknown run `404` — real errors, since
- * the caller has proven who they are. `lost` is never written here (it's a read-time derivation);
- * this service only ever writes RUNNING/SUCCEEDED/FAILED.
+ * decorator, keeping the plane unprobeable). Post-auth, a run belongs to the authenticated worker:
+ * a heartbeat/end for a run owned by someone else is `403`, an unknown run `404` — real errors,
+ * since the caller has proven who they are. `lost` is never written here (it's a read-time
+ * derivation); this service only ever writes RUNNING/SUCCEEDED/FAILED.
  */
 class WorkerRunService(
     private val fleetStore: FleetStore,
@@ -74,7 +74,8 @@ class WorkerRunService(
   }
 
   private suspend fun authenticate(req: HttpRequest): Worker? {
-    val (workerId, secret) = extractBearerToken(req)?.let { parseWorkerBearerToken(it) } ?: return null
+    val (workerId, secret) =
+        extractBearerToken(req)?.let { parseWorkerBearerToken(it) } ?: return null
     val worker = fleetStore.getWorker(workerId) ?: return null
     if (!verifyWorkerSecret(secret, worker.secretHash)) return null
     if (worker.status != WorkerStatus.ACTIVE) return null

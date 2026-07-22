@@ -385,7 +385,8 @@ class RunCommand : CliktCommand(name = "run") {
     val metadataAddress = "${primary.hostAddress}:${emulator.port}"
     echo("Metadata:     http://$metadataAddress (tokens refresh automatically)", err = true)
 
-    // Record the run + start heartbeating (M6-B1). Best-effort: a broker hiccup here never stops the
+    // Record the run + start heartbeating (M6-B1). Best-effort: a broker hiccup here never stops
+    // the
     // container — reporter is null / its calls warn, and the workload runs regardless.
     val reporter =
         RunReporter.start(
@@ -430,7 +431,8 @@ class RunCommand : CliktCommand(name = "run") {
           printError = true,
       )
     } finally {
-      // Reports a failure-end if the container threw before reporting one, and unregisters the hook.
+      // Reports a failure-end if the container threw before reporting one, and unregisters the
+      // hook.
       reporter?.close()
       hook?.let { runCatching { Runtime.getRuntime().removeShutdownHook(it) } }
       runCatching { emulator.close() }

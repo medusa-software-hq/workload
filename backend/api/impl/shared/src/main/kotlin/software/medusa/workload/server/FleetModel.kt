@@ -211,8 +211,8 @@ enum class RunKind {
 /**
  * A run's lifecycle state. [RUNNING], [SUCCEEDED], and [FAILED] are the only values ever *stored*;
  * [LOST] is derived at read time — a still-`RUNNING` run whose last heartbeat has aged past the
- * grace window (see [deriveRunState]). Nothing false is ever written, so a late heartbeat un-loses a
- * run for free, exactly like [applyPendingExpiry] for pending workers.
+ * grace window (see [deriveRunState]). Nothing false is ever written, so a late heartbeat un-loses
+ * a run for free, exactly like [applyPendingExpiry] for pending workers.
  */
 enum class RunState {
   RUNNING,
@@ -228,7 +228,8 @@ data class Run(
     val profileId: ProfileId?,
     val revision: Int?,
     val kind: RunKind,
-    // The *effective* state as returned by the store: read paths apply [deriveRunState], so this may
+    // The *effective* state as returned by the store: read paths apply [deriveRunState], so this
+    // may
     // be [RunState.LOST] even though only RUNNING/SUCCEEDED/FAILED are persisted.
     val state: RunState,
     val exitCode: Int?,

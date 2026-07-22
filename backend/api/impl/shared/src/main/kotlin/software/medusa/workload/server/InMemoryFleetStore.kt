@@ -300,8 +300,10 @@ class InMemoryFleetStore : FleetStore {
   }
 
   override suspend fun heartbeatRun(runId: RunId, now: Instant): Run? {
-    // computeIfPresent applies the remap atomically per key; a heartbeat only lands on a run that is
-    // still stored `RUNNING` (never ended), so a terminal run is left untouched and reported absent.
+    // computeIfPresent applies the remap atomically per key; a heartbeat only lands on a run that
+    // is
+    // still stored `RUNNING` (never ended), so a terminal run is left untouched and reported
+    // absent.
     var updated: Run? = null
     runs.computeIfPresent(runId) { _, run ->
       if (run.endedAt == null && run.state == RunState.RUNNING) {

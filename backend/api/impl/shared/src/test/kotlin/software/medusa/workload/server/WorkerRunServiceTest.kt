@@ -58,7 +58,8 @@ class WorkerRunServiceTest {
 
   private fun post(path: String, bearer: String?, body: String = ""): AggregatedHttpResponse {
     val headers =
-        if (bearer == null) RequestHeaders.of(HttpMethod.POST, path, "Content-Type", "application/json")
+        if (bearer == null)
+            RequestHeaders.of(HttpMethod.POST, path, "Content-Type", "application/json")
         else
             RequestHeaders.of(
                 HttpMethod.POST,
@@ -76,7 +77,13 @@ class WorkerRunServiceTest {
         val secret = WorkloadToken.generate(TokenKind.WORKER)
         val worker =
             fleetStore.createWorker(
-                NewWorker(hashWorkerSecret(secret), name, hostname = null, os = null, cliVersion = null)
+                NewWorker(
+                    hashWorkerSecret(secret),
+                    name,
+                    hostname = null,
+                    os = null,
+                    cliVersion = null,
+                )
             )
         fleetStore.approveWorker(worker.workerId, approvedBy = "admin@example.com")
         worker.workerId to secret
@@ -131,7 +138,13 @@ class WorkerRunServiceTest {
     val secret = WorkloadToken.generate(TokenKind.WORKER)
     val worker =
         fleetStore.createWorker(
-            NewWorker(hashWorkerSecret(secret), "pending", hostname = null, os = null, cliVersion = null)
+            NewWorker(
+                hashWorkerSecret(secret),
+                "pending",
+                hostname = null,
+                os = null,
+                cliVersion = null,
+            )
         )
     val response = post("/worker/v2/runs", bearer(worker.workerId, secret), createRunBody())
     assertEquals(HttpStatus.UNAUTHORIZED, response.status())
@@ -164,7 +177,8 @@ class WorkerRunServiceTest {
     val (intruder, intruderSecret) = registerActiveWorker("intruder")
     val runId = startRun(owner)
 
-    val response = post("/worker/v2/runs/${runId.value}/heartbeat", bearer(intruder, intruderSecret))
+    val response =
+        post("/worker/v2/runs/${runId.value}/heartbeat", bearer(intruder, intruderSecret))
     assertEquals(HttpStatus.FORBIDDEN, response.status())
     assertEquals(
         WorkerErrorResponse("not_your_run"),
@@ -175,8 +189,7 @@ class WorkerRunServiceTest {
   @Test
   fun `heartbeat on an unknown run is not found`() {
     val (workerId, secret) = registerActiveWorker()
-    val response =
-        post("/worker/v2/runs/${UUID.randomUUID()}/heartbeat", bearer(workerId, secret))
+    val response = post("/worker/v2/runs/${UUID.randomUUID()}/heartbeat", bearer(workerId, secret))
     assertEquals(HttpStatus.NOT_FOUND, response.status())
     assertEquals(
         WorkerErrorResponse("run_not_found"),
@@ -239,7 +252,11 @@ class WorkerRunServiceTest {
     val runId = startRun(owner)
 
     val response =
-        post("/worker/v2/runs/${runId.value}/end", bearer(intruder, intruderSecret), """{"exitCode":0}""")
+        post(
+            "/worker/v2/runs/${runId.value}/end",
+            bearer(intruder, intruderSecret),
+            """{"exitCode":0}""",
+        )
     assertEquals(HttpStatus.FORBIDDEN, response.status())
     assertEquals(RunState.RUNNING, runBlocking { fleetStore.getRun(runId) }?.state)
   }

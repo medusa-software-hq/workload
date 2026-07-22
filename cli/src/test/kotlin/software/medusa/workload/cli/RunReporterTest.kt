@@ -87,7 +87,8 @@ class RunReporterTest {
   @Test
   fun `start returns null and warns when the broker cannot be reached`() {
     val warnings = mutableListOf<String>()
-    // Port 1 on loopback: nothing listens, so createRun fails fast — the workload must run untracked.
+    // Port 1 on loopback: nothing listens, so createRun fails fast — the workload must run
+    // untracked.
     val r =
         RunReporter.start(
             brokerBaseUrl = "http://127.0.0.1:1",

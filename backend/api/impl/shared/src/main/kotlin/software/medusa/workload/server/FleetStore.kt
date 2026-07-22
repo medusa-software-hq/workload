@@ -139,9 +139,10 @@ interface FleetStore {
   suspend fun heartbeatRun(runId: RunId, now: Instant = Instant.now()): Run?
 
   /**
-   * Ends a still-running run: records [exitCode] (nullable — an abnormal exit whose code is unknown)
-   * and sets the stored terminal state via [terminalStateFor]. Returns the ended run, or null if it
-   * doesn't exist or already ended. Only the reporting process ever writes a terminal state.
+   * Ends a still-running run: records [exitCode] (nullable — an abnormal exit whose code is
+   * unknown) and sets the stored terminal state via [terminalStateFor]. Returns the ended run, or
+   * null if it doesn't exist or already ended. Only the reporting process ever writes a terminal
+   * state.
    */
   suspend fun endRun(runId: RunId, exitCode: Int?, now: Instant = Instant.now()): Run?
 

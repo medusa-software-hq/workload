@@ -48,11 +48,14 @@ class RunApiClientTest {
 
   @Test
   fun `createRun posts an authenticated request and parses the run id and cadence`() {
-    val api = RunStubApi(200, """{"runId":"11111111-1111-1111-1111-111111111111","heartbeatIntervalSeconds":30}""")
+    val api =
+        RunStubApi(
+            200,
+            """{"runId":"11111111-1111-1111-1111-111111111111","heartbeatIntervalSeconds":30}""",
+        )
     stub = api
 
-    val response =
-        createRun(api.baseUrl, "wid", "wsecret", "my-profile", 4, "run", "sha256:abc")
+    val response = createRun(api.baseUrl, "wid", "wsecret", "my-profile", 4, "run", "sha256:abc")
 
     assertEquals("/worker/v2/runs", api.lastPath)
     assertEquals("Bearer wid.wsecret", api.lastAuthorization)

@@ -40,6 +40,8 @@ internal fun applyRunStateDerivation(run: Run, now: Instant = Instant.now()): Ru
   return if (effective == run.state) run else run.copy(state = effective)
 }
 
-/** The terminal state a reported [exitCode] implies: 0 is success, anything else (or none) failure. */
+/**
+ * The terminal state a reported [exitCode] implies: 0 is success, anything else (or none) failure.
+ */
 internal fun terminalStateFor(exitCode: Int?): RunState =
     if (exitCode == 0) RunState.SUCCEEDED else RunState.FAILED

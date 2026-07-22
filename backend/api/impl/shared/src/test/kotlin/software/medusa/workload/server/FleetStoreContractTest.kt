@@ -739,7 +739,10 @@ abstract class FleetStoreContractTest {
         profileId,
         displayName = null,
         revision =
-            NewProfileRevision("sa@project.iam.gserviceaccount.com", createdBy = "admin@example.com"),
+            NewProfileRevision(
+                "sa@project.iam.gserviceaccount.com",
+                createdBy = "admin@example.com",
+            ),
     )
     return profileId
   }
@@ -748,27 +751,29 @@ abstract class FleetStoreContractTest {
       NewRun(workerId = workerId, profileId = profileId, revision = 1, kind = kind)
 
   @Test
-  fun `createRun starts RUNNING with its first heartbeat and appears in listRuns`() = test { store ->
-    val workerId = aWorker(store)
-    val profileId = aProfile(store, "run-profile-1")
-    val t0 = java.time.Instant.parse("2026-07-22T10:00:00Z")
+  fun `createRun starts RUNNING with its first heartbeat and appears in listRuns`() =
+      test { store ->
+        val workerId = aWorker(store)
+        val profileId = aProfile(store, "run-profile-1")
+        val t0 = java.time.Instant.parse("2026-07-22T10:00:00Z")
 
-    val run = store.createRun(newRun(workerId, profileId).copy(imageDigest = "sha256:abc"), now = t0)
+        val run =
+            store.createRun(newRun(workerId, profileId).copy(imageDigest = "sha256:abc"), now = t0)
 
-    assertEquals(RunState.RUNNING, run.state)
-    assertEquals(workerId, run.workerId)
-    assertEquals(profileId, run.profileId)
-    assertEquals(1, run.revision)
-    assertEquals(RunKind.RUN, run.kind)
-    assertEquals("sha256:abc", run.imageDigest)
-    assertNull(run.exitCode)
-    assertNull(run.endedAt)
-    assertEquals(t0, run.startedAt)
-    assertEquals(t0, run.lastHeartbeatAt)
+        assertEquals(RunState.RUNNING, run.state)
+        assertEquals(workerId, run.workerId)
+        assertEquals(profileId, run.profileId)
+        assertEquals(1, run.revision)
+        assertEquals(RunKind.RUN, run.kind)
+        assertEquals("sha256:abc", run.imageDigest)
+        assertNull(run.exitCode)
+        assertNull(run.endedAt)
+        assertEquals(t0, run.startedAt)
+        assertEquals(t0, run.lastHeartbeatAt)
 
-    assertEquals(run, store.getRun(run.runId, now = t0))
-    assertTrue(store.listRuns(RunFilter(), now = t0).any { it.runId == run.runId })
-  }
+        assertEquals(run, store.getRun(run.runId, now = t0))
+        assertTrue(store.listRuns(RunFilter(), now = t0).any { it.runId == run.runId })
+      }
 
   @Test
   fun `endRun with exit 0 succeeds, nonzero fails, and records the exit code`() = test { store ->
