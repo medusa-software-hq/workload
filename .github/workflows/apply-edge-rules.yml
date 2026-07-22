@@ -1,0 +1,60 @@
+name: Apply edge rules
+
+on:
+  push:
+    branches: ["trunk/*"]
+    paths:
+      - "apps/web/infra/edge-rules/**"
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: 1.14
+
+  TF_INPUT: false
+  TF_CLI_ARGS: -no-color
+  NO_COLOR: 1
+
+jobs:
+  apply-config:
+    name: Apply Terraform configuration
+    runs-on: ubuntu-latest
+
+    # A SINGLE job, not the per-env matrix the other infra roots use: the Cloudflare zone
+    # (medusa.software) is shared across environments and a phase's entrypoint ruleset is one object
+    # per zone, so this root owns both envs' host-scoped rules at once (staging-first is handled by
+    # var.enforced_environments, not by workspaces). `environment: production` grants the WIF identity
+    # for the shared Terraform state bucket and the WAF token secret.
+    environment: production
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Authenticate to GCP only for the GCS state backend — the resources themselves are Cloudflare.
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ~> ${{ env.TERRAFORM_VERSION }}
+
+      - name: Apply Terraform configuration
+        working-directory: apps/web/infra/edge-rules
+        env:
+          TF_VAR_cloudflare_zone_id: ${{ vars.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_WAF_TOKEN }}
+        run: |
+          terraform init
+          terraform apply -auto-approve

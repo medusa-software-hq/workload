@@ -1,0 +1,46 @@
+name: Check edge rules
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  TERRAFORM_VERSION: 1.14
+
+  TF_INPUT: false
+  TF_CLI_ARGS: -no-color
+  NO_COLOR: 1
+
+jobs:
+  check-config:
+    name: Check Terraform configuration
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ~> ${{ env.TERRAFORM_VERSION }}
+
+      - uses: terraform-linters/setup-tflint@v6.2.2
+
+      - name: Check formatting
+        working-directory: apps/web/infra/edge-rules
+        run: terraform fmt -check -recursive
+
+      - name: Lint Terraform configuration
+        working-directory: apps/web/infra/edge-rules
+        run: tflint --recursive
+
+      # No GCP/Cloudflare auth or plan here: keeps the WAF token off pull-request runs. The real
+      # apply happens trunk-only.
+      - name: Validate Terraform configuration
+        working-directory: apps/web/infra/edge-rules
+        run: |
+          terraform init -backend=false
+          terraform validate
