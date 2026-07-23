@@ -186,6 +186,14 @@ class AdminFormatTest {
   }
 
   @Test
+  fun `revokeWarning fires only when the worker has running runs`() {
+    assertEquals(null, revokeWarning("w-1", 0))
+    val warning = revokeWarning("w-1", 2)
+    assertTrue(warning!!.contains("w-1") && warning.contains("2 live run"))
+    assertTrue(warning.contains("lost"))
+  }
+
+  @Test
   fun `formatRelative and formatRunDuration are human-friendly`() {
     val now = java.time.Instant.parse("2026-07-22T12:00:00Z")
     assertEquals("never", formatRelative("", now))

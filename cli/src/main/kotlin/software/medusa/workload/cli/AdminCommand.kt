@@ -6,6 +6,7 @@ import com.github.ajalt.clikt.core.NoOpCliktCommand
 import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.core.requireObject
 import com.github.ajalt.clikt.parameters.arguments.argument
+import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
@@ -406,11 +407,50 @@ class AdminWorkersRejectCommand : AdminActionCommand(name = "reject") {
 
 class AdminWorkersRevokeCommand : AdminActionCommand(name = "revoke") {
   private val workerId by argument(name = "worker-id")
+  private val force by
+      option(
+              "--force",
+              "-f",
+              help = "Revoke even when the worker has live runs, without confirming.",
+          )
+          .flag()
 
   override fun help(context: Context) = "Revoke an active worker's access."
 
-  override fun run() = echoWorker(runAdmin { client().revokeWorker(workerId) }, "Revoked")
+  override fun run() {
+    val client = client()
+    // A revoked worker's heartbeats stop authenticating, so its running runs derive `lost`. Warn
+    // (and confirm) before doing that — the CLI twin of the console's revoke dialog.
+    val running =
+        runAdmin { client.listRuns(workerId = workerId, liveOnly = true) }
+            .count { it.state == runStateRunning }
+    revokeWarning(workerId, running)?.let { warning ->
+      if (!force) {
+        echo(warning, err = true)
+        if (!confirmRevoke()) {
+          throw PrintMessage(
+              "Aborted. Re-run with --force to revoke despite the live run(s).",
+              statusCode = 1,
+              printError = true,
+          )
+        }
+      }
+    }
+    echoWorker(runAdmin { client.revokeWorker(workerId) }, "Revoked")
+  }
+
+  // Interactive y/N when attached to a terminal; otherwise (piped/CI) refuse without --force.
+  private fun confirmRevoke(): Boolean {
+    val console = System.console() ?: return false
+    val answer = console.readLine("Revoke anyway? [y/N] ")?.trim()?.lowercase()
+    return answer == "y" || answer == "yes"
+  }
 }
+
+/** The revoke live-runs warning, or null when the worker has none. Pure — unit-tested. */
+internal fun revokeWarning(worker: String, runningCount: Int): String? =
+    if (runningCount <= 0) null
+    else "Revoking $worker will kill $runningCount live run(s) — they'll fail and derive as lost."
 
 private fun CliktCommand.echoWorker(worker: AdminWorker, verb: String) {
   echo("$verb ${worker.name.ifBlank { worker.workerId }} — status: ${shortEnum(worker.status)}")
@@ -495,15 +535,64 @@ class AdminRunsListCommand : AdminActionCommand(name = "list") {
   private val workerId by option("--worker", "-w", help = "Only runs on this worker.")
   private val all by
       option("--all", help = "Include finished runs (default: only in-flight runs).").flag()
+  private val watch by
+      option(
+              "--watch",
+              help =
+                  "Refresh continuously until interrupted (Ctrl-C) — watch runs go running → lost " +
+                      "as heartbeats age out.",
+          )
+          .flag()
+  private val intervalSeconds by
+      option("--interval", help = "Seconds between refreshes in --watch mode (default 2).")
+          .int()
+          .default(2)
 
   override fun help(context: Context) =
       "List runs. By default only in-flight runs (running or lost); --all includes finished ones."
 
   override fun run() {
-    val runs = runAdmin {
-      client().listRuns(profileId = profileId, workerId = workerId, liveOnly = !all)
+    val client = client()
+    val fetch = {
+      runAdmin { client.listRuns(profileId = profileId, workerId = workerId, liveOnly = !all) }
     }
-    echo(formatRunTable(runs))
+    if (!watch) {
+      echo(formatRunTable(fetch()))
+      return
+    }
+    watchLoop(fetch)
+  }
+
+  /**
+   * Polls and redraws until interrupted (mirrors the console's auto-refreshing runs page). A frame
+   * is drawn straight to stdout — clearing the screen when attached to a terminal — so `lost`
+   * appears in place as a run's heartbeat ages out. Fails fast if the very first fetch fails (bad
+   * auth/URL); after that, a transient error is shown in the frame and polling continues.
+   */
+  private fun watchLoop(fetch: () -> List<AdminRun>) {
+    val interactive = System.console() != null
+    val step = intervalSeconds.coerceAtLeast(1)
+    var first = true
+    while (true) {
+      val frame =
+          try {
+            formatRunTable(fetch())
+          } catch (e: Exception) {
+            if (first) throw e
+            "runs unavailable this tick: ${e.message}"
+          }
+      first = false
+      if (interactive) print("\u001B[2J\u001B[H")
+      println("workload runs — ${env.label} — refreshing every ${step}s — Ctrl-C to stop")
+      println(frame)
+      System.out.flush()
+      try {
+        Thread.sleep(step * 1000L)
+      } catch (e: InterruptedException) {
+        Thread.currentThread().interrupt()
+        return
+      }
+    }
   }
 }
 
