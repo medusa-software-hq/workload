@@ -30,9 +30,11 @@ import {
 import {
   FleetService,
   ImageStatus,
+  RunState,
   VerificationStatus,
   type Profile,
   type ProfileRevision,
+  type Run,
   type Worker,
 } from './gen/medusa/workload/v1/fleet_service_pb.ts';
 import { useAuth } from './useAuth.tsx';
@@ -667,6 +669,7 @@ export function ProfilesPage({ token }: { token: string }) {
   const [profiles, setProfiles] = useState<Profile[] | null>(null);
   const [latestRevisions, setLatestRevisions] = useState<Map<string, ProfileRevision>>(new Map());
   const [workers, setWorkers] = useState<Worker[]>([]);
+  const [liveRuns, setLiveRuns] = useState<Run[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
@@ -685,9 +688,10 @@ export function ProfilesPage({ token }: { token: string }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [profilesResponse, workersResponse] = await Promise.all([
+      const [profilesResponse, workersResponse, runsResponse] = await Promise.all([
         client.listProfiles({}, { headers }),
         client.listWorkers({}, { headers }),
+        client.listRuns({ liveOnly: true }, { headers }),
       ]);
       const revisionEntries = await Promise.all(
         profilesResponse.profiles.map(async (profile) => {
@@ -710,11 +714,25 @@ export function ProfilesPage({ token }: { token: string }) {
       );
       setProfiles(profilesResponse.profiles);
       setWorkers(workersResponse.workers);
+      setLiveRuns(runsResponse.runs);
       setError(null);
     } catch (err: unknown) {
       handleError(err);
     }
   }, [headers, handleError]);
+
+  // Fresh-running runs per profile → the ACTIVE RUNS column: the worker names currently running it.
+  const runningByProfile = useMemo(() => {
+    const byProfile = new Map<string, string[]>();
+    for (const run of liveRuns) {
+      if (run.state === RunState.RUNNING && run.profileId) {
+        const names = byProfile.get(run.profileId) ?? [];
+        names.push(run.workerName || run.workerId);
+        byProfile.set(run.profileId, names);
+      }
+    }
+    return byProfile;
+  }, [liveRuns]);
 
   useEffect(() => {
     void refresh();
@@ -821,6 +839,7 @@ export function ProfilesPage({ token }: { token: string }) {
                 <Table.Th>Rev</Table.Th>
                 <Table.Th>Verification</Table.Th>
                 <Table.Th>Status</Table.Th>
+                <Table.Th>Active runs</Table.Th>
                 <Table.Th />
               </Table.Tr>
             </Table.Thead>
@@ -870,6 +889,18 @@ export function ProfilesPage({ token }: { token: string }) {
                           Active
                         </Badge>
                       )}
+                    </Table.Td>
+                    <Table.Td>
+                      {(() => {
+                        const runningWorkers = runningByProfile.get(profile.profileId) ?? [];
+                        return runningWorkers.length === 0 ? (
+                          <Text c="dimmed">—</Text>
+                        ) : (
+                          <Badge variant="light" color="blue" title={runningWorkers.join(', ')}>
+                            ● {runningWorkers.length}
+                          </Badge>
+                        );
+                      })()}
                     </Table.Td>
                     <Table.Td style={{ textAlign: 'right', color: 'var(--mantine-color-dimmed)' }}>
                       ›

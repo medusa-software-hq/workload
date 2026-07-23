@@ -25,8 +25,10 @@ import { toast } from 'sonner';
 import {
   type EnrollmentToken,
   FleetService,
+  RunState,
   WorkerStatus,
   type Profile,
+  type Run,
   type Worker,
 } from './gen/medusa/workload/v1/fleet_service_pb.ts';
 import { useAuth } from './useAuth.tsx';
@@ -54,6 +56,7 @@ export function WorkersPage({ token }: { token: string }) {
   const [enrollmentTokens, setEnrollmentTokens] = useState<EnrollmentToken[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showResolved, setShowResolved] = useState(false);
+  const [liveRuns, setLiveRuns] = useState<Run[]>([]);
 
   const headers = useMemo(() => ({ Authorization: `Bearer ${token}` }), [token]);
 
@@ -71,14 +74,16 @@ export function WorkersPage({ token }: { token: string }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [workersResponse, profilesResponse, tokensResponse] = await Promise.all([
+      const [workersResponse, profilesResponse, tokensResponse, runsResponse] = await Promise.all([
         client.listWorkers({}, { headers }),
         client.listProfiles({}, { headers }),
         client.listEnrollmentTokens({}, { headers }),
+        client.listRuns({ liveOnly: true }, { headers }),
       ]);
       setWorkers(workersResponse.workers);
       setProfiles(profilesResponse.profiles);
       setEnrollmentTokens(tokensResponse.enrollmentTokens);
+      setLiveRuns(runsResponse.runs);
       setError(null);
     } catch (err: unknown) {
       handleError(err);
@@ -106,6 +111,18 @@ export function WorkersPage({ token }: { token: string }) {
       ),
     [workers]
   );
+
+  // Fresh-running runs per worker id — the ACTIVITY signal. A lost run (stale heartbeat) is not
+  // counted as running; revoking a worker is what turns its running runs lost.
+  const runningByWorker = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const run of liveRuns) {
+      if (run.state === RunState.RUNNING) {
+        counts.set(run.workerId, (counts.get(run.workerId) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [liveRuns]);
 
   // "New worker" enrollment-token flow. `mintedToken` holds the just-created plaintext token; it is
   // shown exactly once in the dialog and cleared when the dialog closes — the token is never fetched
@@ -373,6 +390,7 @@ export function WorkersPage({ token }: { token: string }) {
                 <Table.Th>Name</Table.Th>
                 <Table.Th>Hostname</Table.Th>
                 <Table.Th>Via</Table.Th>
+                <Table.Th>Activity</Table.Th>
                 <Table.Th>Last seen</Table.Th>
                 <Table.Th>Granted profiles</Table.Th>
                 <Table.Th />
@@ -387,6 +405,15 @@ export function WorkersPage({ token }: { token: string }) {
                     <Badge variant="light" color={worker.registeredVia === 'v2' ? 'teal' : 'gray'}>
                       {worker.registeredVia || 'v1'}
                     </Badge>
+                  </Table.Td>
+                  <Table.Td>
+                    {runningByWorker.get(worker.workerId) ? (
+                      <Badge variant="light" color="blue">
+                        ● {runningByWorker.get(worker.workerId)} running
+                      </Badge>
+                    ) : (
+                      <Text c="dimmed">idle</Text>
+                    )}
                   </Table.Td>
                   <Table.Td>{worker.lastSeenAt ? formatDate(worker.lastSeenAt) : 'Never'}</Table.Td>
                   <Table.Td>
@@ -439,6 +466,7 @@ export function WorkersPage({ token }: { token: string }) {
                 <Table.Th>Name</Table.Th>
                 <Table.Th>Hostname</Table.Th>
                 <Table.Th>Status</Table.Th>
+                <Table.Th>Revoked</Table.Th>
               </Table.Tr>
             </Table.Thead>
             <Table.Tbody>
@@ -448,6 +476,11 @@ export function WorkersPage({ token }: { token: string }) {
                   <Table.Td>{worker.hostname || '—'}</Table.Td>
                   <Table.Td>
                     {worker.status === WorkerStatus.REJECTED ? 'Rejected' : 'Revoked'}
+                  </Table.Td>
+                  <Table.Td>
+                    {worker.status === WorkerStatus.REVOKED && worker.revokedAt
+                      ? formatDate(worker.revokedAt)
+                      : '—'}
                   </Table.Td>
                 </Table.Tr>
               ))}
@@ -613,6 +646,12 @@ export function WorkersPage({ token }: { token: string }) {
       >
         {activeAction && (
           <Stack gap="md">
+            {(runningByWorker.get(activeAction.worker.workerId) ?? 0) > 0 && (
+              <Alert color="orange">
+                Revoking will kill {runningByWorker.get(activeAction.worker.workerId)} live run(s) —
+                they'll fail and derive as lost.
+              </Alert>
+            )}
             <Text>
               Revoke access for <strong>{activeAction.worker.name}</strong>? This takes effect on
               their next request.

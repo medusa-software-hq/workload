@@ -1,6 +1,7 @@
 import { Tabs } from '@mantine/core';
 import { useState } from 'react';
 import { ProfilesPage } from './ProfilesPage.tsx';
+import { RunsPage } from './RunsPage.tsx';
 import { SignInWall } from './SignInWall.tsx';
 import { useAuth } from './useAuth.tsx';
 import { WorkersPage } from './WorkersPage.tsx';
@@ -13,6 +14,7 @@ function AuthenticatedApp({ token }: { token: string }) {
       <Tabs.List>
         <Tabs.Tab value="workers">Workers</Tabs.Tab>
         <Tabs.Tab value="profiles">Profiles</Tabs.Tab>
+        <Tabs.Tab value="runs">Runs</Tabs.Tab>
       </Tabs.List>
 
       <Tabs.Panel value="workers">
@@ -20,6 +22,9 @@ function AuthenticatedApp({ token }: { token: string }) {
       </Tabs.Panel>
       <Tabs.Panel value="profiles">
         <ProfilesPage token={token} />
+      </Tabs.Panel>
+      <Tabs.Panel value="runs">
+        <RunsPage token={token} />
       </Tabs.Panel>
     </Tabs>
   );
