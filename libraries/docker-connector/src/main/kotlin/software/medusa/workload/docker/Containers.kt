@@ -143,6 +143,33 @@ class ContainerApi internal constructor(private val engine: DockerEngine) {
     return response.decodeBody(engine.json, "container list")
   }
 
+  /**
+   * `POST /containers/prune` filtered to [labels]/[labelKeys] — removes **stopped** containers that
+   * carry every given label term. Prune never touches a running container, so this is safe to call
+   * mid-run: workload uses it to reap its own exited containers (`label=ms-workload.profile`)
+   * without disturbing a live run, its own or another's. Returns the ids removed and bytes freed.
+   */
+  suspend fun prune(
+      labels: Map<String, String> = emptyMap(),
+      labelKeys: List<String> = emptyList(),
+  ): ContainersPruneResult {
+    val labelTerms = labels.map { (k, v) -> "$k=$v" } + labelKeys
+    val params = QueryParams.builder()
+    if (labelTerms.isNotEmpty()) {
+      val filters =
+          engine.json.encodeToString(
+              MapSerializer(String.serializer(), ListSerializer(String.serializer())),
+              mapOf("label" to labelTerms),
+          )
+      params.add("filters", filters)
+    }
+    val query = params.build().toQueryString()
+    val path = engine.versionedPath("/containers/prune") + if (query.isNotEmpty()) "?$query" else ""
+    val response = engine.exchange(HttpMethod.POST, path)
+    response.ensureSuccess(engine.json)
+    return response.decodeBody(engine.json, "containers prune")
+  }
+
   /** `GET /containers/{id}/json` — minimal typed projection (state, exit code, config/labels). */
   suspend fun inspect(id: String): ContainerInspect {
     val response = engine.exchange(HttpMethod.GET, engine.versionedPath("/containers/$id/json"))

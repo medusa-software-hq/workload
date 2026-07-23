@@ -89,6 +89,13 @@ class DockerConnector(
     return response.decodeBody(json, "info")
   }
 
+  /** `GET /system/df` — disk-usage totals, for `workload prune`'s before/after summary (M7-00). */
+  suspend fun systemDf(): SystemDf {
+    val response = exchange(HttpMethod.GET, versionedPath("/system/df"))
+    response.ensureSuccess(json)
+    return response.decodeBody(json, "system df")
+  }
+
   override suspend fun versionedPath(path: String): String = "${versionPrefix()}$path"
 
   override suspend fun exchange(
