@@ -123,6 +123,49 @@ internal constructor(
     return response.decodeBody(engine.json, "image inspect")
   }
 
+  /**
+   * `GET /images/json` — every top-level local image (intermediate layers excluded, as the daemon
+   * defaults). Workload's ownership-scoped GC (M7-00) lists these to find superseded revisions of a
+   * repository via their [ImageSummary.repoDigests]; there is no server-side "which images does
+   * workload own" filter, so ownership is decided client-side off the repo the digest names.
+   */
+  suspend fun list(): List<ImageSummary> {
+    val response = engine.exchange(HttpMethod.GET, engine.versionedPath("/images/json"))
+    response.ensureSuccess(engine.json)
+    return response.decodeBody(engine.json, "image list")
+  }
+
+  /**
+   * `POST /images/{source}/tag` — adds a `[repo]:[tag]` reference to an existing local image
+   * [source] (an id or an existing ref). A general Engine primitive; workload's own run path
+   * doesn't tag, but the GC contract tests use it to stage several "revisions" of a repository on a
+   * real daemon without a registry.
+   */
+  suspend fun tag(source: String, repo: String, tag: String) {
+    val query = QueryParams.builder().add("repo", repo).add("tag", tag).build().toQueryString()
+    val response =
+        engine.exchange(HttpMethod.POST, engine.versionedPath("/images/$source/tag") + "?" + query)
+    response.ensureSuccess(engine.json)
+  }
+
+  /**
+   * `DELETE /images/{ref}` — [ref] is an image id (`sha256:...`), a `repo:tag`, or a `repo@digest`.
+   * Returns the daemon's untag/delete records.
+   *
+   * [force] defaults **false**, and workload's GC keeps it that way: the daemon refuses to delete
+   * an image still referenced by a container (or referenced under multiple repos) without force,
+   * answering `409 Conflict`. That refusal is exactly the "still in use — keep it" signal the GC
+   * wants; forcing would tear an image out from under a running container. Callers treat a
+   * [DockerApiException] here as "kept", never as a reason to retry with force.
+   */
+  suspend fun remove(ref: String, force: Boolean = false): List<ImageDeleteRecord> {
+    val query = QueryParams.builder().add("force", force.toString()).build().toQueryString()
+    val response =
+        engine.exchange(HttpMethod.DELETE, engine.versionedPath("/images/$ref") + "?" + query)
+    response.ensureSuccess(engine.json)
+    return response.decodeBody(engine.json, "image remove")
+  }
+
   private suspend fun kotlinx.coroutines.flow.FlowCollector<PullProgress>.emitRecord(line: String) {
     val error = runCatching { engine.json.decodeFromString<PullErrorRecord>(line) }.getOrNull()
     if (error?.error != null) {

@@ -100,6 +100,7 @@ private fun run(
                   ExecCommand(),
                   RunCommand(),
                   PsCommand(),
+                  PruneCommand(),
                   RegisterCommand(),
                   StatusCommand(),
                   UnregisterCommand(),

@@ -48,6 +48,69 @@ data class SystemInfo(
 /** The shape of a Docker daemon error body: `{"message": "..."}`. */
 @Serializable internal data class DaemonErrorBody(val message: String? = null)
 
+// --- Disk usage / GC (M7-00) ---
+
+/**
+ * `GET /system/df`, projected to just the counts + total image bytes a `workload prune`
+ * before/after summary needs. The [Entry] rows are deserialized as empty objects (all fields
+ * ignored) purely so `.size` gives a count without dragging in every field of the daemon's heavy
+ * `df` payload. [layersSize] is the deduplicated on-disk image size — the number that actually
+ * shrinks when GC removes a superseded revision's unshared layers.
+ */
+@Serializable
+data class SystemDf(
+    @SerialName("LayersSize") val layersSize: Long = 0,
+    @SerialName("Images") val images: List<Entry> = emptyList(),
+    @SerialName("Containers") val containers: List<Entry> = emptyList(),
+    @SerialName("Volumes") val volumes: List<Entry> = emptyList(),
+) {
+  /**
+   * A row we count but never read the fields of — [imageCount]/[containerCount] come off `.size`.
+   */
+  @Serializable class Entry
+
+  val imageCount: Int
+    get() = images.size
+
+  val containerCount: Int
+    get() = containers.size
+}
+
+/**
+ * One entry from `GET /images/json` — a top-level local image. [repoTags]/[repoDigests] are `null`
+ * (not `[]`) for a dangling image, so both are nullable. [id] is the image's config digest
+ * (`sha256:...`), the handle `DELETE /images/{id}` takes. Workload's ownership-scoped GC reads repo
+ * membership off [repoDigests] (a digest-pinned pull leaves a `repo@sha256:...` there).
+ */
+@Serializable
+data class ImageSummary(
+    @SerialName("Id") val id: String,
+    @SerialName("RepoTags") val repoTags: List<String>? = null,
+    @SerialName("RepoDigests") val repoDigests: List<String>? = null,
+    @SerialName("Size") val size: Long = 0,
+    @SerialName("Created") val created: Long = 0,
+)
+
+/** Response of `POST /containers/prune`: the ids reclaimed and bytes freed. */
+@Serializable
+data class ContainersPruneResult(
+    @SerialName("ContainersDeleted") val containersDeleted: List<String>? = null,
+    @SerialName("SpaceReclaimed") val spaceReclaimed: Long = 0,
+) {
+  val deletedCount: Int
+    get() = containersDeleted?.size ?: 0
+}
+
+/**
+ * One record from the `DELETE /images/{id}` response array. The daemon reports each reference it
+ * untagged and each layer it deleted as a separate `{"Untagged": ...}` / `{"Deleted": ...}` object.
+ */
+@Serializable
+data class ImageDeleteRecord(
+    @SerialName("Untagged") val untagged: String? = null,
+    @SerialName("Deleted") val deleted: String? = null,
+)
+
 // --- Containers (M3-02) ---
 
 /**
