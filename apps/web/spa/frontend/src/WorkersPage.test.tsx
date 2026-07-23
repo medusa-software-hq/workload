@@ -3,14 +3,17 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, test, vi } from 'vitest';
 import {
   type EnrollmentToken,
+  RunState,
   WorkerStatus,
   type Profile,
+  type Run,
   type Worker,
 } from './gen/medusa/workload/v1/fleet_service_pb.ts';
 
 const listWorkers = vi.fn();
 const listProfiles = vi.fn();
 const listEnrollmentTokens = vi.fn();
+const listRuns = vi.fn();
 const approveWorker = vi.fn();
 const rejectWorker = vi.fn();
 const revokeWorker = vi.fn();
@@ -24,6 +27,7 @@ vi.mock('@connectrpc/connect', () => ({
     listWorkers,
     listProfiles,
     listEnrollmentTokens,
+    listRuns,
     approveWorker,
     rejectWorker,
     revokeWorker,
@@ -85,6 +89,7 @@ beforeEach(() => {
   listWorkers.mockReset();
   listProfiles.mockReset();
   listEnrollmentTokens.mockReset();
+  listRuns.mockReset();
   approveWorker.mockReset();
   rejectWorker.mockReset();
   revokeWorker.mockReset();
@@ -94,6 +99,7 @@ beforeEach(() => {
   revokeEnrollmentToken.mockReset();
   listProfiles.mockResolvedValue({ profiles: [] });
   listEnrollmentTokens.mockResolvedValue({ enrollmentTokens: [] });
+  listRuns.mockResolvedValue({ runs: [] });
   approveWorker.mockResolvedValue({});
   rejectWorker.mockResolvedValue({});
   revokeWorker.mockResolvedValue({});
@@ -319,4 +325,49 @@ test('lists an outstanding enrollment token and revokes it', async () => {
       { headers: { Authorization: 'Bearer tok' } }
     );
   });
+});
+
+function fakeRun(overrides: Partial<Run> = {}): Run {
+  return {
+    runId: 'run-1',
+    workerId: 'worker-1',
+    workerName: 'tux',
+    profileId: 'flow-worker',
+    revision: 1,
+    kind: 1,
+    state: RunState.RUNNING,
+    exitCode: 0,
+    hasExitCode: false,
+    startedAt: '2026-01-01T00:00:00Z',
+    lastHeartbeatAt: '2026-01-01T00:00:00Z',
+    endedAt: '',
+    imageDigest: '',
+    ...overrides,
+  } as Run;
+}
+
+test('shows per-worker activity and warns before revoking a worker with live runs', async () => {
+  const user = userEvent.setup();
+  listWorkers.mockResolvedValue({
+    workers: [
+      fakeWorker({ status: WorkerStatus.ACTIVE, workerId: 'w-busy', name: 'busy-worker' }),
+      fakeWorker({ status: WorkerStatus.ACTIVE, workerId: 'w-idle', name: 'idle-worker' }),
+    ],
+  });
+  listRuns.mockResolvedValue({
+    runs: [
+      fakeRun({ workerId: 'w-busy', runId: 'r1' }),
+      fakeRun({ workerId: 'w-busy', runId: 'r2' }),
+    ],
+  });
+  render(<WorkersPage token="tok" />);
+
+  expect(await screen.findByText('busy-worker')).toBeInTheDocument();
+  expect(screen.getByText(/2 running/)).toBeInTheDocument();
+  expect(screen.getByText('idle')).toBeInTheDocument();
+
+  const busyRow = screen.getByText('busy-worker').closest('tr') as HTMLElement;
+  await user.click(within(busyRow).getByRole('button', { name: 'Revoke' }));
+  const dialog = await screen.findByRole('dialog');
+  expect(within(dialog).getByText(/will kill 2 live run/)).toBeInTheDocument();
 });

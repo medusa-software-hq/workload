@@ -11,6 +11,7 @@ import {
 
 const listProfiles = vi.fn();
 const listWorkers = vi.fn();
+const listRuns = vi.fn();
 const listProfileRevisions = vi.fn();
 const createProfile = vi.fn();
 const updateProfile = vi.fn();
@@ -25,6 +26,7 @@ vi.mock('@connectrpc/connect', async (importOriginal) => ({
   createClient: () => ({
     listProfiles,
     listWorkers,
+    listRuns,
     listProfileRevisions,
     createProfile,
     updateProfile,
@@ -80,6 +82,7 @@ function fakeRevision(overrides: Partial<ProfileRevision> = {}): ProfileRevision
 beforeEach(() => {
   listProfiles.mockReset();
   listWorkers.mockReset();
+  listRuns.mockReset();
   listProfileRevisions.mockReset();
   createProfile.mockReset();
   updateProfile.mockReset();
@@ -87,6 +90,7 @@ beforeEach(() => {
   verifyProfile.mockReset();
   resolveImage.mockReset();
   listWorkers.mockResolvedValue({ workers: [] });
+  listRuns.mockResolvedValue({ runs: [] });
   listProfileRevisions.mockResolvedValue({ revisions: [fakeRevision()] });
   createProfile.mockResolvedValue({});
   updateProfile.mockResolvedValue({});
