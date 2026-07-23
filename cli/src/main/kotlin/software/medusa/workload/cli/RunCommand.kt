@@ -302,6 +302,20 @@ class RunCommand : CliktCommand(name = "run") {
 
       pullImage(connector, pinnedRef, claim)
 
+      // Best-effort GC (M7-00): the new digest is pulled, so any older revision of this repo is now
+      // superseded. Reap our exited containers and sweep the old images before the run proceeds, so
+      // disk frees immediately even on a long-lived run. Failures only warn — never block the run.
+      runBlocking {
+        garbageCollectAfterRun(
+            connector,
+            env.configDir,
+            repositoryOf(image.ref),
+            image.digest,
+        ) {
+          echo(it, err = true)
+        }
+      }
+
       val exitCode = runContainerWithMetadata(connector, config, claim, pinnedRef, secretValues)
       throw ProgramResult(exitCode)
     }
@@ -435,6 +449,20 @@ class RunCommand : CliktCommand(name = "run") {
       reporter?.close()
       hook?.let { runCatching { Runtime.getRuntime().removeShutdownHook(it) } }
       runCatching { emulator.close() }
+      // Second GC pass at teardown (M7-00): our container has been removed, so its now-exited
+      // predecessor is reapable and this repo's superseded image sweepable. Best-effort.
+      runCatching {
+        runBlocking {
+          garbageCollectAfterRun(
+              connector,
+              env.configDir,
+              repositoryOf(pinnedRef),
+              pinnedRef.substringAfterLast('@'),
+          ) {
+            echo(it, err = true)
+          }
+        }
+      }
     }
   }
 
