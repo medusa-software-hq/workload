@@ -36,6 +36,14 @@ tasks.shadowJar {
   mergeServiceFiles()
 }
 
+// The shadow jar above claims the bare `hello-workload.jar` name (the Dockerfile copies it by that
+// exact path). The plain `jar` task defaults to the *same* path, so the `application` dist tasks
+// (distZip/distTar/startScripts) consume the shadow jar's output without a declared dependency —
+// which Gradle 9.4 rejects as an implicit-dependency error. The plain jar is unused (image and
+// `run` use the shadow jar), so give it a classifier to move it off the collided path. (The CLI
+// module sidesteps the same clash by giving its shadow jar a base name distinct from the module.)
+tasks.jar { archiveClassifier = "thin" }
+
 tasks.named("check") { dependsOn(tasks.named("ktfmtCheck")) }
 
 // One detekt config for every module in the repo.
