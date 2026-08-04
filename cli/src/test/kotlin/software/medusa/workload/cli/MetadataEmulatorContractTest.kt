@@ -16,21 +16,23 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * An [HttpTransport] that rewrites the hardcoded `metadata.google.internal` host to wherever the
- * emulator actually listens, over a plain [HttpURLConnection]. This is what the `GCE_METADATA_HOST`
- * env var does in production; doing it at the transport layer keeps the test from having to mutate
- * the JVM's environment (which JDK 21 makes deliberately hard), while still driving the *real*
- * google-auth client end to end. (google-http-client's own transports are final with protected
- * request builders, so we can neither subclass nor delegate — hence this minimal implementation,
- * sufficient for the metadata server's header-only GET requests.)
+ * An [HttpTransport] that routes every request to wherever the emulator actually listens, over a
+ * plain [HttpURLConnection] — this transport only ever reaches the metadata server. Rewriting here
+ * keeps the test from mutating the JVM's environment (which JDK 21 makes deliberately hard) while
+ * still driving the *real* google-auth client end to end. (google-http-client's own transports are
+ * final with protected request builders, so we can neither subclass nor delegate — hence this
+ * minimal implementation, sufficient for the metadata server's header-only GET requests.)
  */
-private class RewritingTransport(hostPort: String) : HttpTransport() {
-  private val mds = Regex("""http://metadata\.google\.internal\.?""")
-  private val replacement = "http://$hostPort"
-
+private class RewritingTransport(private val hostPort: String) : HttpTransport() {
   override fun buildRequest(method: String, url: String): LowLevelHttpRequest {
-    val conn =
-        URI.create(mds.replace(url, replacement)).toURL().openConnection() as HttpURLConnection
+    // Route every request to the emulator, whatever host google-auth targeted; keep path + query.
+    // google-auth uses `metadata.google.internal` only when `GCE_METADATA_HOST`/`GCE_METADATA_IP`
+    // are unset; the Flow worker sets them (Beacon), so google-auth uses that host instead —
+    // rewriting only the hardcoded host left the test non-hermetic, reaching the real metadata
+    // server inside the worker container.
+    val src = URI.create(url)
+    val rewritten = "http://$hostPort" + (src.rawPath ?: "") + (src.rawQuery?.let { "?$it" } ?: "")
+    val conn = URI.create(rewritten).toURL().openConnection() as HttpURLConnection
     conn.requestMethod = method
     return object : LowLevelHttpRequest() {
       override fun addHeader(name: String, value: String) = conn.addRequestProperty(name, value)
