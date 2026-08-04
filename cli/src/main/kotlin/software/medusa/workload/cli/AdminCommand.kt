@@ -13,6 +13,7 @@ import com.github.ajalt.clikt.parameters.options.required
 import com.github.ajalt.clikt.parameters.types.choice
 import com.github.ajalt.clikt.parameters.types.int
 import java.io.File
+import kotlinx.serialization.encodeToString
 
 // ---------------------------------------------------------------------------
 // Shared plumbing
@@ -547,6 +548,14 @@ class AdminRunsListCommand : AdminActionCommand(name = "list") {
       option("--interval", help = "Seconds between refreshes in --watch mode (default 2).")
           .int()
           .default(2)
+  private val asJson by
+      option(
+              "--json",
+              help =
+                  "Emit the matching runs as a JSON array instead of a table — for scripts (e.g. " +
+                      "'roll-worker' polling for idle). Incompatible with --watch.",
+          )
+          .flag()
 
   override fun help(context: Context) =
       "List runs. By default only in-flight runs (running or lost); --all includes finished ones."
@@ -555,6 +564,17 @@ class AdminRunsListCommand : AdminActionCommand(name = "list") {
     val client = client()
     val fetch = {
       runAdmin { client.listRuns(profileId = profileId, workerId = workerId, liveOnly = !all) }
+    }
+    if (asJson) {
+      if (watch) {
+        throw PrintMessage(
+            "--json is incompatible with --watch.",
+            statusCode = 1,
+            printError = true,
+        )
+      }
+      echo(runsJson.encodeToString(fetch()))
+      return
     }
     if (!watch) {
       echo(formatRunTable(fetch()))
