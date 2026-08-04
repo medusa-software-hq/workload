@@ -3,6 +3,8 @@ package software.medusa.workload.cli
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
 
 class AdminFormatTest {
   @Test
@@ -183,6 +185,24 @@ class AdminFormatTest {
     // lost run: no duration, no exit.
     val lostLine = table.lines().single { it.startsWith("r-3") }
     assertTrue(lostLine.contains("lost") && lostLine.trimEnd().endsWith("—"))
+  }
+
+  @Test
+  fun `runsJson round-trips a run for scripts like roll-worker`() {
+    val run =
+        AdminRun(
+            runId = "r-1",
+            workerId = "w-1",
+            workerName = "tux",
+            profileId = "flow-worker",
+            revision = 4,
+            kind = "RUN_KIND_RUN",
+            state = "RUN_STATE_RUNNING",
+            startedAt = "2026-07-22T10:00:00Z",
+        )
+    val encoded = runsJson.encodeToString(listOf(run))
+    assertEquals(listOf(run), runsJson.decodeFromString<List<AdminRun>>(encoded))
+    assertTrue(encoded.contains("\"state\":\"RUN_STATE_RUNNING\""))
   }
 
   @Test

@@ -37,6 +37,7 @@ management API — the same one the console SPA drives.
 | `workload admin profiles revoke <profile> <worker>` | Revokes a worker's grant of a profile. |
 | `workload admin workers list` | Lists all workers. |
 | `workload admin workers approve\|reject\|revoke <id>` | Moves a worker through its registration lifecycle. |
+| `workload admin runs list` | Lists in-flight runs (`--profile`/`--worker` to filter, `--all` for finished ones, `--watch` to poll, `--json` for scripts). |
 
 `profiles show --json` emits the same spec shape `create` / `update` accept, so
 the natural round-trip works:

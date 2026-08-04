@@ -109,3 +109,9 @@ tasks:
     deps:
       - web:app:run
       - api:impl:run
+
+  ops:rollWorker:
+    desc: "Bump the flow-worker profile for an env, wait for idle, and recycle the hosted worker (see ops/README.md)"
+    cmds:
+      - ops/roll-worker {{.CLI_ARGS}}
+    interactive: true

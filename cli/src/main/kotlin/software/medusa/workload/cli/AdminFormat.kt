@@ -31,6 +31,11 @@ val specJson = Json {
  */
 val specDecodeJson = Json { ignoreUnknownKeys = true }
 
+/**
+ * Compact JSON for machine consumption, e.g. `admin runs list --json` (scripts like roll-worker).
+ */
+val runsJson = Json { encodeDefaults = true }
+
 fun specFromRevision(revision: AdminProfileRevision): ProfileRevisionSpec =
     ProfileRevisionSpec(
         targetServiceAccount = revision.targetServiceAccount,

@@ -1,0 +1,205 @@
+#!/usr/bin/env bash
+#
+# roll-worker — the codified version of the manual per-env hosted-worker roll: bump the
+# flow-worker profile onto a digest, wait for the worker to go idle, then recycle it.
+#
+# Phase 0 of the automated-rollout epic (workload#126). This is the supported manual path — it
+# supersedes the ad-hoc "edit the profile digest by hand, SSH in, tmux kill + recreate" steps in
+# the hub's vm.md. Semi-automated and still human-initiated, but deterministic: the bump ->
+# wait-for-idle -> replace body below is deliberately the same loop a future reconciling agent
+# (Phase 3) will absorb, so keep it self-contained rather than folding steps into ad-hoc shell.
+#
+# See ops/README.md for the full runbook (host prerequisites, config, and what "recycle" does).
+#
+# Usage:
+#   roll-worker <env> [digest] [options]
+#
+# Arguments:
+#   env      staging | prod — which environment's flow-worker profile and hosted worker to roll.
+#   digest   Optional sha256:<hex> to pin the profile's image to. Omitted -> the profile's image
+#            tag is re-resolved fresh server-side (the "latest-published" digest) — the same
+#            resolution 'admin profiles update' always does when no digest is given.
+#
+# Options:
+#   --force              Skip the wait-for-idle poll and recycle immediately.
+#   --profile <id>       Profile to bump (default: flow-worker).
+#   --interval <secs>    Poll interval while waiting for idle (default: 15).
+#   --timeout <secs>     Give up waiting after this long, in seconds (default: 3600).
+#   -h, --help            Print this help and exit.
+#
+# Config (env vars):
+#   WORKLOAD_CLI               Path to the *local* workload CLI binary used for the admin calls
+#                               below (default: ms-workload, on PATH).
+#   ROLL_WORKER_SSH_HOST       Required. SSH host for the env's hosted worker (e.g. the value the
+#                               hub's inventory has on file for <env>'s flow-worker VM).
+#   ROLL_WORKER_SSH_USER       SSH user (default: current user).
+#   ROLL_WORKER_TMUX_SESSION   tmux session name running the worker loop (default: the profile).
+#   ROLL_WORKER_REMOTE_CLI     workload CLI binary name/path *on the worker host* that the
+#                               recycled tmux session runs (default: ms-workload — the standard
+#                               Homebrew-installed name; independent of WORKLOAD_CLI above).
+#
+# Requires: the workload CLI (authenticated — 'workload admin login' first), jq, ssh.
+
+set -euo pipefail
+
+script_name="$(basename "${BASH_SOURCE[0]}")"
+
+usage() {
+  sed -n '2,37p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+fail() {
+  echo "$script_name: $*" >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Arguments
+# ---------------------------------------------------------------------------
+
+env=""
+digest=""
+force=false
+profile="flow-worker"
+interval=15
+timeout=3600
+
+positional=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --force)
+      force=true
+      shift
+      ;;
+    --profile)
+      profile="${2:?--profile requires a value}"
+      shift 2
+      ;;
+    --interval)
+      interval="${2:?--interval requires a value}"
+      shift 2
+      ;;
+    --timeout)
+      timeout="${2:?--timeout requires a value}"
+      shift 2
+      ;;
+    --)
+      shift
+      positional+=("$@")
+      break
+      ;;
+    -*)
+      fail "unknown option: $1 (see --help)"
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+env="${positional[0]:-}"
+digest="${positional[1]:-}"
+
+[ -n "$env" ] || fail "usage: $script_name <env> [digest] [options] (see --help)"
+case "$env" in
+  staging | prod) ;;
+  *) fail "env must be 'staging' or 'prod', got '$env' — local has no hosted worker to roll." ;;
+esac
+
+if [ -n "$digest" ]; then
+  case "$digest" in
+    sha256:*) ;;
+    *) fail "digest must look like 'sha256:<hex>', got '$digest'." ;;
+  esac
+fi
+
+command -v jq >/dev/null 2>&1 || fail "jq is required."
+command -v ssh >/dev/null 2>&1 || fail "ssh is required."
+
+workload_cli="${WORKLOAD_CLI:-ms-workload}"
+command -v "$workload_cli" >/dev/null 2>&1 ||
+  fail "'$workload_cli' not found on PATH (set WORKLOAD_CLI to point at it)."
+
+ssh_host="${ROLL_WORKER_SSH_HOST:?ROLL_WORKER_SSH_HOST must name the $env hosted workers SSH host}"
+ssh_user="${ROLL_WORKER_SSH_USER:-${USER:-$(id -un)}}"
+tmux_session="${ROLL_WORKER_TMUX_SESSION:-$profile}"
+remote_cli="${ROLL_WORKER_REMOTE_CLI:-ms-workload}"
+
+export WORKLOAD_ENVIRONMENT="$env"
+workload() { "$workload_cli" "$@"; }
+
+echo "== roll-worker: $env / $profile =="
+
+# ---------------------------------------------------------------------------
+# 1. Bump — add a new profile revision pinned to $digest, or to a fresh resolve of the existing
+#    image tag ("latest-published") when no digest was given.
+# ---------------------------------------------------------------------------
+
+echo "[1/3] bumping $profile"
+
+spec_json="$(workload admin profiles show "$profile" --json)"
+
+if [ -n "$digest" ]; then
+  # Reference minus any existing @sha256:... or :tag suffix, then pinned to the requested digest.
+  spec_json="$(echo "$spec_json" | jq --arg digest "$digest" '.dockerImage |= (split("@")[0] | split(":")[0]) + "@" + $digest')"
+  echo "      pinning dockerImage to @$digest"
+else
+  echo "      re-resolving the current image tag (latest-published)"
+fi
+
+update_output="$(echo "$spec_json" | workload admin profiles update "$profile" -f -)"
+echo "$update_output" | sed 's/^/      /'
+
+new_digest="$(echo "$update_output" | sed -n 's/^ *pinned: *//p')"
+
+# ---------------------------------------------------------------------------
+# 2. Wait for idle — no RUN_STATE_RUNNING run against $profile in $env, unless --force.
+# ---------------------------------------------------------------------------
+
+if $force; then
+  echo "[2/3] --force: skipping the wait-for-idle poll"
+else
+  echo "[2/3] waiting for $profile to go idle (poll every ${interval}s, timeout ${timeout}s)"
+  waited=0
+  while true; do
+    running="$(workload admin runs list --profile "$profile" --json |
+      jq '[.[] | select(.state == "RUN_STATE_RUNNING")] | length')"
+    if [ "$running" -eq 0 ]; then
+      echo "      idle."
+      break
+    fi
+    if [ "$waited" -ge "$timeout" ]; then
+      fail "timed out after ${timeout}s waiting for $profile to go idle" \
+        "($running still running) — re-run with --force to recycle anyway."
+    fi
+    echo "      $running still running — waiting ${interval}s (${waited}s/${timeout}s elapsed)"
+    sleep "$interval"
+    waited=$((waited + interval))
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# 3. Replace — recycle the hosted worker so it re-claims the profile and picks up the new digest.
+#    This is the scripted form of "SSH in, tmux kill + recreate": kill the tmux session running
+#    the worker loop, then start a fresh detached one. `workload worker run` pulls the pinned
+#    digest fresh on every claim, so a plain restart is enough — no re-registration needed.
+# ---------------------------------------------------------------------------
+
+echo "[3/3] recycling the worker ($ssh_user@$ssh_host, tmux session '$tmux_session')"
+
+remote_cmd=$(
+  cat <<EOF
+set -euo pipefail
+tmux kill-session -t '$tmux_session' 2>/dev/null || true
+tmux new-session -d -s '$tmux_session' \
+  "while true; do $remote_cli worker run -p '$profile'; sleep 2; done"
+EOF
+)
+ssh "$ssh_user@$ssh_host" "$remote_cmd"
+
+echo "== done: $profile in $env now rolling onto ${new_digest:-the newly resolved digest} =="

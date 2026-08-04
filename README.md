@@ -157,6 +157,9 @@ Top-level, by role:
 - **`worker-mvp/`** — a deliberately throwaway, separately-managed slice of
   infra that exercises the broker flow end to end without touching the real
   backend.
+- **`ops/`** — operational scripts a human runs by hand against a real
+  environment (e.g. `roll-worker`, see `ops/README.md`), as opposed to `infra/`'s
+  declared Terraform state.
 
 Delivery is automated: CI validates every change and applies/deploys on merge to
 trunk, and the CLI is published as a release and a Homebrew formula so a worker
