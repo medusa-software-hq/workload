@@ -107,7 +107,45 @@ locals {
   version_drift_published_vs_desired_metric_type = "custom.googleapis.com/workload/version_drift/published_vs_desired"
 }
 
+# The alert policies below key off these custom metric types, but a custom metric only comes into
+# existence once something writes a point to it — here, the version-drift checker's first run, which
+# happens *after* this apply. Creating an alert policy that references a not-yet-existent metric fails
+# with a 404 ("Cannot find metric(s) that match type ..."). Declaring the descriptors up front — and
+# making the policies depend on them — guarantees the metric type exists at apply time. Shape mirrors
+# DriftMetricWriter.kt: a 0/1 INT64 GAUGE labeled by profile_id.
+resource "google_monitoring_metric_descriptor" "version_drift_desired_vs_running" {
+  project      = var.gcp_project_id
+  type         = local.version_drift_desired_vs_running_metric_type
+  metric_kind  = "GAUGE"
+  value_type   = "INT64"
+  display_name = "Version drift: desired vs running"
+  description  = "1 when a live run reports an image digest other than its profile's pinned digest, else 0."
+
+  labels {
+    key         = "profile_id"
+    value_type  = "STRING"
+    description = "The Workload profile the drift was observed on."
+  }
+}
+
+resource "google_monitoring_metric_descriptor" "version_drift_published_vs_desired" {
+  project      = var.gcp_project_id
+  type         = local.version_drift_published_vs_desired_metric_type
+  metric_kind  = "GAUGE"
+  value_type   = "INT64"
+  display_name = "Version drift: published vs desired"
+  description  = "1 when a newer image is published than the profile's pinned (desired) digest, else 0."
+
+  labels {
+    key         = "profile_id"
+    value_type  = "STRING"
+    description = "The Workload profile the drift was observed on."
+  }
+}
+
 resource "google_monitoring_alert_policy" "version_drift_running_stale" {
+  depends_on = [google_monitoring_metric_descriptor.version_drift_desired_vs_running]
+
   project      = var.gcp_project_id
   display_name = "Version drift: worker(s) stuck on a non-desired image"
   combiner     = "OR"
@@ -163,6 +201,8 @@ resource "google_monitoring_alert_policy" "version_drift_running_stale" {
 }
 
 resource "google_monitoring_alert_policy" "version_drift_published_unrolled" {
+  depends_on = [google_monitoring_metric_descriptor.version_drift_published_vs_desired]
+
   project      = var.gcp_project_id
   display_name = "Version drift: image published but not rolled into a profile"
   combiner     = "OR"
