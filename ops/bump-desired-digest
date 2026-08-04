@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+#
+# bump-desired-digest — pin a profile's docker_image to an exact digest. The "CI-push" half of the
+# automated-rollout epic (workload#126 Phase 2): Flow's CI runs this immediately after publishing a
+# worker image, authenticated as a profile-scoped service principal (see infra's
+# ADMIN_SERVICE_ACCOUNTS scoping and GooglePrincipalVerifier), so "merged -> published" becomes
+# "this is the desired digest" with no human action. The staging soak gate (ops/soak-gate-flow-worker)
+# also calls this, to advance prod once staging has proven a digest.
+#
+# Unlike ops/roll-worker, this ONLY bumps the profile revision — it never waits for idle or recycles
+# a host. Convergence onto the new desired digest is the agent/roll path's job: ops/roll-worker for
+# a human-initiated roll today, a future reconciling agent (Phase 3) once that lands. Keeping this
+# script to "just the bump" is what lets a CI principal be scoped to UpdateProfile alone, with no
+# SSH/host access at all.
+#
+# Usage:
+#   bump-desired-digest <env> <digest> [options]
+#
+# Arguments:
+#   env      staging | prod — which environment's profile to bump.
+#   digest   sha256:<hex> — required. A CI-driven bump always pins an exact digest it already knows
+#            (what it just published, or what the soak gate just proved) — never "re-resolve the
+#            tag fresh", which is fine for a human running roll-worker but too ambiguous for an
+#            unattended push.
+#
+# Options:
+#   --profile <id>           Profile to bump (default: flow-worker).
+#   --drain-deadline <dur>   Set drain_deadline on the new revision (e.g. "6h"). Omitted carries
+#                             forward the profile's current drain_deadline unchanged.
+#   -h, --help                Print this help and exit.
+#
+# Config (env vars):
+#   WORKLOAD_CLI   Path to the *local* workload CLI binary (default: ms-workload, on PATH).
+#
+# Auth: this script does not choose an auth method — whatever's ambient when it runs applies. A CI
+# caller should set WORKLOAD_AUTH_METHOD=sa (see cli/README.md, AdminServiceAuth.kt) so the CLI
+# mints an ID token from the caller's WIF/ADC credential instead of expecting a cached human sign-in.
+#
+# Requires: the workload CLI (authenticated), jq.
+
+set -euo pipefail
+
+script_name="$(basename "${BASH_SOURCE[0]}")"
+
+usage() {
+  sed -n '2,34p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+fail() {
+  echo "$script_name: $*" >&2
+  exit 1
+}
+
+env=""
+digest=""
+profile="flow-worker"
+drain_deadline=""
+
+positional=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --profile)
+      profile="${2:?--profile requires a value}"
+      shift 2
+      ;;
+    --drain-deadline)
+      drain_deadline="${2:?--drain-deadline requires a value}"
+      shift 2
+      ;;
+    --)
+      shift
+      positional+=("$@")
+      break
+      ;;
+    -*)
+      fail "unknown option: $1 (see --help)"
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+env="${positional[0]:-}"
+digest="${positional[1]:-}"
+
+[ -n "$env" ] || fail "usage: $script_name <env> <digest> [options] (see --help)"
+case "$env" in
+  staging | prod) ;;
+  *) fail "env must be 'staging' or 'prod', got '$env'." ;;
+esac
+
+[ -n "$digest" ] || fail "digest is required — usage: $script_name <env> <digest> [options]"
+case "$digest" in
+  sha256:*) ;;
+  *) fail "digest must look like 'sha256:<hex>', got '$digest'." ;;
+esac
+
+command -v jq >/dev/null 2>&1 || fail "jq is required."
+
+workload_cli="${WORKLOAD_CLI:-ms-workload}"
+command -v "$workload_cli" >/dev/null 2>&1 ||
+  fail "'$workload_cli' not found on PATH (set WORKLOAD_CLI to point at it)."
+
+export WORKLOAD_ENVIRONMENT="$env"
+workload() { "$workload_cli" "$@"; }
+
+echo "== bump-desired-digest: $env / $profile -> $digest =="
+
+spec_json="$(workload admin profiles show "$profile" --json)"
+
+# Reference minus any existing @sha256:... or :tag suffix, then pinned to the requested digest —
+# same rewrite roll-worker's bump step does.
+spec_json="$(echo "$spec_json" | jq --arg digest "$digest" '.dockerImage |= (split("@")[0] | split(":")[0]) + "@" + $digest')"
+
+if [ -n "$drain_deadline" ]; then
+  spec_json="$(echo "$spec_json" | jq --arg dd "$drain_deadline" '.drainDeadline = $dd')"
+fi
+
+update_output="$(echo "$spec_json" | workload admin profiles update "$profile" -f -)"
+echo "$update_output" | sed 's/^/      /'
+
+echo "== done: $profile in $env now desires $digest =="

@@ -18,6 +18,8 @@ data class ProfileRevisionSpec(
     val dockerImage: String = "",
     val envVars: Map<String, String> = emptyMap(),
     val secretEnvVars: Map<String, String> = emptyMap(),
+    // Payload-declared stop timeout `D` (e.g. "6h"); empty means "not declared".
+    val drainDeadline: String = "",
 )
 
 /** Pretty JSON for the round-trippable spec; encodeDefaults so empty maps/strings stay visible. */
@@ -43,6 +45,7 @@ fun specFromRevision(revision: AdminProfileRevision): ProfileRevisionSpec =
         dockerImage = revision.dockerImage,
         envVars = revision.envVars,
         secretEnvVars = revision.secretEnvVars,
+        drainDeadline = revision.drainDeadline,
     )
 
 /**

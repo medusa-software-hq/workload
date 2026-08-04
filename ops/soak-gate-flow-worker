@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+#
+# soak-gate-flow-worker — advance prod's desired digest to staging's, but only once staging has
+# proven it. The prod half of the automated-rollout epic's CI-push phase (workload#126 Phase 2):
+# ops/bump-desired-digest lets CI move staging's desired digest the instant an image is published,
+# with no human action; this script is the gate that keeps that same speed from reaching prod
+# unchecked. Meant to run on a schedule (see .github/workflows/soak-gate-flow-worker.yml) — it is
+# idempotent and safe to run as often as you like, including alongside a human `ops/roll-worker`.
+#
+# What "soaked" means: staging's current desired digest (the profile's pinned docker_image_digest,
+# not what any one worker happens to be running) has at least N runs that reached
+# RUN_STATE_SUCCEEDED at that exact digest within the trailing WINDOW, and zero "crashloop" runs —
+# a run at that digest that reached RUN_STATE_FAILED within CRASHLOOP_SECONDS of starting — in that
+# same window. A single fast failure anywhere in the window blocks promotion outright, regardless of
+# how many successes surround it; it does not just subtract from the count.
+#
+# Usage:
+#   soak-gate-flow-worker [options]
+#
+# Options:
+#   --profile <id>            Profile to gate (default: flow-worker).
+#   --n <count>                Successful sessions required (default: 3).
+#   --window-hours <hours>     Trailing window to look for runs in (default: 4).
+#   --crashloop-seconds <s>    A FAILED run that ended within this many seconds of starting counts
+#                               as a crashloop signal (default: 120).
+#   --dry-run                  Report the verdict; never calls bump-desired-digest.
+#   --check-only                Report the verdict as `soaked=<bool>` / `digest=<digest>` lines
+#                                (also appended to $GITHUB_OUTPUT if set) and exit — skip reading
+#                                or writing prod entirely. For a CI job that can't hold staging and
+#                                prod credentials at once (each environment is its own GCP project;
+#                                see the workflow): it authenticates as staging's reader, runs this,
+#                                then switches to prod's writer for a separate promote step.
+#   -h, --help                  Print this help and exit.
+#
+# Config (env vars):
+#   WORKLOAD_CLI   Path to the workload CLI binary (default: ms-workload, on PATH).
+#
+# Auth: reads staging, writes prod — both via the ambient credential when this runs (set
+# WORKLOAD_AUTH_METHOD=sa for an unattended/CI run; see ops/bump-desired-digest and
+# cli/README.md). The scoped CI principal driving this only needs UpdateProfile on `flow-worker` in
+# prod and read access in staging — see infra's ADMIN_SERVICE_ACCOUNTS scoping. Without --check-only
+# this assumes one credential valid for both (fine for a human's Workspace sign-in — the admin plane
+# doesn't split humans by environment — not fine for a single-SA CI job; see --check-only above).
+#
+# Requires: the workload CLI (authenticated for both staging and prod), jq, date (GNU coreutils).
+
+set -euo pipefail
+
+script_name="$(basename "${BASH_SOURCE[0]}")"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+  sed -n '2,32p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+fail() {
+  echo "$script_name: $*" >&2
+  exit 1
+}
+
+profile="flow-worker"
+required_successes=3
+window_hours=4
+crashloop_seconds=120
+dry_run=false
+check_only=false
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --profile)
+      profile="${2:?--profile requires a value}"
+      shift 2
+      ;;
+    --n)
+      required_successes="${2:?--n requires a value}"
+      shift 2
+      ;;
+    --window-hours)
+      window_hours="${2:?--window-hours requires a value}"
+      shift 2
+      ;;
+    --crashloop-seconds)
+      crashloop_seconds="${2:?--crashloop-seconds requires a value}"
+      shift 2
+      ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    --check-only)
+      check_only=true
+      shift
+      ;;
+    *)
+      fail "unknown argument: $1 (see --help)"
+      ;;
+  esac
+done
+
+command -v jq >/dev/null 2>&1 || fail "jq is required."
+command -v date >/dev/null 2>&1 || fail "date is required."
+
+workload_cli="${WORKLOAD_CLI:-ms-workload}"
+command -v "$workload_cli" >/dev/null 2>&1 ||
+  fail "'$workload_cli' not found on PATH (set WORKLOAD_CLI to point at it)."
+
+workload() { "$workload_cli" "$@"; }
+
+echo "== soak-gate-flow-worker: $profile (N=$required_successes, window=${window_hours}h, crashloop<${crashloop_seconds}s) =="
+
+# ---------------------------------------------------------------------------
+# 1. What does staging currently desire, and what does prod currently desire?
+# ---------------------------------------------------------------------------
+
+candidate_digest="$(WORKLOAD_ENVIRONMENT=staging workload admin profiles show "$profile" --status-json |
+  jq -r '.dockerImageDigest')"
+
+if [ -z "$candidate_digest" ] || [ "$candidate_digest" = "null" ]; then
+  echo "      staging's $profile has no resolved digest yet — nothing to soak. Exiting."
+  exit 0
+fi
+
+if $check_only; then
+  echo "      staging desires: $candidate_digest"
+else
+  prod_digest="$(WORKLOAD_ENVIRONMENT=prod workload admin profiles show "$profile" --status-json |
+    jq -r '.dockerImageDigest')"
+
+  echo "      staging desires: $candidate_digest"
+  echo "      prod desires:     ${prod_digest:-<none>}"
+
+  if [ "$candidate_digest" = "$prod_digest" ]; then
+    echo "== done: prod already matches staging — nothing to promote =="
+    exit 0
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 2. Has staging's candidate digest soaked: >= N successful RUN sessions at that digest in the
+#    trailing window, and zero crashloop signals at that digest in the same window?
+# ---------------------------------------------------------------------------
+
+cutoff="$(date -u -d "-${window_hours} hours" +%Y-%m-%dT%H:%M:%SZ)"
+echo "      window cutoff (UTC): $cutoff"
+
+runs_json="$(WORKLOAD_ENVIRONMENT=staging workload admin runs list --profile "$profile" --json)"
+
+# Normalize away sub-second fractions (Instant.toString() emits them; jq's fromdateiso8601 doesn't
+# parse them) before comparing/filtering by time.
+verdict="$(
+  echo "$runs_json" | jq \
+    --arg digest "$candidate_digest" \
+    --arg cutoff "$cutoff" \
+    --argjson crashloopSeconds "$crashloop_seconds" \
+    --argjson requiredSuccesses "$required_successes" '
+    def norm: sub("\\.[0-9]+Z$"; "Z");
+    def epoch: norm | fromdateiso8601;
+    [ .[] | select(.kind == "RUN_KIND_RUN" and .imageDigest == $digest and (.startedAt | epoch) >= ($cutoff | epoch)) ] as $inWindow |
+    ([ $inWindow[] | select(.state == "RUN_STATE_SUCCEEDED") ] | length) as $successes |
+    ([ $inWindow[] | select(.state == "RUN_STATE_FAILED" and .endedAt != "" and ((.endedAt | epoch) - (.startedAt | epoch)) < $crashloopSeconds) ] | length) as $crashloopCount |
+    {
+      successes: $successes,
+      crashloopCount: $crashloopCount,
+      soaked: ($crashloopCount == 0 and $successes >= $requiredSuccesses)
+    }
+  '
+)"
+
+successes="$(echo "$verdict" | jq -r '.successes')"
+crashloop_count="$(echo "$verdict" | jq -r '.crashloopCount')"
+soaked="$(echo "$verdict" | jq -r '.soaked')"
+
+echo "      successful sessions in window: $successes (need $required_successes)"
+echo "      crashloop signals in window:   $crashloop_count (must be 0)"
+
+if $check_only; then
+  {
+    echo "soaked=$soaked"
+    echo "digest=$candidate_digest"
+  } | tee -a "${GITHUB_OUTPUT:-/dev/null}"
+  exit 0
+fi
+
+if [ "$soaked" != "true" ]; then
+  echo "== not yet soaked: prod stays at ${prod_digest:-<none>} =="
+  exit 0
+fi
+
+echo "      soaked."
+
+if $dry_run; then
+  echo "== --dry-run: would promote prod's $profile to $candidate_digest =="
+  exit 0
+fi
+
+echo "[promoting] prod's $profile -> $candidate_digest"
+"$script_dir/bump-desired-digest" prod "$candidate_digest" --profile "$profile"
+
+echo "== done: prod's $profile now desires $candidate_digest =="

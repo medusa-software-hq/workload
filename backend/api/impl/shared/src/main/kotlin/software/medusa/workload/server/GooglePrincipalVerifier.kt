@@ -29,7 +29,10 @@ private val googleIssuers = setOf("https://$googleAccountsHostname", googleAccou
  * - **[Principal.Service]**: no `hd` (service-account tokens carry none), `aud` = [serviceAudience]
  *   (this API's own URL — what a WIF/ADC-minted ID token names), AND `email` ∈
  *   [serviceAccountAllowlist]. The audience *and* the allowlist must both match, so a token minted
- *   for a different environment's API URL, or from an un-listed SA, is rejected.
+ *   for a different environment's API URL, or from an un-listed SA, is rejected. The allowlist's
+ *   value per email is that principal's [Principal.Service.allowedProfileIds] scope — `null` for an
+ *   unrestricted admin SA, a non-null set for a profile-scoped one (workload#126 Phase 2's CI
+ *   principal).
  *
  * Anything else → `null`. The order matters only in that a real human token (which has `hd`) can
  * never satisfy the service branch and vice versa, so the two are disjoint.
@@ -39,7 +42,7 @@ internal constructor(
     private val humanAudiences: Set<String>,
     private val allowedDomain: String,
     private val serviceAudience: String?,
-    private val serviceAccountAllowlist: Set<String>,
+    private val serviceAccountAllowlist: Map<String, Set<String>?>,
     jwkSource: JWKSource<SecurityContext>,
 ) {
 
@@ -48,7 +51,7 @@ internal constructor(
       humanAudiences: Set<String>,
       allowedDomain: String,
       serviceAudience: String?,
-      serviceAccountAllowlist: Set<String>,
+      serviceAccountAllowlist: Map<String, Set<String>?>,
   ) : this(
       humanAudiences,
       allowedDomain,
@@ -104,12 +107,8 @@ internal constructor(
 
     // Service: audience is this API's own URL and the SA is on the allowlist. SA tokens carry no
     // `hd`, so the two branches never overlap.
-    if (
-        serviceAudience != null &&
-            audiences.contains(serviceAudience) &&
-            email in serviceAccountAllowlist
-    ) {
-      return Principal.Service(email)
+    if (serviceAudience != null && audiences.contains(serviceAudience) && email in serviceAccountAllowlist) {
+      return Principal.Service(email, allowedProfileIds = serviceAccountAllowlist.getValue(email))
     }
 
     return null

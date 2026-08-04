@@ -16,6 +16,22 @@ private const val databaseUrlEnvVarName = "DATABASE_URL"
 
 private const val tokenLifetimeSecondsEnvVarName = "TOKEN_LIFETIME_SECONDS"
 
+/**
+ * Parses [adminServiceAccountsEnvVarName]'s comma-separated value into an allowlist: each entry is
+ * either a bare `email` (unrestricted admin, null scope) or `email=profile1|profile2` (restricted to
+ * UpdateProfile on only those profile_ids). Blank/unset input yields an empty map — no SA accepted.
+ */
+internal fun parseAdminServiceAccountAllowlist(raw: String?): Map<String, Set<String>?> =
+    raw
+        ?.split(",")
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
+        ?.associate { entry ->
+          val (email, scope) = entry.split("=", limit = 2).let { it[0] to it.getOrNull(1) }
+          email to scope?.split("|")?.map { it.trim() }?.filter { it.isNotEmpty() }?.toSet()
+        }
+        .orEmpty()
+
 fun main() {
   val port =
       System.getenv(portEnvVarName)?.toIntOrNull()
@@ -40,13 +56,10 @@ fun main() {
   val serviceAudience = System.getenv(serviceAudienceEnvVarName)?.takeIf { it.isNotBlank() }
 
   // Allow-listed admin service accounts, comma-separated. Empty (or unset) means no SA is accepted.
-  val adminServiceAccounts =
-      System.getenv(adminServiceAccountsEnvVarName)
-          ?.split(",")
-          ?.map { it.trim() }
-          ?.filter { it.isNotEmpty() }
-          ?.toSet()
-          .orEmpty()
+  // Each entry is either a bare email (unrestricted admin) or `email=profile1|profile2` (scoped to
+  // UpdateProfile on only those profile_ids — workload#126 Phase 2's CI-push principal, e.g. a Flow
+  // CI SA scoped to just `flow-worker`).
+  val adminServiceAccounts = parseAdminServiceAccountAllowlist(System.getenv(adminServiceAccountsEnvVarName))
 
   val corsOriginRegex =
       System.getenv(corsOriginRegexEnvVarName)

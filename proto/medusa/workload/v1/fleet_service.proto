@@ -219,6 +219,11 @@ message ProfileRevision {
   string docker_image_digest = 11;
   // Resolution verdict for docker_image.
   ImageStatus image_status = 12;
+  // Payload-declared stop timeout `D`: how long the supervisor waits after SIGTERM before it force-
+  // kills a workload running this revision (e.g. "6h" for the Flow worker). Empty means "no declared
+  // drain deadline" — the supervisor's own default applies. Free-form duration string (e.g. "90m",
+  // "6h"); the supervisor owns parsing, not this API (see the flow SIGTERM-drain contract).
+  string drain_deadline = 13;
 }
 
 message ListProfilesRequest {}
@@ -241,6 +246,8 @@ message CreateProfileRequest {
   // when it no longer resolves to this digest — so the admin can only ever pin the exact digest they
   // previewed. Empty means "resolve fresh, no check" (e.g. non-console clients).
   string expected_docker_image_digest = 8;
+  // See ProfileRevision.drain_deadline. Empty means "no declared drain deadline".
+  string drain_deadline = 9;
 }
 
 message CreateProfileResponse {
@@ -258,6 +265,8 @@ message UpdateProfileRequest {
   string docker_image = 6;
   // Compare-and-swap token; see CreateProfileRequest.expected_docker_image_digest.
   string expected_docker_image_digest = 7;
+  // See ProfileRevision.drain_deadline. Empty means "no declared drain deadline".
+  string drain_deadline = 8;
 }
 
 message ResolveImageRequest {

@@ -32,13 +32,14 @@ class GooglePrincipalVerifierTest {
   private val domain = "medusa.software"
   private val apiUrl = "https://api.workload-baseline.medusa.software"
   private val ciSa = "workload-ci-admin@ms-workload.iam.gserviceaccount.com"
+  private val flowCiSa = "flow-ci@ms-workload.iam.gserviceaccount.com"
 
   private val verifier =
       GooglePrincipalVerifier(
           humanAudiences = setOf(spaClient, cliClient),
           allowedDomain = domain,
           serviceAudience = apiUrl,
-          serviceAccountAllowlist = setOf(ciSa),
+          serviceAccountAllowlist = mapOf(ciSa to null, flowCiSa to setOf("flow-worker")),
           jwkSource = jwkSource,
       )
 
@@ -137,6 +138,14 @@ class GooglePrincipalVerifierTest {
   fun `rejects a service-audience token whose email is not allow-listed`() {
     assertNull(
         verifier.verify(mint(audience = apiUrl, hd = null, email = "nobody@medusa.software"))
+    )
+  }
+
+  @Test
+  fun `accepts a profile-scoped SA and carries its scope on the principal`() {
+    assertEquals(
+        Principal.Service(flowCiSa, allowedProfileIds = setOf("flow-worker")),
+        verifier.verify(mint(audience = apiUrl, hd = null, email = flowCiSa)),
     )
   }
 

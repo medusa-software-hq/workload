@@ -1,0 +1,90 @@
+name: Soak-gate flow-worker
+
+# The prod half of the automated-rollout epic's CI-push phase (workload#126 Phase 2): staging's
+# desired digest moves the instant CI publishes an image (ops/bump-desired-digest, called from Flow's
+# own CI — not this repo); prod only follows once that digest has *soaked* on staging — N
+# successfully-completed sessions, no crashloop, over a trailing window (see
+# ops/soak-gate-flow-worker for the exact definition and the N/window/crashloop-threshold defaults).
+#
+# Scheduled rather than event-triggered because "has it soaked yet" is a question about elapsed time,
+# not a single event — every 15 minutes is frequent enough to promote soon after the window closes
+# without hammering either environment's admin API. Idempotent: reading staging and (only if soaked
+# and different) writing prod, safe to run concurrently with a human ops/roll-worker or itself.
+#
+# Two identities, one per environment — same boundary the existing s2s admin principal (M5-05,
+# workload-ci-admin) already draws: each environment is its own GCP project with its own service
+# accounts, so a credential minted in one is never even impersonable against the other's WIF pool,
+# let alone accepted by its API. GCP_SOAK_GATE_SA_EMAIL_STAGING only needs read access there;
+# GCP_SOAK_GATE_SA_EMAIL_PROD must be scoped to flow-worker in prod's ADMIN_SERVICE_ACCOUNTS
+# (`...=flow-worker` shape — see GooglePrincipalVerifier / parseAdminServiceAccountAllowlist) so a
+# compromised soak-gate credential can only ever touch that one profile in prod.
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Report the verdict only; never promote prod."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+
+jobs:
+  soak-gate:
+    name: Soak-gate flow-worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      # Built from source rather than fetched from the workload-releases GitHub App flow (see
+      # publish-cli.yml) — this job only needs `admin` commands over SA auth, so it doesn't need the
+      # OAuth client secrets publish-cli.yml bakes in, and building here avoids the cross-repo release
+      # download entirely.
+      - name: Build the CLI
+        run: |
+          ./gradlew :cli:shadowJar
+          echo "WORKLOAD_JAR=$GITHUB_WORKSPACE/cli/build/libs/workload-cli.jar" >> "$GITHUB_ENV"
+
+      - name: Wrap the jar as a workload-cli executable
+        run: |
+          cat > /tmp/ms-workload <<'EOF'
+          #!/usr/bin/env bash
+          exec java -jar "$WORKLOAD_JAR" "$@"
+          EOF
+          chmod +x /tmp/ms-workload
+          echo "/tmp" >> "$GITHUB_PATH"
+          echo "WORKLOAD_CLI=ms-workload" >> "$GITHUB_ENV"
+          echo "WORKLOAD_AUTH_METHOD=sa" >> "$GITHUB_ENV"
+
+      # A repository-level (not per-environment) identity and WIF provider on purpose — this job
+      # legitimately talks to both environments in one run, unlike the promotion chains. Writes ADC
+      # that AdminServiceAuth.kt's ambient-credential path picks up for every `workload admin` call
+      # below, minting a fresh per-call ID token audienced to whichever environment is active.
+      - name: Authenticate (WIF)
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_SOAK_GATE_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_SOAK_GATE_SA_EMAIL }}
+
+      - name: Check the soak gate and promote prod if it passes
+        run: ./ops/soak-gate-flow-worker ${{ inputs.dry_run == true && '--dry-run' || '' }}

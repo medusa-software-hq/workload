@@ -147,6 +147,9 @@ private fun CliktCommand.echoRevisionResult(
     if (revision.dockerImageDigest.isNotBlank())
         lines.add("  pinned: ${revision.dockerImageDigest}")
   }
+  if (revision.drainDeadline.isNotBlank()) {
+    lines.add("  drain deadline: ${revision.drainDeadline}")
+  }
   echo(lines.joinToString("\n"))
 }
 
@@ -240,6 +243,16 @@ class AdminProfilesShowCommand : AdminActionCommand(name = "show") {
   private val asJson by
       option("--json", help = "Emit the create/update spec for the selected revision as JSON")
           .flag()
+  private val asStatusJson by
+      option(
+              "--status-json",
+              help =
+                  "Emit the full revision status (incl. resolved docker_image_digest, " +
+                      "drain_deadline, verification) as JSON. Read-only — not a valid create/update " +
+                      "spec (see --json for that). For tooling that reads desired state, e.g. the " +
+                      "staging soak gate.",
+          )
+          .flag()
 
   override fun help(context: Context) = "Show a profile's revision detail (latest by default)."
 
@@ -265,7 +278,9 @@ class AdminProfilesShowCommand : AdminActionCommand(name = "show") {
           revisions.last()
         }
 
-    if (asJson) {
+    if (asStatusJson) {
+      echo(runsJson.encodeToString(selected))
+    } else if (asJson) {
       echo(specJson.encodeToString(specFromRevision(selected)))
     } else {
       echo(
@@ -821,6 +836,7 @@ internal fun formatRevisionDetail(
     field("  status", shortEnum(revision.imageStatus))
     if (revision.dockerImageDigest.isNotBlank()) field("  pinned", revision.dockerImageDigest)
   }
+  field("Drain deadline", revision.drainDeadline.ifBlank { "—" })
   field("Note", revision.note.ifBlank { "—" })
   field(
       "Created",

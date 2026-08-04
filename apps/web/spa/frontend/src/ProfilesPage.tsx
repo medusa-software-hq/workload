@@ -637,6 +637,8 @@ function RevisionView({
         )}
       </DetailField>
 
+      <DetailField label="Drain deadline">{revision.drainDeadline || '—'}</DetailField>
+
       <DetailField label="Env vars">
         <ReadOnlyVars vars={revision.envVars} emptyLabel="None" />
       </DetailField>
@@ -660,6 +662,7 @@ type EditState = {
   currentEnvVars: Record<string, string>;
   currentSecretEnvVars: Record<string, string>;
   currentDockerImage: string;
+  currentDrainDeadline: string;
   currentVerificationStatus: VerificationStatus;
   currentImageStatus: ImageStatus;
 } | null;
@@ -772,6 +775,7 @@ export function ProfilesPage({ token }: { token: string }) {
       currentEnvVars: revision.envVars,
       currentSecretEnvVars: revision.secretEnvVars,
       currentDockerImage: revision.dockerImage,
+      currentDrainDeadline: revision.drainDeadline,
       currentVerificationStatus: revision.verificationStatus,
       currentImageStatus: revision.imageStatus,
     });
@@ -1099,6 +1103,7 @@ function CreateProfileModal({
   const [targetServiceAccount, setTargetServiceAccount] = useState('');
   const [note, setNote] = useState('');
   const [dockerImage, setDockerImage] = useState('');
+  const [drainDeadline, setDrainDeadline] = useState('');
   const [profileIdError, setProfileIdError] = useState<string | null>(null);
   const [serviceAccountError, setServiceAccountError] = useState<string | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
@@ -1113,6 +1118,7 @@ function CreateProfileModal({
     setTargetServiceAccount('');
     setNote('');
     setDockerImage('');
+    setDrainDeadline('');
     setProfileIdError(null);
     setServiceAccountError(null);
     setImageError(null);
@@ -1140,6 +1146,7 @@ function CreateProfileModal({
           dockerImage: dockerImage.trim(),
           // Pin exactly the digest the preview showed; the backend rejects if the tag moved since.
           expectedDockerImageDigest: previewDigest(imagePreview),
+          drainDeadline: drainDeadline.trim(),
           envVars: rowsToRecord(envVars),
           secretEnvVars: rowsToRecord(secretEnvVars),
         },
@@ -1207,6 +1214,13 @@ function CreateProfileModal({
           />
           <ImagePreviewLine preview={imagePreview} />
         </Stack>
+        <TextInput
+          label="Drain deadline"
+          description="Optional. Stop timeout the supervisor passes on SIGTERM, e.g. 6h."
+          placeholder="6h"
+          value={drainDeadline}
+          onChange={(e) => setDrainDeadline(e.currentTarget.value)}
+        />
         <EnvVarRowsEditor
           label="Env vars"
           rows={envVars}
@@ -1251,6 +1265,7 @@ function EditProfileModal({
   const [targetServiceAccount, setTargetServiceAccount] = useState('');
   const [note, setNote] = useState('');
   const [dockerImage, setDockerImage] = useState('');
+  const [drainDeadline, setDrainDeadline] = useState('');
   const [serviceAccountError, setServiceAccountError] = useState<string | null>(null);
   const [imageError, setImageError] = useState<string | null>(null);
   const [envVars, setEnvVars] = useState<EnvRow[]>([]);
@@ -1263,6 +1278,7 @@ function EditProfileModal({
       setTargetServiceAccount(state.currentServiceAccount);
       setNote('');
       setDockerImage(state.currentDockerImage);
+      setDrainDeadline(state.currentDrainDeadline);
       setServiceAccountError(null);
       setImageError(null);
       setEnvVars(recordToRows(state.currentEnvVars));
@@ -1289,6 +1305,7 @@ function EditProfileModal({
           note,
           dockerImage: dockerImage.trim(),
           expectedDockerImageDigest: previewDigest(imagePreview),
+          drainDeadline: drainDeadline.trim(),
           envVars: rowsToRecord(envVars),
           secretEnvVars: rowsToRecord(secretEnvVars),
         },
@@ -1345,6 +1362,13 @@ function EditProfileModal({
             />
             <ImagePreviewLine preview={imagePreview} />
           </Stack>
+          <TextInput
+            label="Drain deadline"
+            description="Optional. Stop timeout the supervisor passes on SIGTERM, e.g. 6h."
+            placeholder="6h"
+            value={drainDeadline}
+            onChange={(e) => setDrainDeadline(e.currentTarget.value)}
+          />
           <EnvVarRowsEditor
             label="Env vars"
             rows={envVars}

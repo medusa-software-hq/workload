@@ -45,6 +45,8 @@ CREATE TABLE profile_revisions (
     docker_image            text,
     docker_image_digest     text,
     image_status            text NOT NULL DEFAULT 'NOT_APPLICABLE',
+    -- Payload-declared stop timeout `D`; see V12__add_profile_revision_drain_deadline.sql.
+    drain_deadline           text,
     PRIMARY KEY (profile_id, revision)
 );
 
@@ -122,8 +124,8 @@ INSERT INTO profiles (profile_id, display_name, latest_revision, archived, creat
 VALUES (?, ?, ?, ?, ?);
 
 insertProfileRevision:
-INSERT INTO profile_revisions (profile_id, revision, target_service_account, created_at, created_by, note, env_vars, secret_env_vars, docker_image, docker_image_digest, image_status)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO profile_revisions (profile_id, revision, target_service_account, created_at, created_by, note, env_vars, secret_env_vars, docker_image, docker_image_digest, image_status, drain_deadline)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateProfileLatestRevision:
 UPDATE profiles SET latest_revision = ? WHERE profile_id = ?;

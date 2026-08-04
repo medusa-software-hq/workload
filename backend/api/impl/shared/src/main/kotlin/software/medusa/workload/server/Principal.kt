@@ -8,9 +8,14 @@ package software.medusa.workload.server
  * - [Service]: a service account, its Google-signed ID token minted for the API's own audience and
  *   its email on a Terraform-managed allowlist.
  *
- * Authorization is coarse in M5: any verified principal is a full admin. Per-principal RPC
- * restriction would slot in at the call sites that read [kind] (see FleetServiceImpl). This type is
- * deliberately not admin-specific — M7's node principal verifies GCE-node SA ID tokens the same
+ * Authorization was coarse through M5 (any verified principal was a full admin). The
+ * automated-rollout epic's CI-push phase (workload#126 Phase 2) needed a narrower grant — a CI
+ * principal that can only bump the digest of specific profiles (e.g. `flow-worker`) — so
+ * [Service.allowedProfileIds] carries that scope: `null` means unrestricted (the original M5
+ * behavior, still how e.g. the console's own s2s smoke-test principal works), a non-null set means
+ * "UpdateProfile only, and only for a profile_id in this set" — enforced at the call sites that read
+ * it (see `requireProfileWriteAccess`/`requireUnrestrictedPrincipal` in FleetServiceImpl). This type
+ * is deliberately not admin-specific — M7's node principal verifies GCE-node SA ID tokens the same
  * way.
  */
 sealed interface Principal {
@@ -24,7 +29,12 @@ sealed interface Principal {
       get() = "human"
   }
 
-  data class Service(override val email: String) : Principal {
+  data class Service(
+      override val email: String,
+      // null = unrestricted (full admin, the original M5 behavior). A non-null set restricts this
+      // principal to UpdateProfile calls against only the profile_ids it contains.
+      val allowedProfileIds: Set<String>? = null,
+  ) : Principal {
     override val kind: String
       get() = "service"
   }

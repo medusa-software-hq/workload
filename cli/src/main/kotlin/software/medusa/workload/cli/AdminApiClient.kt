@@ -80,6 +80,7 @@ data class AdminProfileRevision(
     val dockerImage: String = "",
     val dockerImageDigest: String = "",
     val imageStatus: String = "",
+    val drainDeadline: String = "",
 )
 
 @Serializable
@@ -126,6 +127,7 @@ private data class CreateProfileRequest(
     val envVars: Map<String, String>,
     val secretEnvVars: Map<String, String>,
     val dockerImage: String,
+    val drainDeadline: String,
 )
 
 @Serializable
@@ -136,6 +138,7 @@ private data class UpdateProfileRequest(
     val envVars: Map<String, String>,
     val secretEnvVars: Map<String, String>,
     val dockerImage: String,
+    val drainDeadline: String,
 )
 
 /**
@@ -233,6 +236,7 @@ class AdminApiClient(
                           envVars = spec.envVars,
                           secretEnvVars = spec.secretEnvVars,
                           dockerImage = spec.dockerImage,
+                          drainDeadline = spec.drainDeadline,
                       )
                   ),
               )
@@ -252,6 +256,7 @@ class AdminApiClient(
                           envVars = spec.envVars,
                           secretEnvVars = spec.secretEnvVars,
                           dockerImage = spec.dockerImage,
+                          drainDeadline = spec.drainDeadline,
                       )
                   ),
               )
