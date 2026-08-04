@@ -1,0 +1,84 @@
+name: Deploy version-drift-checker
+
+# Builds the version-drift-checker jib image and updates the Cloud Run job's image, per environment
+# (automated-rollout epic Phase 0, workload#126). The job, its schedule, and its alert policies are
+# managed by Terraform in backend/infra.
+#
+# - production: the default env. Push-triggered on module changes; dispatch for a manual rollout.
+# - staging: `workflow_dispatch` with environment: staging (the push trigger only rolls prod, to
+#   keep steady-state deploys simple; staging is rolled during bring-up / on demand).
+on:
+  push:
+    branches: ["trunk/*"]
+    paths:
+      - "backend/version-drift-checker/**"
+
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Which environment's checker to deploy
+        type: choice
+        options:
+          - production
+          - staging
+        default: production
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: 21
+  NO_COLOR: 1
+
+  SERVICE_PATH: backend/version-drift-checker
+
+jobs:
+  deploy-job:
+    name: Deploy checker job
+    runs-on: ubuntu-latest
+
+    # A push (steady-state) rolls production; a manual run uses the chosen environment.
+    environment: ${{ inputs.environment || 'production' }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - name: Resolve the image ref
+        run: echo "IMAGE_REF=${{ vars.GCP_AR_REPO_ENDPOINT }}/version-drift-checker/${{ github.sha }}" >> "$GITHUB_ENV"
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_AR_REPO_HOSTNAME }} --quiet
+
+      - uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and push image
+        working-directory: ${{ env.SERVICE_PATH }}
+        run: |
+          ../../gradlew jib \
+            -Pjib.imageRef=${{ env.IMAGE_REF }} \
+            -Pjib.imageTag=${{ github.sha }} \
+            --stacktrace --info
+
+      - name: Update the Cloud Run job image
+        run: |
+          gcloud run jobs update version-drift-checker \
+            --project=${{ vars.GCP_PROJECT_ID }} \
+            --region=${{ vars.GCP_PRIMARY_LOCATION }} \
+            --image=${{ env.IMAGE_REF }} \
+            --quiet

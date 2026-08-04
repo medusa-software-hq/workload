@@ -97,6 +97,32 @@ wall-clock time:
   exit non-zero (e.g. a bogus `CF_ACCOUNT_ID`), confirm the "execution failed"
   alert fires, then let a normal run auto-close it.
 
+## Version drift/staleness monitoring
+
+Phase 0 of the automated-rollout epic (workload#126): `version-drift-checker`
+(`gcp-version-drift-checker.tf`) is a Cloud Run job, triggered by Cloud
+Scheduler every 15 min, that compares — per image-based profile — the digest
+pinned on its latest revision (**desired**) against what live runs are
+self-reporting (**running**) and what the image tag currently resolves to in
+the registry (**latest-published**). It runs as the broker's own
+`primary_service_sa` so it can reuse the same impersonation rights the API
+already holds, and writes two 0/1 gauge metrics per profile to Cloud
+Monitoring on every run (see `backend/version-drift-checker`).
+
+`gcp-monitoring.tf` alerts on both:
+
+- **`version_drift_running_stale`** — a live run has been reporting a digest
+  other than desired for over 8h (a drain-plausible window: a run that started
+  just before a rollout gets time to finish on its own).
+- **`version_drift_published_unrolled`** — the image tag has resolved to a
+  digest other than desired for over 2h — CI published, nobody rolled. This is
+  the exact signal that was missing during the incident that motivated this
+  epic: a prod worker silently running a 10-day-old image.
+
+Both use `condition_threshold`'s `duration`, not `absent_for`: the checker
+always emits a point (0 or 1), so there's no missing-data case to guard
+against — only "how long has this been continuously true".
+
 ## Neon provisioning
 
 The Neon project is created via the `kislerdm/neon` provider, which requires an API
