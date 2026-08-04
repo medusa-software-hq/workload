@@ -25,6 +25,8 @@ include(":libraries:token-format")
 // The api build's own parent project (backend/api/impl/build.gradle.kts) configures these three.
 include(":backend:front-door-refresher")
 
+include(":backend:version-drift-checker")
+
 include(":backend:api:impl:shared")
 
 include(":backend:api:impl:local")

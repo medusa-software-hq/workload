@@ -33,6 +33,7 @@ flyway-database-postgresql = { module = "org.flywaydb:flyway-database-postgresql
 google-auth-oauth2-http = { module = "com.google.auth:google-auth-library-oauth2-http" }
 google-cloud-iamcredentials = { module = "com.google.cloud:google-cloud-iamcredentials" }
 google-cloud-libraries-bom = { module = "com.google.cloud:libraries-bom", version.ref = "google-cloud-libraries-bom" }
+google-cloud-monitoring = { module = "com.google.cloud:google-cloud-monitoring" }
 google-cloud-secretmanager = { module = "com.google.cloud:google-cloud-secretmanager" }
 google-cloud-storage = { module = "com.google.cloud:google-cloud-storage" }
 grpc-bom = { module = "io.grpc:grpc-bom", version.ref = "grpc" }

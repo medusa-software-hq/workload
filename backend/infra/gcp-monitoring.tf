@@ -86,6 +86,137 @@ resource "google_monitoring_alert_policy" "front_door_refresher_failed" {
   }
 }
 
+# Version drift/staleness alerts (automated-rollout epic Phase 0, workload#126). The
+# version-drift-checker job (gcp-version-drift-checker.tf) writes two 0/1 gauges per image-based
+# profile on every run: desired_vs_running (a live worker's self-reported digest doesn't match what's
+# pinned) and published_vs_desired (the image tag now resolves to a digest nobody pinned yet). Both
+# alert policies below use condition_threshold's `duration` to require the mismatch hold continuously
+# — a one-off blip during a normal rollout must not page anyone, only a mismatch that outlives the
+# window it should have self-healed within.
+locals {
+  # How long a live run may run an old digest before "the worker never converged" beats "still
+  # draining a job that started before the rollout".
+  version_drift_running_window = "28800s" # 8h
+  # How long a profile's image tag may point past the pinned digest before "someone published but
+  # nobody rolled" — the exact gap the stale-worker incident exposed.
+  version_drift_published_window = "7200s" # 2h
+
+  # Must match desiredVsRunningMetricType / publishedVsDesiredMetricType in
+  # backend/version-drift-checker/.../DriftMetricWriter.kt.
+  version_drift_desired_vs_running_metric_type   = "custom.googleapis.com/workload/version_drift/desired_vs_running"
+  version_drift_published_vs_desired_metric_type = "custom.googleapis.com/workload/version_drift/published_vs_desired"
+}
+
+resource "google_monitoring_alert_policy" "version_drift_running_stale" {
+  project      = var.gcp_project_id
+  display_name = "Version drift: worker(s) stuck on a non-desired image"
+  combiner     = "OR"
+  severity     = "WARNING"
+
+  conditions {
+    display_name = "desired_vs_running > 0 for ${local.version_drift_running_window}"
+
+    condition_threshold {
+      filter = join(" AND ", [
+        "resource.type = \"global\"",
+        "resource.labels.project_id = \"${var.gcp_project_id}\"",
+        "metric.type = \"${local.version_drift_desired_vs_running_metric_type}\"",
+      ])
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = local.version_drift_running_window
+
+      aggregations {
+        alignment_period     = "900s"
+        per_series_aligner   = "ALIGN_MAX"
+        cross_series_reducer = "REDUCE_MAX"
+        group_by_fields      = ["metric.label.profile_id"]
+      }
+
+      trigger {
+        count = 1
+      }
+    }
+  }
+
+  notification_channels = [google_monitoring_notification_channel.team_email.id]
+
+  alert_strategy {
+    auto_close = "1800s"
+  }
+
+  documentation {
+    content = join("\n", [
+      "A live run against a Workload profile has been reporting an image digest other than what's",
+      "pinned on the profile's latest revision for over ${local.version_drift_running_window}.",
+      "Convergence is broken: the worker either can't or won't pick up the desired image.",
+      "",
+      "Check which profile via the metric's `profile_id` label, then check that profile's live runs:",
+      "  workload admin runs list --profile <profile-id>",
+      "",
+      "Common causes: a worker that can't restart on its own (no supervisor/service unit), a claim",
+      "stuck retrying against a bad grant, or a genuinely long-running job that started before a",
+      "rollout and has simply outlived the drain window (bump the window if that's expected here).",
+    ])
+    mime_type = "text/markdown"
+  }
+}
+
+resource "google_monitoring_alert_policy" "version_drift_published_unrolled" {
+  project      = var.gcp_project_id
+  display_name = "Version drift: image published but not rolled into a profile"
+  combiner     = "OR"
+  severity     = "WARNING"
+
+  conditions {
+    display_name = "published_vs_desired > 0 for ${local.version_drift_published_window}"
+
+    condition_threshold {
+      filter = join(" AND ", [
+        "resource.type = \"global\"",
+        "resource.labels.project_id = \"${var.gcp_project_id}\"",
+        "metric.type = \"${local.version_drift_published_vs_desired_metric_type}\"",
+      ])
+      comparison      = "COMPARISON_GT"
+      threshold_value = 0
+      duration        = local.version_drift_published_window
+
+      aggregations {
+        alignment_period     = "900s"
+        per_series_aligner   = "ALIGN_MAX"
+        cross_series_reducer = "REDUCE_MAX"
+        group_by_fields      = ["metric.label.profile_id"]
+      }
+
+      trigger {
+        count = 1
+      }
+    }
+  }
+
+  notification_channels = [google_monitoring_notification_channel.team_email.id]
+
+  alert_strategy {
+    auto_close = "1800s"
+  }
+
+  documentation {
+    content = join("\n", [
+      "A Workload profile's `docker_image` tag now resolves to a digest that differs from the one",
+      "pinned on its latest revision, and has for over ${local.version_drift_published_window} — CI",
+      "published a new image but nobody created a new profile revision to pin it. This is the exact",
+      "signal missing during the stale-worker incident: without it, published-but-unrolled can sit",
+      "silently for days.",
+      "",
+      "Check which profile via the metric's `profile_id` label, then either pin the new digest with a",
+      "new revision (console: Profiles > the profile > Update, or `workload admin profiles update`),",
+      "or, if the new image was published deliberately ahead of a later rollout, treat this as",
+      "expected until the revision is created.",
+    ])
+    mime_type = "text/markdown"
+  }
+}
+
 resource "google_monitoring_alert_policy" "front_door_refresher_stale" {
   project      = var.gcp_project_id
   display_name = "Front-door refresher: no successful run in 20m"

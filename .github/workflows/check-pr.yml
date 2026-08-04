@@ -66,3 +66,7 @@ jobs:
   check-front-door-refresher:
     name: front-door-refresher
     uses: ./.github/workflows/check-front-door-refresher.yml
+
+  check-version-drift-checker:
+    name: version-drift-checker
+    uses: ./.github/workflows/check-version-drift-checker.yml
