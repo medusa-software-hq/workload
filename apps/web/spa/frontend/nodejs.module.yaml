@@ -1,16 +1,16 @@
 normalize:
   steps:
     - name: Format
-      task: ktfmtFormat
+      task: fixFormatting
 
 analyze:
   steps:
-    - name: Assemble
-      task: assemble
+    - name: Typecheck
+      task: typecheck
     - name: Check formatting
-      task: ktfmtCheck
+      task: checkFormatting
     - name: Lint
-      task: detekt
+      task: lint
 
 test:
   steps:
