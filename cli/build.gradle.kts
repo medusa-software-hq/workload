@@ -55,36 +55,42 @@ application {
       )
 }
 
-// Bake the per-environment admin OAuth client secrets into the fat jar as a resource. The Publish
-// CLI workflow passes them via `-PadminOauthClientSecret` (prod) /
+// Bake publish-time values into the fat jar as a resource: the per-environment admin OAuth client
+// secrets, and the metadata-sidecar image ref `workload run` pulls (see MetadataSidecar.kt) — both
+// resolved by the Publish CLI workflow (`-PadminOauthClientSecret` /
 // `-PstagingAdminOauthClientSecret`
-// (staging) from Actions secrets. The backend URLs and OAuth client ids are NOT baked — they're
-// deterministic public values carried as source constants on `Environment`. Absent locally → empty
-// values, and each `Environment` falls back to its `oauthClientSecretEnvVar`, so dev builds still
-// work. A staging secret that isn't wired yet simply bakes empty, and `admin login` under
-// `WORKLOAD_ENVIRONMENT=staging` reports that cleanly rather than misbehaving. Nothing is
-// committed.
-val adminBuildConfigDir = layout.buildDirectory.dir("generated/adminBuildConfig")
+// from Actions secrets, `-PmetadataSidecarImage` from the `GCP_AR_REPO_ENDPOINT` Actions variable,
+// since the underlying GCP project id has a build-time-random suffix and so can't be a source
+// constant the way `Environment`'s backend URLs are). Absent locally → empty values: each
+// `Environment` falls back to its `oauthClientSecretEnvVar`, and `run` requires
+// `WORKLOAD_METADATA_SIDECAR_IMAGE` instead — so dev builds still work, just not silently. Nothing
+// is committed.
+val bakedBuildConfigDir = layout.buildDirectory.dir("generated/bakedBuildConfig")
 
-val generateAdminBuildConfig by tasks.registering {
+val generateBuildConfig by tasks.registering {
   val clientSecret = providers.gradleProperty("adminOauthClientSecret").orElse("")
   val stagingClientSecret = providers.gradleProperty("stagingAdminOauthClientSecret").orElse("")
+  val metadataSidecarImage = providers.gradleProperty("metadataSidecarImage").orElse("")
   inputs.property("clientSecret", clientSecret)
   inputs.property("stagingClientSecret", stagingClientSecret)
-  outputs.dir(adminBuildConfigDir)
+  inputs.property("metadataSidecarImage", metadataSidecarImage)
+  outputs.dir(bakedBuildConfigDir)
   doLast {
-    val file = adminBuildConfigDir.get().file("workload-admin-build.properties").asFile
+    val file = bakedBuildConfigDir.get().file("workload-build.properties").asFile
     file.parentFile.mkdirs()
-    // Secrets are properties-safe (`GOCSPX-…` — no `:` `=` or newline). Written by hand to avoid
-    // Properties.store's date comment. An empty value is read back as absent (see BuildConfig).
+    // Secrets are properties-safe (`GOCSPX-…` — no `:` `=` or newline); an image ref is too.
+    // Written
+    // by hand to avoid Properties.store's date comment. An empty value reads back as absent (see
+    // BuildConfig).
     file.writeText(
         "oauthClientSecret=${clientSecret.get()}\n" +
-            "stagingOauthClientSecret=${stagingClientSecret.get()}\n"
+            "stagingOauthClientSecret=${stagingClientSecret.get()}\n" +
+            "metadataSidecarImage=${metadataSidecarImage.get()}\n"
     )
   }
 }
 
-sourceSets.named("main") { resources.srcDir(generateAdminBuildConfig) }
+sourceSets.named("main") { resources.srcDir(generateBuildConfig) }
 
 tasks.shadowJar {
   archiveBaseName = "workload-cli"
