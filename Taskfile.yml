@@ -33,6 +33,10 @@ includes:
     taskfile: cli/Taskfile.yml
     dir: cli
 
+  system-test:
+    taskfile: system-test/Taskfile.yml
+    dir: system-test
+
 tasks:
   github-ci:lint:
     desc: Lint GitHub workflows
@@ -65,6 +69,7 @@ tasks:
       - backend:infra:checkFormatting
       - worker-mvp:infra:checkFormatting
       - cli:checkFormatting
+      - system-test:checkFormatting
 
   fixFormatting-all:
     desc: Fix formatting for the entire codebase
@@ -78,6 +83,7 @@ tasks:
       - backend:infra:fixFormatting
       - worker-mvp:infra:fixFormatting
       - cli:fixFormatting
+      - system-test:fixFormatting
 
   lint-all:
     desc: Lint the entire codebase
@@ -91,6 +97,7 @@ tasks:
       - backend:infra:lint
       - worker-mvp:infra:lint
       - cli:lint
+      - system-test:lint
 
   analyze-all:
     desc: Analyze the entire codebase
@@ -103,6 +110,7 @@ tasks:
       - backend:infra:validate
       - worker-mvp:infra:validate
       - cli:compile
+      - system-test:compile
 
   run:
     desc: Run the frontend and the API locally

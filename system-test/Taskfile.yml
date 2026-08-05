@@ -1,0 +1,49 @@
+version: '3'
+
+.kotlinSources: &kotlinSources
+  - '**/*.kt'
+  - '**/*.kts'
+
+tasks:
+  checkFormatting:
+    desc: Check Kotlin formatting
+    sources: *kotlinSources
+    cmds:
+      - ../gradlew ktfmtCheck
+    interactive: true
+
+  fixFormatting:
+    desc: Fix Kotlin formatting
+    sources: *kotlinSources
+    cmds:
+      - ../gradlew ktfmtFormat
+    interactive: true
+
+  lint:
+    desc: Lint the Kotlin sources
+    sources: *kotlinSources
+    cmds:
+      - ../gradlew detekt
+    interactive: true
+
+  compile:
+    desc: Compile the Kotlin sources
+    sources: *kotlinSources
+    cmds:
+      - ../gradlew compileTestKotlin
+    interactive: true
+
+  test:
+    desc: >
+      Run the system-test suite against SYSTEM_TEST_TARGET (default 'local': a hermetic in-process
+      backend + a real CLI subprocess, no Docker/GCP required). Set SYSTEM_TEST_TARGET=staging (plus
+      the STAGING_* env vars — see README.md) to run the same suite against deployed staging.
+    cmds:
+      - ../gradlew :system-test:test
+    interactive: true
+
+  install-cli:
+    desc: Build the real CLI binary the suite drives (../cli/bin/workload-cli)
+    cmds:
+      - ../gradlew :cli:installDist
+    interactive: true

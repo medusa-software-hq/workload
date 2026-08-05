@@ -55,6 +55,10 @@ jobs:
     name: cli
     uses: ./.github/workflows/check-cli.yml
 
+  check-system-test:
+    name: system-test
+    uses: ./.github/workflows/check-system-test.yml
+
   check-docker-connector:
     name: docker-connector
     uses: ./.github/workflows/check-docker-connector.yml
