@@ -69,6 +69,40 @@ private val v2WorkerCredentialDrop: DecoratingHttpServiceFunction =
       }
     }
 
+/**
+ * Whether [token] has the three dot-separated, non-empty segments of a JWT — a cheap shape check,
+ * not a signature verification. Mirrors [v2WorkerCredentialDrop]'s role for the secret-based plane:
+ * filter obvious non-credential noise (an empty body, a garbage string) before the real,
+ * network-backed [GooglePrincipalVerifier] check runs.
+ */
+private fun looksLikeJwt(token: String): Boolean {
+  val parts = token.split(".")
+  return parts.size == 3 && parts.all { it.isNotEmpty() }
+}
+
+/**
+ * Parse-and-drop + 404-unification for `/worker/v2/node/self` (M7), the GCE-node counterpart to
+ * [v2WorkerCredentialDrop]: a bearer credential that isn't JWT-shaped is dropped with a bare 404
+ * before [WorkerNodeIdentityService] ever runs its (network-backed) verification, keeping this
+ * corner of the plane exactly as unprobeable as the secret-based one. A JWT-shaped token that then
+ * fails verification comes back as a 401, rewritten here to the same bare 404.
+ */
+private val v2NodeIdentityDrop: DecoratingHttpServiceFunction =
+    DecoratingHttpServiceFunction { delegate, ctx, req ->
+      val token = extractBearerToken(req)
+      if (token == null || !looksLikeJwt(token)) {
+        RejectedWorkerRequestCounter.increment()
+        bareNotFound()
+      } else {
+        HttpResponse.of(
+            delegate.serve(ctx, req).aggregate().thenApply { aggregated ->
+              if (aggregated.status() == HttpStatus.UNAUTHORIZED) bareNotFound()
+              else aggregated.toHttpResponse()
+            }
+        )
+      }
+    }
+
 fun buildServer(
     originRegex: String,
     port: Int,
@@ -82,6 +116,7 @@ fun buildServer(
     selfStatusService: HttpService? = null,
     v2RegistrationService: HttpService? = null,
     workerRunService: HttpService? = null,
+    workerNodeIdentityService: HttpService? = null,
 ): Server {
   val cors =
       CorsService.builderForOriginRegex(originRegex)
@@ -199,6 +234,14 @@ fun buildServer(
               .methods(HttpMethod.POST)
               .path("/worker/v2/runs/{runId}/end")
               .build(it.decorate(v2WorkerCredentialDrop))
+        }
+        // A GCE node's alternative to the secret-based plane above (M7): same bare-hostname design,
+        // gated by its own shape-check-then-verify decorator rather than the wlw_ secret one.
+        workerNodeIdentityService?.let {
+          route()
+              .methods(HttpMethod.GET)
+              .path("/worker/v2/node/self")
+              .build(it.decorate(v2NodeIdentityDrop))
         }
 
         serviceUnder("/", grpcService.decorate(auth).decorate(cors))

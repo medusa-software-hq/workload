@@ -6,6 +6,10 @@ import com.linecorp.armeria.common.HttpMethod
 import com.linecorp.armeria.common.HttpStatus
 import com.linecorp.armeria.common.RequestHeaders
 import com.linecorp.armeria.server.Server
+import com.nimbusds.jose.jwk.JWKSet
+import com.nimbusds.jose.jwk.gen.RSAKeyGenerator
+import com.nimbusds.jose.jwk.source.ImmutableJWKSet
+import com.nimbusds.jose.proc.SecurityContext
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.AfterTest
@@ -39,6 +43,17 @@ class WorkerPlaneV2UnprobeableTest {
   @BeforeTest
   fun start() {
     store = CountingFleetStore(InMemoryFleetStore())
+    val nodeVerifier =
+        GooglePrincipalVerifier(
+            humanAudiences = emptySet(),
+            allowedDomain = "medusa.software",
+            serviceAudience = "https://api.workload-baseline.medusa.software",
+            serviceAccountAllowlist = setOf("gce-node-1@ms-workload.iam.gserviceaccount.com"),
+            jwkSource =
+                ImmutableJWKSet<SecurityContext>(
+                    JWKSet(RSAKeyGenerator(2048).generate().toPublicJWK())
+                ),
+        )
     server =
         buildServer(
             originRegex = """http://localhost(:\d+)?""",
@@ -52,6 +67,7 @@ class WorkerPlaneV2UnprobeableTest {
             selfStatusService = SelfStatusService(store),
             v2RegistrationService = RegistrationServiceV2(store),
             workerRunService = WorkerRunService(store),
+            workerNodeIdentityService = WorkerNodeIdentityService(nodeVerifier),
         )
     server.start().join()
     client = WebClient.of("http://127.0.0.1:${server.activeLocalPort()}")
@@ -88,6 +104,7 @@ class WorkerPlaneV2UnprobeableTest {
             post("/worker/v2/claim", null),
             post("/worker/v2/runs", null),
             get("/worker/v2/registrations/self", null),
+            get("/worker/v2/node/self", null),
         )
     for (response in responses) {
       assertEquals(HttpStatus.NOT_FOUND, response.status())
@@ -104,10 +121,21 @@ class WorkerPlaneV2UnprobeableTest {
             post("/worker/v2/claim", garbage),
             post("/worker/v2/runs", garbage),
             get("/worker/v2/registrations/self", garbage),
+            get("/worker/v2/node/self", garbage),
         )) {
       assertEquals(HttpStatus.NOT_FOUND, response.status())
       assertEquals("", response.contentUtf8())
     }
+  }
+
+  @Test
+  fun `a JWT-shaped but unverifiable node credential is also a bare 404`() {
+    // Three dot-separated segments (passes the cheap shape check) but not a real, signed token —
+    // the node verifier's crypto check fails, and that 401 is rewritten to the same bare 404.
+    val response =
+        get("/worker/v2/node/self", "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.bogus-signature")
+    assertEquals(HttpStatus.NOT_FOUND, response.status())
+    assertEquals("", response.contentUtf8())
   }
 
   @Test
