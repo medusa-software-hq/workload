@@ -1,4 +1,4 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.test.Test
@@ -92,8 +92,7 @@ class RunReporterTest {
     val r =
         RunReporter.start(
             brokerBaseUrl = "http://127.0.0.1:1",
-            workerId = "wid",
-            workerSecret = "wsecret",
+            auth = SecretBrokerAuth("wid", "wsecret"),
             profileId = "p",
             revision = 1,
             kind = "run",

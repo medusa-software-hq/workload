@@ -1,4 +1,4 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import java.nio.file.Path
 import software.medusa.workload.docker.ContainerSummary
@@ -9,9 +9,8 @@ import software.medusa.workload.docker.ImageSummary
 
 /**
  * Docker garbage collection (M7-00) — the seam that keeps a long-lived node's disk from filling
- * with superseded, digest-pinned revisions. Lives here, at the current CLI run path; the M7-01
- * runtime extraction moves it into `workload-runtime` unchanged, and M7-05's agent later widens the
- * image rule into disk-pressure watermarks over the assignment set.
+ * with superseded, digest-pinned revisions. Part of the run pipeline's observe/reap surface; a
+ * later agent (M7-05) widens the image rule into disk-pressure watermarks over the assignment set.
  *
  * Two operations, both **best-effort** (a GC failure is a logged warning, never a run failure) and
  * both scoped by *ownership*, never by "unused":
@@ -68,7 +67,7 @@ private fun digestOf(repoDigest: String): String = repoDigest.substringAfterLast
  * avoid noisy "kept, in use" warnings when sweeping; the real in-use guard is never-force deletion.
  * Empty on any listing error (the sweep then relies on that guard alone).
  */
-internal suspend fun imageRefsInUse(connector: DockerConnector): Set<String> =
+suspend fun imageRefsInUse(connector: DockerConnector): Set<String> =
     runCatching {
           connector.containers
               .list(labelKeys = listOf(workloadProfileLabel), all = false)
@@ -84,7 +83,7 @@ internal suspend fun imageRefsInUse(connector: DockerConnector): Set<String> =
  * any other failure goes to [warn]. A failure to even list images is swallowed to [warn] and
  * returns 0.
  */
-internal suspend fun sweepRepository(
+suspend fun sweepRepository(
     connector: DockerConnector,
     repository: String,
     keepDigests: Set<String>,
@@ -122,7 +121,7 @@ internal suspend fun sweepRepository(
  * right after a successful pull and again at teardown — the moments the old digest is known
  * superseded.
  */
-internal suspend fun garbageCollectAfterRun(
+suspend fun garbageCollectAfterRun(
     connector: DockerConnector,
     configDir: Path,
     repository: String,
@@ -144,5 +143,5 @@ internal suspend fun garbageCollectAfterRun(
 private const val httpConflict = 409
 
 /** The connector's actionable message, or the throwable's own text if it isn't a connector one. */
-internal fun Throwable.reason(): String =
+fun Throwable.reason(): String =
     (this as? DockerConnectorException)?.message ?: message ?: toString()

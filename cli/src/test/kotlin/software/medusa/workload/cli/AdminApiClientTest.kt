@@ -9,6 +9,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
+import software.medusa.workload.runtime.BrokerUnreachableException
 
 /** A canned in-process stand-in for the unframed FleetService endpoint. */
 private class StubApi(private val status: Int, private val responseBody: String) {

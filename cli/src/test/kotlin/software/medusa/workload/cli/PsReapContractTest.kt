@@ -11,6 +11,10 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import software.medusa.workload.docker.DockerConnectionException
 import software.medusa.workload.docker.DockerConnector
 import software.medusa.workload.docker.DockerConnectorConfig
+import software.medusa.workload.runtime.workloadNetworkLabel
+import software.medusa.workload.runtime.workloadProfileLabel
+import software.medusa.workload.runtime.workloadRevisionLabel
+import software.medusa.workload.runtime.workloadWorkerLabel
 
 /**
  * The orphaned-container gap and its mitigation, against a real daemon.

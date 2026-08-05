@@ -2,6 +2,7 @@ package software.medusa.workload.cli
 
 import kotlin.test.Test
 import kotlin.test.assertTrue
+import software.medusa.workload.runtime.WorkerApiException
 
 class RegisterCommandTest {
   @Test

@@ -16,6 +16,9 @@ import software.medusa.workload.docker.DockerConnectionException
 import software.medusa.workload.docker.DockerConnector
 import software.medusa.workload.docker.DockerConnectorConfig
 import software.medusa.workload.docker.DockerConnectorException
+import software.medusa.workload.runtime.workloadNetworkLabel
+import software.medusa.workload.runtime.workloadProfileLabel
+import software.medusa.workload.runtime.workloadRevisionLabel
 
 // Same grace `workload worker run` gives a container on Ctrl-C.
 private val reapStopGrace = 10.seconds

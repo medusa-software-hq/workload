@@ -25,6 +25,8 @@ test:
       task: ":cli:test"
     - name: docker-connector
       task: ":libraries:docker-connector:test"
+    - name: workload-runtime
+      task: ":libraries:workload-runtime:test"
     - name: token-format
       task: ":libraries:token-format:test"
     - name: front-door-refresher

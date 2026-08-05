@@ -1,4 +1,4 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import kotlin.test.Test
 import kotlin.test.assertEquals

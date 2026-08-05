@@ -1,4 +1,4 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -8,8 +8,8 @@ import kotlin.test.assertTrue
 import software.medusa.workload.docker.ProgressDetail
 import software.medusa.workload.docker.PullProgress
 
-/** Pure unit tests for `workload run`'s ref/env/error logic — no daemon needed. */
-class RunCommandTest {
+/** Pure unit tests for the run pipeline's ref/env/error logic — no daemon needed. */
+class RunPipelineTest {
 
   @Test
   fun `pins a tag ref to the digest the revision resolved`() {
@@ -58,10 +58,12 @@ class RunCommandTest {
     assertTrue("API_KEY=resolved-secret" in env)
     assertTrue("GCE_METADATA_HOST=172.18.0.1:49812" in env)
     assertTrue("GCE_METADATA_ROOT=172.18.0.1:49812" in env)
-    // The whole point of Beacon: the credential is not in the env.
+    // The whole point of Beacon: the credential is not in the env. (The literal names mirror the
+    // CLI's googleOauthAccessTokenEnvVar/cloudsdkAuthAccessTokenEnvVar — canonical GCP/gcloud env
+    // var names, not something this library defines.)
     val names = env.map { it.substringBefore('=') }.toSet()
-    assertFalse(googleOauthAccessTokenEnvVar in names, "no token var in Beacon env")
-    assertFalse(cloudsdkAuthAccessTokenEnvVar in names, "no token var in Beacon env")
+    assertFalse("GOOGLE_OAUTH_ACCESS_TOKEN" in names, "no token var in Beacon env")
+    assertFalse("CLOUDSDK_AUTH_ACCESS_TOKEN" in names, "no token var in Beacon env")
   }
 
   @Test

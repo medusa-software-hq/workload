@@ -8,6 +8,11 @@ import software.medusa.workload.docker.DockerConnectionException
 import software.medusa.workload.docker.DockerConnector
 import software.medusa.workload.docker.DockerConnectorConfig
 import software.medusa.workload.docker.SystemDf
+import software.medusa.workload.runtime.imageRefsInUse
+import software.medusa.workload.runtime.loadManagedRepos
+import software.medusa.workload.runtime.reason
+import software.medusa.workload.runtime.sweepRepository
+import software.medusa.workload.runtime.workloadProfileLabel
 
 /** `1.0 KB`, `12.3 MB`, `4.2 GB` — a compact size the way `docker system df` renders bytes. */
 internal fun formatBytes(bytes: Long): String {

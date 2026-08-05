@@ -11,6 +11,19 @@ import com.github.ajalt.clikt.parameters.options.required
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.TimeUnit
+import software.medusa.workload.runtime.MetadataEmulator
+import software.medusa.workload.runtime.RefreshingTokenCache
+import software.medusa.workload.runtime.RunReporter
+import software.medusa.workload.runtime.SecretBrokerAuth
+import software.medusa.workload.runtime.SecretResolutionException
+import software.medusa.workload.runtime.WorkerApiException
+import software.medusa.workload.runtime.WorkerClaimResponse
+import software.medusa.workload.runtime.brokerIdTokenClaimer
+import software.medusa.workload.runtime.brokerTokenClaimer
+import software.medusa.workload.runtime.claimWorkload
+import software.medusa.workload.runtime.metadataPointerEnv
+import software.medusa.workload.runtime.resolveSecrets
+import software.medusa.workload.runtime.tokenClaimErrorMessage
 
 // The two env var names google-auth libraries and gcloud read an OAuth access token from. The
 // Beacon path deliberately never sets them (the token lives in the metadata emulator, not the
@@ -51,9 +64,10 @@ class ExecCommand : CliktCommand(name = "exec") {
 
   override fun run() {
     val config = loadConfigOrFail(env)
+    val auth = SecretBrokerAuth(config.workerId, config.workerSecret)
     val claim =
         try {
-          claimWorkload(env.apiBaseUrl, config.workerId, config.workerSecret, profileId)
+          claimWorkload(env.apiBaseUrl, auth, profileId)
         } catch (e: WorkerApiException) {
           throw PrintMessage(
               tokenClaimErrorMessage(e, profileId),
@@ -76,7 +90,7 @@ class ExecCommand : CliktCommand(name = "exec") {
     echo("Profile:     ${claim.profileId} (revision ${claim.revision})", err = true)
     echo("Service acct: ${claim.serviceAccount}", err = true)
 
-    throw ProgramResult(execWithMetadata(config, claim, secretValues))
+    throw ProgramResult(execWithMetadata(auth, claim, secretValues))
   }
 
   /**
@@ -87,16 +101,16 @@ class ExecCommand : CliktCommand(name = "exec") {
    * `ps`-adjacent means.
    */
   private fun execWithMetadata(
-      config: WorkloadConfig,
+      auth: SecretBrokerAuth,
       claim: WorkerClaimResponse,
       secretValues: Map<String, String>,
   ): Int {
     val emulator =
         MetadataEmulator(
-            RefreshingTokenCache(brokerTokenClaimer(env.apiBaseUrl, config, profileId)),
+            RefreshingTokenCache(brokerTokenClaimer(env.apiBaseUrl, auth, profileId)),
             InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
             InetAddress::isLoopbackAddress,
-            idTokenClaimer = brokerIdTokenClaimer(env.apiBaseUrl, config, profileId),
+            idTokenClaimer = brokerIdTokenClaimer(env.apiBaseUrl, auth, profileId),
         )
     emulator.start()
     echo("Metadata:    http://${emulator.hostPort} (tokens refresh automatically)", err = true)
@@ -111,8 +125,7 @@ class ExecCommand : CliktCommand(name = "exec") {
       val reporter =
           RunReporter.start(
               brokerBaseUrl = env.apiBaseUrl,
-              workerId = config.workerId,
-              workerSecret = config.workerSecret,
+              auth = auth,
               profileId = claim.profileId,
               revision = claim.revision,
               kind = "exec",

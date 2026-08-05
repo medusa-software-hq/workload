@@ -14,6 +14,7 @@ import software.medusa.workload.docker.DockerAuthResolver
 import software.medusa.workload.docker.DockerConnectionException
 import software.medusa.workload.docker.DockerConnector
 import software.medusa.workload.docker.DockerConnectorConfig
+import software.medusa.workload.runtime.brokeredRegistryAuth
 
 /**
  * Drydock's disk-state audit, re-run as a test (story 05 AC): brokered auth must leave **nothing**

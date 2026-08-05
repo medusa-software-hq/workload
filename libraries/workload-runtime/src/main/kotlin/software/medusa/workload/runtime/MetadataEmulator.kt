@@ -1,10 +1,11 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
 import java.io.IOException
 import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
 import java.time.Clock
 import java.time.Duration
@@ -349,6 +350,25 @@ class MetadataEmulator(
 }
 
 /**
+ * Parses a raw query string (`a=1&b=2`) into a decoded key-value map; a keyless pair is dropped.
+ */
+private fun parseQuery(rawQuery: String?): Map<String, String> {
+  if (rawQuery.isNullOrEmpty()) return emptyMap()
+  return rawQuery
+      .split("&")
+      .mapNotNull { pair ->
+        val idx = pair.indexOf('=')
+        if (idx <= 0) {
+          null
+        } else {
+          URLDecoder.decode(pair.substring(0, idx), StandardCharsets.UTF_8) to
+              URLDecoder.decode(pair.substring(idx + 1), StandardCharsets.UTF_8)
+        }
+      }
+      .toMap()
+}
+
+/**
  * Derives the GCP project id from a user-managed service account email
  * (`name@PROJECT_ID.iam.gserviceaccount.com` → `PROJECT_ID`), or null if [email] isn't that shape
  * (e.g. a default compute SA, whose project is only the *numeric* id).
@@ -401,10 +421,10 @@ fun isTrustedRunPeer(addr: InetAddress): Boolean = addr.isSiteLocalAddress
 /** Builds the production [TokenClaimer] that re-claims from [apiBaseUrl] for [profileId]. */
 fun brokerTokenClaimer(
     apiBaseUrl: String,
-    config: WorkloadConfig,
+    auth: BrokerAuth,
     profileId: String,
 ): TokenClaimer = TokenClaimer {
-  val claim = claimToken(apiBaseUrl, config.workerId, config.workerSecret, profileId)
+  val claim = claimToken(apiBaseUrl, auth, profileId)
   BrokeredToken(
       accessToken = claim.accessToken,
       expiresAt = Instant.parse(claim.expiresAt),
@@ -425,9 +445,8 @@ fun brokerTokenClaimer(
  */
 fun brokerIdTokenClaimer(
     apiBaseUrl: String,
-    config: WorkloadConfig,
+    auth: BrokerAuth,
     profileId: String,
 ): IdTokenClaimer = IdTokenClaimer { audience, includeEmail ->
-  claimIdToken(apiBaseUrl, config.workerId, config.workerSecret, profileId, audience, includeEmail)
-      .idToken
+  claimIdToken(apiBaseUrl, auth, profileId, audience, includeEmail).idToken
 }

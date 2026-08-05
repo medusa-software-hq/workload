@@ -5,6 +5,8 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 import software.medusa.workload.docker.ContainerSummary
+import software.medusa.workload.runtime.workloadProfileLabel
+import software.medusa.workload.runtime.workloadRevisionLabel
 
 /** Pure rendering/projection tests for `workload ps` — no daemon needed. */
 class PsCommandTest {
