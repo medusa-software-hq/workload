@@ -8,232 +8,36 @@ import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import java.io.IOException
 import java.net.InetSocketAddress
-import kotlin.time.Duration.Companion.seconds
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
-import kotlinx.coroutines.withContext
 import software.medusa.workload.docker.DockerConnectionException
 import software.medusa.workload.docker.DockerConnector
 import software.medusa.workload.docker.DockerConnectorConfig
 import software.medusa.workload.docker.DockerConnectorException
-import software.medusa.workload.docker.LogStream
-import software.medusa.workload.docker.PullProgress
-import software.medusa.workload.docker.RegistryAuth
-
-internal const val workloadProfileLabel = "ms-workload.profile"
-internal const val workloadRevisionLabel = "ms-workload.revision"
-internal const val workloadWorkerLabel = "ms-workload.worker"
-
-// Marks a per-run bridge network as workload-owned, so `workload ps --reap` can sweep any orphaned
-// by a hard-killed CLI (M4-B2). `run` doesn't create these today — the metadata emulator runs on
-// the host, not a per-run network (see runContainerWithMetadata) — but the label + reap stand ready
-// for the future sidecar-container variant that will. Presence == "workload owns it".
-internal const val workloadNetworkLabel = "ms-workload.network"
-
-// Grace given to the container on Ctrl-C before the daemon SIGKILLs it.
-private val containerStopGrace = 10.seconds
-
-/**
- * The repository part of an image ref — the tag (or an existing digest) stripped off.
- * `us-docker.pkg.dev/p/repo/app:v1` -> `us-docker.pkg.dev/p/repo/app`. A `:` is only a tag
- * separator when it sits in the final path segment; before the last `/` it's a registry port.
- */
-internal fun repositoryOf(ref: String): String {
-  val trimmed = ref.trim()
-  val atIndex = trimmed.indexOf('@')
-  val withoutDigest = if (atIndex > 0) trimmed.substring(0, atIndex) else trimmed
-  val lastColon = withoutDigest.lastIndexOf(':')
-  val lastSlash = withoutDigest.lastIndexOf('/')
-  return if (lastColon > lastSlash) withoutDigest.substring(0, lastColon) else withoutDigest
-}
-
-/** The registry host of an image ref — the first path segment. */
-internal fun registryHostOf(ref: String): String = ref.trim().substringBefore('/')
-
-/**
- * The username Google's registries expect when the password is an OAuth access token — the same
- * convention `gcloud auth configure-docker`'s helper uses under the hood.
- */
-internal const val brokeredRegistryUsername = "oauth2accesstoken"
-
-/**
- * Whether [host] is a Google-operated container registry. Mirrors the backend's
- * `isGoogleRegistryHost` (which rejects anything else at profile create/update).
- *
- * **A security boundary.** The brokered token is a live credential for the profile's target service
- * account; sending it to a host that isn't Google's would hand that credential away. The backend
- * won't accept a non-Google image ref, so this is belt-and-braces for a profile stored before that
- * rule existed — such an image simply pulls anonymously rather than leaking the token.
- */
-internal fun isGoogleRegistryHost(host: String): Boolean {
-  val normalized = host.lowercase()
-  return normalized == "gcr.io" || normalized.endsWith(".gcr.io") || normalized.endsWith(".pkg.dev")
-}
-
-/**
- * The credentials to pull [pinnedRef] with: the brokered token, but **only** for a Google registry.
- * Null means "pull anonymously" — never "fall back to this host's Docker sign-in".
- *
- * One token, two uses: the same access token authenticates the registry pull and the workload's own
- * GCP access inside the container, so IAM stays coherent — it's one identity end to end.
- */
-internal fun brokeredRegistryAuth(pinnedRef: String, accessToken: String): RegistryAuth? {
-  val host = registryHostOf(pinnedRef)
-  if (!isGoogleRegistryHost(host)) return null
-  return RegistryAuth(
-      serverAddress = host,
-      username = brokeredRegistryUsername,
-      password = accessToken,
-  )
-}
-
-/**
- * The immutable ref to actually pull and run: the repository addressed by the digest the revision
- * pinned at creation time, so a tag that has since moved can't change what runs here.
- */
-internal fun pinnedImageRef(image: ClaimImage): String =
-    "${repositoryOf(image.ref)}@${image.digest}"
-
-/**
- * The container's environment for the default (Beacon) path: the profile's plain vars + resolved
- * secret values + the non-secret metadata-emulator **pointer** vars. The brokered token is
- * deliberately **absent** — the workload fetches (and refreshes) it from the emulator at
- * [pointerEnv]'s address, so `docker inspect` shows a pointer, not a credential. Deliberately does
- * **not** inherit this host's environment.
- *
- * Returned as `KEY=VALUE` strings for the create body only; nothing here ever reaches a command
- * line, so values can't show up in `ps` on the host.
- */
-internal fun buildMetadataContainerEnv(
-    profileEnv: Map<String, String>,
-    pointerEnv: Map<String, String>,
-): List<String> = (profileEnv + pointerEnv).map { (name, value) -> "$name=$value" }
-
-/**
- * Whether a failed `docker pull`'s output reads like a registry auth problem, as opposed to (say) a
- * missing tag or a network error. Keyword-matched because the CLI's exact wording varies by version
- * and registry; a false positive only costs an extra hint line.
- */
-internal fun looksLikeAuthFailure(output: String): Boolean {
-  val text = output.lowercase()
-  return listOf(
-          "unauthorized",
-          "authentication required",
-          "denied",
-          "forbidden",
-          "no basic auth credentials",
-          "login",
-      )
-      .any { it in text }
-}
-
-/**
- * The message for a failed pull. An auth failure now means the *profile's* target service account
- * can't read the repository — nothing about this host's own sign-in, which `workload worker run` no
- * longer uses. Deliberately does **not** suggest `gcloud auth configure-docker`: falling back to
- * ambient developer credentials would mask a broken opt-in grant and make the profile look fine on
- * the one machine that happens to be logged in.
- */
-internal fun pullFailureMessage(pinnedRef: String, serviceAccount: String, reason: String): String {
-  val base = "Failed to pull $pinnedRef: $reason"
-  if (!looksLikeAuthFailure(reason)) {
-    return base
-  }
-  return "$base\n" +
-      "The pull authenticated as the profile's target service account ($serviceAccount), which\n" +
-      "appears to lack read access to this repository. An admin needs to grant it\n" +
-      "roles/artifactregistry.reader — via the workload-impersonation module's\n" +
-      "artifact_repository_id input — and then re-verify the profile.\n" +
-      "(`workload worker run` deliberately does not fall back to this machine's own Docker login.)"
-}
-
-/**
- * Renders one progress record as a line, or null to skip it. The daemon emits a record per layer
- * per byte-range; keying on (id, status) collapses that to one line per state change, which reads
- * well both on a terminal and in a log. [seen] carries the dedupe state across a pull.
- */
-internal fun renderPullProgress(progress: PullProgress, seen: MutableSet<String>): String? {
-  val status = progress.status?.takeIf { it.isNotBlank() } ?: return null
-  val key = "${progress.id.orEmpty()}|$status"
-  if (!seen.add(key)) return null
-  return if (progress.id.isNullOrBlank()) status else "${progress.id}: $status"
-}
-
-/**
- * create -> start -> stream logs -> wait, returning the container's exit code. The whole post-pull
- * lifecycle goes through the library (no `docker` CLI), which is what stage 1 of the migration
- * ladder is proving out.
- *
- * [onCreated] fires with the container id as soon as it exists, so a caller can arm teardown before
- * the container is started. [cmd] overrides the image's own command — `workload worker run` leaves
- * it null (the profile's image decides what to run); tests use it to drive a stock image.
- *
- * **Why not AutoRemove.** The obvious shape is `AutoRemove=true` and let the daemon reap the
- * container. It doesn't work here: a short-lived container (`echo` and exit) is reaped before our
- * follow-logs request lands, and the daemon answers `404 No such container` — the run's entire
- * output is lost. Docker's own CLI dodges this by attaching *before* it starts the container; our
- * log stream is a cold Flow whose request is only issued once collection begins, so we can't
- * guarantee that ordering without new connector API. Creating without AutoRemove and removing
- * explicitly in a `finally` is deterministic and leaves nothing behind — at the cost of a lingering
- * container if this process is SIGKILLed, which is inside the accepted teardown boundary.
- */
-internal suspend fun runContainerToCompletion(
-    connector: DockerConnector,
-    image: String,
-    env: List<String>,
-    labels: Map<String, String>,
-    onCreated: suspend (String) -> Unit = {},
-    cmd: List<String>? = null,
-    extraHosts: List<String> = emptyList(),
-    networkMode: String? = null,
-    onStdout: (ByteArray) -> Unit,
-    onStderr: (ByteArray) -> Unit,
-): Int {
-  val created =
-      connector.containers.create(
-          image = image,
-          cmd = cmd,
-          env = env,
-          labels = labels,
-          autoRemove = false,
-          extraHosts = extraHosts,
-          networkMode = networkMode,
-      )
-  onCreated(created.id)
-
-  try {
-    connector.containers.start(created.id)
-    return coroutineScope {
-      val exit = async { connector.containers.wait(created.id) }
-
-      // Log streaming is best-effort: the container's lifecycle is governed by `wait` (its exit
-      // code), not by the log follow. If the follow stream drops mid-run, warn and keep waiting —
-      // a broken log tail must never tear down an otherwise-healthy long-running workload.
-      try {
-        connector.logs.logs(created.id, follow = true).collect { frame ->
-          when (frame.stream) {
-            LogStream.STDOUT -> onStdout(frame.bytes)
-            LogStream.STDERR -> onStderr(frame.bytes)
-          }
-        }
-      } catch (e: DockerConnectorException) {
-        System.err.write(
-            "workload: log streaming interrupted (${e.message}); the container keeps running.\n"
-                .toByteArray()
-        )
-        System.err.flush()
-      }
-      exit.await().statusCode
-    }
-  } finally {
-    // NonCancellable so the container is still reaped when the collector is cancelled.
-    withContext(NonCancellable) {
-      runCatching { connector.containers.remove(created.id, force = true) }
-    }
-  }
-}
+import software.medusa.workload.runtime.MetadataEmulator
+import software.medusa.workload.runtime.RefreshingTokenCache
+import software.medusa.workload.runtime.RunReporter
+import software.medusa.workload.runtime.SecretBrokerAuth
+import software.medusa.workload.runtime.SecretResolutionException
+import software.medusa.workload.runtime.WorkerApiException
+import software.medusa.workload.runtime.WorkerClaimResponse
+import software.medusa.workload.runtime.brokerIdTokenClaimer
+import software.medusa.workload.runtime.brokerTokenClaimer
+import software.medusa.workload.runtime.buildMetadataContainerEnv
+import software.medusa.workload.runtime.claimWorkload
+import software.medusa.workload.runtime.containerLabels
+import software.medusa.workload.runtime.containerStopGrace
+import software.medusa.workload.runtime.garbageCollectAfterRun
+import software.medusa.workload.runtime.hostPrimaryAddress
+import software.medusa.workload.runtime.installContainerTeardownHook
+import software.medusa.workload.runtime.isTrustedRunPeer
+import software.medusa.workload.runtime.metadataPointerEnv
+import software.medusa.workload.runtime.pinnedImageRef
+import software.medusa.workload.runtime.pullBrokeredImage
+import software.medusa.workload.runtime.pullFailureMessage
+import software.medusa.workload.runtime.repositoryOf
+import software.medusa.workload.runtime.resolveSecrets
+import software.medusa.workload.runtime.runContainerToCompletion
+import software.medusa.workload.runtime.tokenClaimErrorMessage
 
 class RunCommand : CliktCommand(name = "run") {
   override fun help(context: Context) =
@@ -245,6 +49,7 @@ class RunCommand : CliktCommand(name = "run") {
 
   override fun run() {
     val config = loadConfigOrFail(env)
+    val auth = SecretBrokerAuth(config.workerId, config.workerSecret)
 
     // No `docker` CLI preflight any more: stage 2 pulls through the library, so the only binary
     // `workload worker run` may still invoke is the credential *helper*, and only if config.json
@@ -255,7 +60,7 @@ class RunCommand : CliktCommand(name = "run") {
 
       val claim =
           try {
-            claimWorkload(env.apiBaseUrl, config.workerId, config.workerSecret, profileId)
+            claimWorkload(env.apiBaseUrl, auth, profileId)
           } catch (e: WorkerApiException) {
             throw PrintMessage(
                 tokenClaimErrorMessage(e, profileId),
@@ -316,7 +121,8 @@ class RunCommand : CliktCommand(name = "run") {
         }
       }
 
-      val exitCode = runContainerWithMetadata(connector, config, claim, pinnedRef, secretValues)
+      val exitCode =
+          runContainerWithMetadata(connector, config, auth, claim, pinnedRef, secretValues)
       throw ProgramResult(exitCode)
     }
   }
@@ -332,16 +138,12 @@ class RunCommand : CliktCommand(name = "run") {
    */
   private fun pullImage(connector: DockerConnector, pinnedRef: String, claim: WorkerClaimResponse) {
     echo("Pulling $pinnedRef ...", err = true)
-    val seen = mutableSetOf<String>()
     // Stage 3: authenticate with the brokered token, not this host's Docker sign-in. Passing an
     // explicit authConfig also stops the connector consulting ~/.docker/config.json at all, so a
     // fresh machine needs Docker and nothing else — no gcloud, no docker login.
-    val auth = brokeredRegistryAuth(pinnedRef, claim.accessToken)
     try {
       runBlocking {
-        connector.images.pull(pinnedRef, auth).collect { progress ->
-          renderPullProgress(progress, seen)?.let { echo(it, err = true) }
-        }
+        pullBrokeredImage(connector, pinnedRef, claim.accessToken) { echo(it, err = true) }
       }
     } catch (e: DockerConnectorException) {
       // Covers both shapes of pull failure: an HTTP status (DockerApiException) and the in-stream
@@ -354,13 +156,6 @@ class RunCommand : CliktCommand(name = "run") {
       )
     }
   }
-
-  private fun containerLabels(claim: WorkerClaimResponse, workerId: String): Map<String, String> =
-      mapOf(
-          workloadProfileLabel to claim.profileId,
-          workloadRevisionLabel to claim.revision.toString(),
-          workloadWorkerLabel to workerId,
-      )
 
   /**
    * The Beacon path (default): an in-CLI metadata-server emulator, reached by the container exactly
@@ -381,6 +176,7 @@ class RunCommand : CliktCommand(name = "run") {
   private fun runContainerWithMetadata(
       connector: DockerConnector,
       config: WorkloadConfig,
+      auth: SecretBrokerAuth,
       claim: WorkerClaimResponse,
       pinnedRef: String,
       secretValues: Map<String, String>,
@@ -389,10 +185,10 @@ class RunCommand : CliktCommand(name = "run") {
     val primary = hostPrimaryAddress()
     val emulator =
         MetadataEmulator(
-            RefreshingTokenCache(brokerTokenClaimer(env.apiBaseUrl, config, profileId)),
+            RefreshingTokenCache(brokerTokenClaimer(env.apiBaseUrl, auth, profileId)),
             InetSocketAddress(primary, 0),
             ::isTrustedRunPeer,
-            idTokenClaimer = brokerIdTokenClaimer(env.apiBaseUrl, config, profileId),
+            idTokenClaimer = brokerIdTokenClaimer(env.apiBaseUrl, auth, profileId),
         )
     emulator.start()
     val metadataAddress = "${primary.hostAddress}:${emulator.port}"
@@ -404,8 +200,7 @@ class RunCommand : CliktCommand(name = "run") {
     val reporter =
         RunReporter.start(
             brokerBaseUrl = env.apiBaseUrl,
-            workerId = config.workerId,
-            workerSecret = config.workerSecret,
+            auth = auth,
             profileId = claim.profileId,
             revision = claim.revision,
             kind = "run",
@@ -469,7 +264,7 @@ class RunCommand : CliktCommand(name = "run") {
   /**
    * Best-effort teardown on Ctrl-C/SIGTERM: stop the container (SIGTERM, then SIGKILL after the
    * grace) and remove it, plus close the metadata emulator. The JVM exits through this hook rather
-   * than unwinding, so the `finally` in [runContainerToCompletion] may never run — this is what
+   * than unwinding, so the `finally` in `runContainerToCompletion` may never run — this is what
    * actually cleans up on Ctrl-C. Accepted teardown boundary: a `kill -9` of this JVM can still
    * leave a container behind, which `workload ps --reap` clears; the emulator dies with the process
    * regardless.
@@ -478,19 +273,10 @@ class RunCommand : CliktCommand(name = "run") {
       connector: DockerConnector,
       containerId: String,
       emulator: MetadataEmulator,
-  ): Thread {
-    val hook = Thread {
-      runCatching {
-        runBlocking {
-          connector.containers.stop(containerId, containerStopGrace)
-          connector.containers.remove(containerId, force = true)
-        }
+  ): Thread =
+      installContainerTeardownHook(connector, containerId, containerStopGrace) {
+        runCatching { emulator.close() }
       }
-      runCatching { emulator.close() }
-    }
-    Runtime.getRuntime().addShutdownHook(hook)
-    return hook
-  }
 
   private fun requireDaemon(connector: DockerConnector) {
     try {

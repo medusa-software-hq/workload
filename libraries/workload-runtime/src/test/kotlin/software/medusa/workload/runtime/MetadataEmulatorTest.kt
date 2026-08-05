@@ -1,4 +1,4 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.spi.ILoggingEvent

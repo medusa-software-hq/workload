@@ -1,4 +1,4 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import java.io.IOException
 import java.net.URI
@@ -132,6 +132,9 @@ private fun send(request: HttpRequest): HttpResponse<String> =
  * token for a fresh worker credential (M4-A3). The token rides as the Bearer credential; the broker
  * burns it and returns `{workerId, workerSecret}` (the secret is a `wlw_` token). A rejected,
  * expired, burnt, or malformed token — or a wrong URL — comes back as a bare 404.
+ *
+ * This is the one call that predates a [BrokerAuth]: there is no worker credential yet to inject —
+ * the enrollment token *becomes* one.
  */
 fun registerWorker(
     brokerBaseUrl: String,
@@ -161,15 +164,11 @@ fun registerWorker(
 }
 
 /** Calls `GET <brokerBaseUrl>/worker/v2/registrations/self`. */
-fun fetchSelfStatus(
-    brokerBaseUrl: String,
-    workerId: String,
-    workerSecret: String,
-): SelfStatusResponse {
+fun fetchSelfStatus(brokerBaseUrl: String, auth: BrokerAuth): SelfStatusResponse {
   val request =
       HttpRequest.newBuilder()
           .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/registrations/self"))
-          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Authorization", auth.authorizationHeader())
           .timeout(Duration.ofSeconds(10))
           .GET()
           .build()
@@ -182,16 +181,11 @@ fun fetchSelfStatus(
 }
 
 /** Calls `POST <brokerBaseUrl>/worker/v2/token`. */
-fun claimToken(
-    brokerBaseUrl: String,
-    workerId: String,
-    workerSecret: String,
-    profileId: String,
-): TokenClaimResponse {
+fun claimToken(brokerBaseUrl: String, auth: BrokerAuth, profileId: String): TokenClaimResponse {
   val request =
       HttpRequest.newBuilder()
           .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/token"))
-          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Authorization", auth.authorizationHeader())
           .header("Content-Type", "application/json")
           .timeout(Duration.ofSeconds(10))
           .POST(
@@ -209,8 +203,7 @@ fun claimToken(
 /** Calls `POST <brokerBaseUrl>/worker/v2/id-token`: an audience-bound OIDC ID token for the SA. */
 fun claimIdToken(
     brokerBaseUrl: String,
-    workerId: String,
-    workerSecret: String,
+    auth: BrokerAuth,
     profileId: String,
     audience: String,
     includeEmail: Boolean,
@@ -218,7 +211,7 @@ fun claimIdToken(
   val request =
       HttpRequest.newBuilder()
           .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/id-token"))
-          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Authorization", auth.authorizationHeader())
           .header("Content-Type", "application/json")
           .timeout(Duration.ofSeconds(10))
           .POST(
@@ -236,16 +229,11 @@ fun claimIdToken(
 }
 
 /** Calls `POST <brokerBaseUrl>/worker/v2/claim`: the token plus the revision's env payload. */
-fun claimWorkload(
-    brokerBaseUrl: String,
-    workerId: String,
-    workerSecret: String,
-    profileId: String,
-): WorkerClaimResponse {
+fun claimWorkload(brokerBaseUrl: String, auth: BrokerAuth, profileId: String): WorkerClaimResponse {
   val request =
       HttpRequest.newBuilder()
           .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/claim"))
-          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Authorization", auth.authorizationHeader())
           .header("Content-Type", "application/json")
           .timeout(Duration.ofSeconds(10))
           .POST(
@@ -267,8 +255,7 @@ fun claimWorkload(
  */
 fun createRun(
     brokerBaseUrl: String,
-    workerId: String,
-    workerSecret: String,
+    auth: BrokerAuth,
     profileId: String,
     revision: Int,
     kind: String,
@@ -277,7 +264,7 @@ fun createRun(
   val request =
       HttpRequest.newBuilder()
           .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/runs"))
-          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Authorization", auth.authorizationHeader())
           .header("Content-Type", "application/json")
           .timeout(Duration.ofSeconds(10))
           .POST(
@@ -295,11 +282,11 @@ fun createRun(
 }
 
 /** Calls `POST <brokerBaseUrl>/worker/v2/runs/{runId}/heartbeat` — keeps a run live (204). */
-fun heartbeatRun(brokerBaseUrl: String, workerId: String, workerSecret: String, runId: String) {
+fun heartbeatRun(brokerBaseUrl: String, auth: BrokerAuth, runId: String) {
   val request =
       HttpRequest.newBuilder()
           .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/runs/$runId/heartbeat"))
-          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Authorization", auth.authorizationHeader())
           .timeout(Duration.ofSeconds(10))
           .POST(HttpRequest.BodyPublishers.noBody())
           .build()
@@ -313,17 +300,11 @@ fun heartbeatRun(brokerBaseUrl: String, workerId: String, workerSecret: String, 
 /**
  * Calls `POST <brokerBaseUrl>/worker/v2/runs/{runId}/end` with the exit code — the terminal report.
  */
-fun endRun(
-    brokerBaseUrl: String,
-    workerId: String,
-    workerSecret: String,
-    runId: String,
-    exitCode: Int?,
-) {
+fun endRun(brokerBaseUrl: String, auth: BrokerAuth, runId: String, exitCode: Int?) {
   val request =
       HttpRequest.newBuilder()
           .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/runs/$runId/end"))
-          .header("Authorization", "Bearer $workerId.$workerSecret")
+          .header("Authorization", auth.authorizationHeader())
           .header("Content-Type", "application/json")
           .timeout(Duration.ofSeconds(10))
           .POST(HttpRequest.BodyPublishers.ofString(json.encodeToString(EndRunRequest(exitCode))))

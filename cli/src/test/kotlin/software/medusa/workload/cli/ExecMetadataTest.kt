@@ -7,6 +7,10 @@ import kotlin.test.Test
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
+import software.medusa.workload.runtime.BrokeredToken
+import software.medusa.workload.runtime.MetadataEmulator
+import software.medusa.workload.runtime.RefreshingTokenCache
+import software.medusa.workload.runtime.metadataPointerEnv
 
 /**
  * The M4-B4 `exec` path end to end, no Docker and no GCP: a loopback metadata emulator (fake token

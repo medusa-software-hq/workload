@@ -5,6 +5,11 @@ import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.prompt
+import software.medusa.workload.runtime.SecretBrokerAuth
+import software.medusa.workload.runtime.WorkerApiException
+import software.medusa.workload.runtime.fetchSelfStatus
+import software.medusa.workload.runtime.localHostname
+import software.medusa.workload.runtime.registerWorker
 
 private const val pollTimeoutSeconds = 600L
 private const val pollIntervalStartSeconds = 2L
@@ -112,10 +117,11 @@ private fun pollUntilDecided(
 ): PollOutcome {
   val deadline = System.nanoTime() + timeoutSeconds * 1_000_000_000L
   var intervalSeconds = pollIntervalStartSeconds
+  val auth = SecretBrokerAuth(workerId, workerSecret)
 
   while (System.nanoTime() < deadline) {
     try {
-      val status = fetchSelfStatus(brokerUrl, workerId, workerSecret)
+      val status = fetchSelfStatus(brokerUrl, auth)
       if (status.status == "active") return PollOutcome.APPROVED
       // Otherwise "pending" — keep waiting.
     } catch (e: WorkerApiException) {

@@ -3,6 +3,7 @@ package software.medusa.workload.cli
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
+import software.medusa.workload.runtime.metadataPointerEnv
 
 class ExecCommandTest {
 

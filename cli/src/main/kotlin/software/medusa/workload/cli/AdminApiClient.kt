@@ -7,6 +7,7 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse.BodyHandlers
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import software.medusa.workload.runtime.BrokerUnreachableException
 
 private const val fleetService = "/medusa.workload.v1.FleetService"
 

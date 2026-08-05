@@ -4,6 +4,10 @@ import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
+import software.medusa.workload.runtime.SecretBrokerAuth
+import software.medusa.workload.runtime.WorkerApiException
+import software.medusa.workload.runtime.claimToken
+import software.medusa.workload.runtime.tokenClaimErrorMessage
 
 class TokenCommand : CliktCommand(name = "token") {
   private val env by requireEnvironment()
@@ -14,7 +18,11 @@ class TokenCommand : CliktCommand(name = "token") {
     val config = loadConfigOrFail(env)
     val token =
         try {
-          claimToken(env.apiBaseUrl, config.workerId, config.workerSecret, profileId)
+          claimToken(
+              env.apiBaseUrl,
+              SecretBrokerAuth(config.workerId, config.workerSecret),
+              profileId,
+          )
         } catch (e: WorkerApiException) {
           throw PrintMessage(
               tokenClaimErrorMessage(e, profileId),
@@ -40,31 +48,3 @@ internal fun loadConfigOrFail(env: Environment): WorkloadConfig =
             statusCode = 1,
             printError = true,
         )
-
-internal fun tokenClaimErrorMessage(e: WorkerApiException, profileId: String): String =
-    if (e.statusCode == 404) {
-      // The v2 worker plane returns a bare 404 for a wrong URL *and* for any rejected credential
-      // (revoked, or a worker that never activated) — it's deliberately indistinguishable.
-      "The broker returned 404. That means either a wrong broker URL, or a credential the broker " +
-          "rejected — this worker may have been revoked or never activated. Check " +
-          "'workload worker status', and re-register with 'workload worker register --force' if needed."
-    } else
-        when (e.errorCode) {
-          "unauthorized" ->
-              "Worker is not approved (pending, rejected, or revoked). Run 'workload worker status' to check."
-          "profile_not_found" ->
-              "No such profile '$profileId'. Check the profile ID, or ask an admin to grant it to you."
-          "profile_archived" ->
-              "Profile '$profileId' has been archived and can no longer be claimed."
-          "not_granted" ->
-              "You don't have access to profile '$profileId'. Ask an admin to grant it to you."
-          "failed_to_mint_token" ->
-              "The broker failed to mint a token — likely an IAM misconfiguration on the target service account. Contact an admin."
-          "not_verified" ->
-              "Profile '$profileId' has an unverified revision and can't be claimed. Ask an admin to re-verify it."
-          "image_unresolvable" ->
-              "Profile '$profileId' has an image whose digest couldn't be resolved, so it can't be claimed. " +
-                  "Its target service account likely lacks roles/artifactregistry.reader on the image's repository " +
-                  "(see the workload-impersonation module's artifact_repository_id input). Ask an admin to re-verify it."
-          else -> "Token claim failed: ${e.errorCode}"
-        }

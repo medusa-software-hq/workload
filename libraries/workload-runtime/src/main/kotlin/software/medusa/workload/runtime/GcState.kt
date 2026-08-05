@@ -1,4 +1,4 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import java.nio.file.Files
 import java.nio.file.Path
@@ -24,7 +24,7 @@ private val gcJson = Json {
 internal fun managedReposFile(dir: Path): Path = dir.resolve(managedReposFileName)
 
 /** The repositories recorded so far, or empty if none/unreadable — never throws. */
-internal fun loadManagedRepos(dir: Path): Set<String> {
+fun loadManagedRepos(dir: Path): Set<String> {
   val file = managedReposFile(dir)
   if (!Files.exists(file)) return emptySet()
   return runCatching { gcJson.decodeFromString<ManagedRepos>(Files.readString(file)).repositories }

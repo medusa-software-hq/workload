@@ -1,4 +1,4 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import com.sun.net.httpserver.HttpServer
 import java.net.InetSocketAddress

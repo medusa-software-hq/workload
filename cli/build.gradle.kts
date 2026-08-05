@@ -24,6 +24,11 @@ dependencies {
   // UDS transports (epoll on Linux) with it, so the shadow jar can talk to the daemon socket.
   implementation(project(":libraries:docker-connector"))
 
+  // The container-run pipeline (claim/resolve/pull/sidecar/create-start/log/wait/teardown, plus GC
+  // observe/reap) — extracted to a standalone library so it can back workloads run on a node, not
+  // only via this CLI.
+  implementation(project(":libraries:workload-runtime"))
+
   // The connector declares only slf4j-api and leaves the backend to its consumer — that's us.
   // Without a binding, SLF4J prints a "No SLF4J providers were found" banner over the container's
   // own streamed output. slf4j-nop is *not* enough: Netty deliberately rejects a NOP binding and
@@ -33,16 +38,8 @@ dependencies {
 
   testImplementation(libs.kotlin.test)
 
-  // logback is the runtime binding (above); the Beacon refresh-observability test asserts the
-  // actual
-  // `event=beacon.token.refresh` line via logback's ListAppender, so it needs it at compile scope
-  // too.
-  testImplementation(libs.logback.classic)
-
-  // The metadata emulator's contract test drives a real Google auth client
-  // (ComputeEngineCredentials
-  // pointed at the emulator via GCE_METADATA_HOST) — proving genuine GCE-client compatibility, not
-  // just our own view of the wire shape. Version managed by the same BOM the backend uses.
+  // AdminAuthTest drives real google-auth GoogleCredentials/AccessToken types. Version managed by
+  // the same BOM the backend uses.
   testImplementation(platform(libs.google.cloud.libraries.bom))
   testImplementation(libs.google.auth.oauth2.http)
 }

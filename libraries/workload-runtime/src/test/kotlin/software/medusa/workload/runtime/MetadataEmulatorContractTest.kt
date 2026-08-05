@@ -1,4 +1,4 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import com.google.api.client.http.HttpTransport
 import com.google.api.client.http.LowLevelHttpRequest

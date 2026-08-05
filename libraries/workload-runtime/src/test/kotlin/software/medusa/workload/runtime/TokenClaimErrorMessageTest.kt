@@ -1,9 +1,9 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import kotlin.test.Test
 import kotlin.test.assertTrue
 
-class TokenCommandTest {
+class TokenClaimErrorMessageTest {
 
   @Test
   fun `unauthorized maps to an approval-status message`() {

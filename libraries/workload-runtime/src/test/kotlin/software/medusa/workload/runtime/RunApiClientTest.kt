@@ -1,4 +1,4 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import com.sun.net.httpserver.HttpServer
 import java.net.InetAddress
@@ -43,6 +43,7 @@ private class RunStubApi(private val status: Int, private val responseBody: Stri
 
 class RunApiClientTest {
   private var stub: RunStubApi? = null
+  private val auth = SecretBrokerAuth("wid", "wsecret")
 
   @AfterTest fun cleanup() = stub?.stop() ?: Unit
 
@@ -55,7 +56,7 @@ class RunApiClientTest {
         )
     stub = api
 
-    val response = createRun(api.baseUrl, "wid", "wsecret", "my-profile", 4, "run", "sha256:abc")
+    val response = createRun(api.baseUrl, auth, "my-profile", 4, "run", "sha256:abc")
 
     assertEquals("/worker/v2/runs", api.lastPath)
     assertEquals("Bearer wid.wsecret", api.lastAuthorization)
@@ -71,7 +72,7 @@ class RunApiClientTest {
   fun `heartbeatRun targets the run's heartbeat path and accepts 204`() {
     val api = RunStubApi(204, "")
     stub = api
-    heartbeatRun(api.baseUrl, "wid", "wsecret", "run-123")
+    heartbeatRun(api.baseUrl, auth, "run-123")
     assertEquals("/worker/v2/runs/run-123/heartbeat", api.lastPath)
     assertEquals("Bearer wid.wsecret", api.lastAuthorization)
   }
@@ -80,7 +81,7 @@ class RunApiClientTest {
   fun `endRun sends the exit code to the run's end path and accepts 204`() {
     val api = RunStubApi(204, "")
     stub = api
-    endRun(api.baseUrl, "wid", "wsecret", "run-123", 0)
+    endRun(api.baseUrl, auth, "run-123", 0)
     assertEquals("/worker/v2/runs/run-123/end", api.lastPath)
     assertEquals("""{"exitCode":0}""", api.lastBody)
   }
@@ -89,7 +90,7 @@ class RunApiClientTest {
   fun `endRun serializes a null exit code`() {
     val api = RunStubApi(204, "")
     stub = api
-    endRun(api.baseUrl, "wid", "wsecret", "run-123", null)
+    endRun(api.baseUrl, auth, "run-123", null)
     assertEquals("""{"exitCode":null}""", api.lastBody)
   }
 
@@ -97,8 +98,7 @@ class RunApiClientTest {
   fun `a non-204 heartbeat surfaces as a WorkerApiException with the broker's error code`() {
     val api = RunStubApi(403, """{"error":"not_your_run"}""")
     stub = api
-    val e =
-        assertFailsWith<WorkerApiException> { heartbeatRun(api.baseUrl, "wid", "wsecret", "run-9") }
+    val e = assertFailsWith<WorkerApiException> { heartbeatRun(api.baseUrl, auth, "run-9") }
     assertEquals(403, e.statusCode)
     assertEquals("not_your_run", e.errorCode)
   }
@@ -106,7 +106,7 @@ class RunApiClientTest {
   @Test
   fun `an unreachable broker surfaces as BrokerUnreachableException`() {
     assertFailsWith<BrokerUnreachableException> {
-      createRun("http://127.0.0.1:1", "wid", "wsecret", "p", 1, "run", null)
+      createRun("http://127.0.0.1:1", auth, "p", 1, "run", null)
     }
   }
 }

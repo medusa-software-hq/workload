@@ -1,4 +1,4 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -75,8 +75,7 @@ internal constructor(
      */
     fun start(
         brokerBaseUrl: String,
-        workerId: String,
-        workerSecret: String,
+        auth: BrokerAuth,
         profileId: String,
         revision: Int,
         kind: String,
@@ -85,7 +84,7 @@ internal constructor(
     ): RunReporter? {
       val created =
           try {
-            createRun(brokerBaseUrl, workerId, workerSecret, profileId, revision, kind, imageDigest)
+            createRun(brokerBaseUrl, auth, profileId, revision, kind, imageDigest)
           } catch (e: Exception) {
             warn(
                 "workload: couldn't record the run start (${e.message}); " +
@@ -95,8 +94,8 @@ internal constructor(
           }
       return RunReporter(
           runId = created.runId,
-          heartbeat = { heartbeatRun(brokerBaseUrl, workerId, workerSecret, created.runId) },
-          end = { code -> endRun(brokerBaseUrl, workerId, workerSecret, created.runId, code) },
+          heartbeat = { heartbeatRun(brokerBaseUrl, auth, created.runId) },
+          end = { code -> endRun(brokerBaseUrl, auth, created.runId, code) },
           intervalSeconds = created.heartbeatIntervalSeconds,
           warn = warn,
       )

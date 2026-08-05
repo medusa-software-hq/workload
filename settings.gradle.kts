@@ -20,6 +20,12 @@ include(":images:hello-workload")
 
 include(":libraries:docker-connector")
 
+// The container-run pipeline (claim -> resolve -> brokered pull -> sidecar wiring -> create/start
+// -> log stream -> wait -> teardown, plus GC observe/reap) as a standalone library, importable
+// with no dependency on the CLI — the foundation for running workloads on nodes, not just the
+// operator's laptop via `workload run`.
+include(":libraries:workload-runtime")
+
 include(":libraries:token-format")
 
 // The api build's own parent project (backend/api/impl/build.gradle.kts) configures these three.

@@ -63,6 +63,10 @@ jobs:
     name: docker-connector
     uses: ./.github/workflows/check-docker-connector.yml
 
+  check-workload-runtime:
+    name: workload-runtime
+    uses: ./.github/workflows/check-workload-runtime.yml
+
   check-token-format:
     name: token-format
     uses: ./.github/workflows/check-token-format.yml

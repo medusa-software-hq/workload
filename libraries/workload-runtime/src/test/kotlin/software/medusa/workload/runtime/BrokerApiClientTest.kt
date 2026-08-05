@@ -1,11 +1,11 @@
-package software.medusa.workload.cli
+package software.medusa.workload.runtime
 
 import java.net.UnknownHostException
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
-class WorkerApiClientTest {
+class BrokerApiClientTest {
   @Test
   fun `BrokerUnreachableException message names the host and warns the URL should have no path`() {
     val message =

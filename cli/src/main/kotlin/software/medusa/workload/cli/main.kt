@@ -10,6 +10,7 @@ import com.github.ajalt.clikt.core.subcommands
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
 import kotlin.system.exitProcess
+import software.medusa.workload.runtime.BrokerUnreachableException
 
 class MainCommand : CliktCommand(name = "workload") {
   private val verbose by
