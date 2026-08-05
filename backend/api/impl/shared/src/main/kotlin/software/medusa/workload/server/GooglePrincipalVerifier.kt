@@ -29,7 +29,9 @@ private val googleIssuers = setOf("https://$googleAccountsHostname", googleAccou
  * - **[Principal.Service]**: no `hd` (service-account tokens carry none), `aud` = [serviceAudience]
  *   (this API's own URL — what a WIF/ADC-minted ID token names), AND `email` ∈
  *   [serviceAccountAllowlist]. The audience *and* the allowlist must both match, so a token minted
- *   for a different environment's API URL, or from an un-listed SA, is rejected.
+ *   for a different environment's API URL, or from an un-listed SA, is rejected. Its
+ *   [Principal.Service.profileScope] is looked up from [serviceAccountProfileScopes] by email —
+ *   absent means unrestricted (the pre-existing full-admin s2s principal).
  *
  * Anything else → `null`. The order matters only in that a real human token (which has `hd`) can
  * never satisfy the service branch and vice versa, so the two are disjoint.
@@ -40,6 +42,7 @@ internal constructor(
     private val allowedDomain: String,
     private val serviceAudience: String?,
     private val serviceAccountAllowlist: Set<String>,
+    private val serviceAccountProfileScopes: Map<String, Set<String>> = emptyMap(),
     jwkSource: JWKSource<SecurityContext>,
 ) {
 
@@ -49,11 +52,13 @@ internal constructor(
       allowedDomain: String,
       serviceAudience: String?,
       serviceAccountAllowlist: Set<String>,
+      serviceAccountProfileScopes: Map<String, Set<String>> = emptyMap(),
   ) : this(
       humanAudiences,
       allowedDomain,
       serviceAudience,
       serviceAccountAllowlist,
+      serviceAccountProfileScopes,
       JWKSourceBuilder.create<SecurityContext>(googleJwksUri).refreshAheadCache(true).build(),
   )
 
@@ -109,7 +114,7 @@ internal constructor(
             audiences.contains(serviceAudience) &&
             email in serviceAccountAllowlist
     ) {
-      return Principal.Service(email)
+      return Principal.Service(email, profileScope = serviceAccountProfileScopes[email].orEmpty())
     }
 
     return null
