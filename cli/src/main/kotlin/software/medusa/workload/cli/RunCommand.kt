@@ -7,37 +7,43 @@ import com.github.ajalt.clikt.core.ProgramResult
 import com.github.ajalt.clikt.parameters.options.option
 import com.github.ajalt.clikt.parameters.options.required
 import java.io.IOException
-import java.net.InetSocketAddress
+import java.util.UUID
 import kotlinx.coroutines.runBlocking
 import software.medusa.workload.docker.DockerConnectionException
 import software.medusa.workload.docker.DockerConnector
 import software.medusa.workload.docker.DockerConnectorConfig
 import software.medusa.workload.docker.DockerConnectorException
-import software.medusa.workload.runtime.MetadataEmulator
-import software.medusa.workload.runtime.RefreshingTokenCache
+import software.medusa.workload.runtime.MetadataSidecar
 import software.medusa.workload.runtime.RunReporter
 import software.medusa.workload.runtime.SecretBrokerAuth
 import software.medusa.workload.runtime.SecretResolutionException
 import software.medusa.workload.runtime.WorkerApiException
 import software.medusa.workload.runtime.WorkerClaimResponse
-import software.medusa.workload.runtime.brokerIdTokenClaimer
-import software.medusa.workload.runtime.brokerTokenClaimer
 import software.medusa.workload.runtime.buildMetadataContainerEnv
 import software.medusa.workload.runtime.claimWorkload
 import software.medusa.workload.runtime.containerLabels
 import software.medusa.workload.runtime.containerStopGrace
 import software.medusa.workload.runtime.garbageCollectAfterRun
-import software.medusa.workload.runtime.hostPrimaryAddress
 import software.medusa.workload.runtime.installContainerTeardownHook
-import software.medusa.workload.runtime.isTrustedRunPeer
 import software.medusa.workload.runtime.metadataPointerEnv
+import software.medusa.workload.runtime.metadataSidecarEnv
 import software.medusa.workload.runtime.pinnedImageRef
 import software.medusa.workload.runtime.pullBrokeredImage
 import software.medusa.workload.runtime.pullFailureMessage
+import software.medusa.workload.runtime.renderPullProgress
 import software.medusa.workload.runtime.repositoryOf
 import software.medusa.workload.runtime.resolveSecrets
 import software.medusa.workload.runtime.runContainerToCompletion
+import software.medusa.workload.runtime.startMetadataSidecar
+import software.medusa.workload.runtime.stopMetadataSidecar
 import software.medusa.workload.runtime.tokenClaimErrorMessage
+import software.medusa.workload.runtime.workloadNetworkLabel
+
+/**
+ * Env var overriding the metadata-sidecar image `workload run` pulls — see
+ * [resolveMetadataSidecarImage].
+ */
+internal const val metadataSidecarImageEnvVar = "WORKLOAD_METADATA_SIDECAR_IMAGE"
 
 class RunCommand : CliktCommand(name = "run") {
   override fun help(context: Context) =
@@ -158,20 +164,21 @@ class RunCommand : CliktCommand(name = "run") {
   }
 
   /**
-   * The Beacon path (default): an in-CLI metadata-server emulator, reached by the container exactly
-   * as the GCE metadata server would be. The container fetches and refreshes brokered tokens on
-   * demand — no access token in its env, only the non-secret `GCE_METADATA_*` pointers — so jobs
-   * longer than the token's 15-minute lifetime keep working.
+   * The Beacon path (default): the metadata emulator, reached by the container exactly as the GCE
+   * metadata server would be. The container fetches and refreshes brokered tokens on demand — no
+   * access token in its env, only the non-secret `GCE_METADATA_*` pointers — so jobs longer than
+   * the token's 15-minute lifetime keep working.
    *
-   * **Why the host primary IP, not a per-run network gateway (as the M4 design first proposed).**
-   * Verified on the Ubuntu VM (Docker 29): a freshly-created bridge's gateway IP is not assigned to
-   * any host interface (unbindable), and — decisively — a container on a *custom* network cannot
-   * reach a host-side listener at all under modern Docker's host-access hardening. The one path
-   * that works is the default bridge reaching the host's own primary IP (Docker source-NATs it
-   * there). So the emulator binds that address; the peer check ([isTrustedRunPeer]) admits the
-   * private-range source, and the `Metadata-Flavor` header + random port complete the guard.
-   * Restoring the design's per-run-network, per-container isolation needs the sidecar-container
-   * variant — deferred; the B2 network API stands ready for it.
+   * **Why a sidecar container, not a host-bound emulator (as `run` used to do).** Verified on the
+   * Ubuntu VM (Docker 29): a container on a *custom* network can't reach a host-side listener at
+   * all under modern Docker's host-access hardening, and even the one path that did work — the
+   * default bridge reaching the host's own primary IP — put every profile's container behind the
+   * *same* address, with only a private-range peer check standing between one tenant and another's
+   * token. So the emulator now runs as its own container (`images/metadata-emulator`), on a bridge
+   * network created fresh for this run and shared with nothing but the workload container it
+   * serves. Two runs get two disjoint networks; Docker never routes between them, so cross-tenant
+   * reachability isn't merely rejected, there is no path at all. See `MetadataSidecar.kt` for the
+   * wiring, and `MetadataSidecarIsolationContractTest` for the proof.
    */
   private fun runContainerWithMetadata(
       connector: DockerConnector,
@@ -181,18 +188,23 @@ class RunCommand : CliktCommand(name = "run") {
       pinnedRef: String,
       secretValues: Map<String, String>,
   ): Int {
+    val sidecarImage = resolveMetadataSidecarImage()
+    val networkName = "ms-workload-run-" + UUID.randomUUID().toString().take(8)
+    val labels = containerLabels(claim, config.workerId) + (workloadNetworkLabel to "true")
+
+    pullMetadataSidecarImage(connector, sidecarImage)
+
     var hook: Thread? = null
-    val primary = hostPrimaryAddress()
-    val emulator =
-        MetadataEmulator(
-            RefreshingTokenCache(brokerTokenClaimer(env.apiBaseUrl, auth, profileId)),
-            InetSocketAddress(primary, 0),
-            ::isTrustedRunPeer,
-            idTokenClaimer = brokerIdTokenClaimer(env.apiBaseUrl, auth, profileId),
-        )
-    emulator.start()
-    val metadataAddress = "${primary.hostAddress}:${emulator.port}"
-    echo("Metadata:     http://$metadataAddress (tokens refresh automatically)", err = true)
+    val sidecar = runBlocking {
+      startMetadataSidecar(
+          connector = connector,
+          image = sidecarImage,
+          networkName = networkName,
+          env = metadataSidecarEnv(env.apiBaseUrl, config.workerId, config.workerSecret, profileId),
+          labels = labels,
+      )
+    }
+    echo("Metadata:     http://${sidecar.address} (tokens refresh automatically)", err = true)
 
     // Record the run + start heartbeating (M6-B1). Best-effort: a broker hiccup here never stops
     // the
@@ -216,11 +228,13 @@ class RunCommand : CliktCommand(name = "run") {
                 env =
                     buildMetadataContainerEnv(
                         claim.envVars + secretValues,
-                        metadataPointerEnv(metadataAddress),
+                        metadataPointerEnv(sidecar.address),
                     ),
-                labels = containerLabels(claim, config.workerId),
-                extraHosts = listOf("metadata.google.internal:${primary.hostAddress}"),
-                onCreated = { id -> hook = stopOnShutdownHook(connector, id, emulator) },
+                labels = labels,
+                extraHosts =
+                    listOf("metadata.google.internal:${sidecar.address.substringBefore(':')}"),
+                networkMode = networkName,
+                onCreated = { id -> hook = stopOnShutdownHook(connector, id, sidecar) },
                 onStdout = {
                   System.out.write(it)
                   System.out.flush()
@@ -243,7 +257,9 @@ class RunCommand : CliktCommand(name = "run") {
       // hook.
       reporter?.close()
       hook?.let { runCatching { Runtime.getRuntime().removeShutdownHook(it) } }
-      runCatching { emulator.close() }
+      // The workload container is already gone by this point (runContainerToCompletion's own
+      // finally removed it), so the sidecar container is the network's last endpoint.
+      runCatching { runBlocking { stopMetadataSidecar(connector, sidecar) } }
       // Second GC pass at teardown (M7-00): our container has been removed, so its now-exited
       // predecessor is reapable and this repo's superseded image sweepable. Best-effort.
       runCatching {
@@ -262,21 +278,65 @@ class RunCommand : CliktCommand(name = "run") {
   }
 
   /**
-   * Best-effort teardown on Ctrl-C/SIGTERM: stop the container (SIGTERM, then SIGKILL after the
-   * grace) and remove it, plus close the metadata emulator. The JVM exits through this hook rather
-   * than unwinding, so the `finally` in `runContainerToCompletion` may never run — this is what
-   * actually cleans up on Ctrl-C. Accepted teardown boundary: a `kill -9` of this JVM can still
-   * leave a container behind, which `workload ps --reap` clears; the emulator dies with the process
-   * regardless.
+   * Best-effort teardown on Ctrl-C/SIGTERM: stop the workload container (SIGTERM, then SIGKILL
+   * after the grace) and remove it, then tear down the sidecar container + its per-run network. The
+   * JVM exits through this hook rather than unwinding, so the `finally` in
+   * `runContainerWithMetadata` may never run — this is what actually cleans up on Ctrl-C. Accepted
+   * teardown boundary: a `kill -9` of this JVM can still leave a container (or the sidecar/network)
+   * behind, which `workload ps --reap` clears.
    */
   private fun stopOnShutdownHook(
       connector: DockerConnector,
       containerId: String,
-      emulator: MetadataEmulator,
+      sidecar: MetadataSidecar,
   ): Thread =
       installContainerTeardownHook(connector, containerId, containerStopGrace) {
-        runCatching { emulator.close() }
+        runCatching { runBlocking { stopMetadataSidecar(connector, sidecar) } }
       }
+
+  /**
+   * The metadata-sidecar image ref: [metadataSidecarImageEnvVar] if set (local dev, or an operator
+   * overriding the published image), else the ref the Publish CLI workflow baked in at build time
+   * (see `BuildConfig`). Unlike `Environment`'s backend URLs, this can't be a plain source constant
+   * — the underlying Artifact Registry project id carries a build-time-random suffix — so a build
+   * with neither set (e.g. compiled straight from source) fails clearly rather than guessing.
+   */
+  private fun resolveMetadataSidecarImage(): String =
+      System.getenv(metadataSidecarImageEnvVar)?.ifBlank { null }
+          ?: BuildConfig.bakedProperty("metadataSidecarImage")
+          ?: throw PrintMessage(
+              "No metadata-sidecar image configured. Set $metadataSidecarImageEnvVar to an image " +
+                  "ref this host can pull (see images/metadata-emulator), or use a published CLI " +
+                  "build, which bakes one in.",
+              statusCode = 1,
+              printError = true,
+          )
+
+  /**
+   * Pulls [image] with this host's own ambient Docker credentials (never the brokered token — the
+   * sidecar is what *obtains* that token, so it can't itself be gated behind it). Progress is
+   * rendered the same way the workload image's pull is.
+   */
+  private fun pullMetadataSidecarImage(connector: DockerConnector, image: String) {
+    echo("Pulling metadata sidecar $image ...", err = true)
+    val seen = mutableSetOf<String>()
+    try {
+      runBlocking {
+        connector.images.pull(image).collect { progress ->
+          renderPullProgress(progress, seen)?.let { echo(it, err = true) }
+        }
+      }
+    } catch (e: DockerConnectorException) {
+      throw PrintMessage(
+          "Failed to pull the metadata-sidecar image ($image): ${e.message}\n" +
+              "This image is pulled with this host's own Docker sign-in, not the brokered token " +
+              "(it's what obtains that token). Run 'gcloud auth configure-docker' for a private " +
+              "registry, or point $metadataSidecarImageEnvVar at one this host can already reach.",
+          statusCode = 1,
+          printError = true,
+      )
+    }
+  }
 
   private fun requireDaemon(connector: DockerConnector) {
     try {

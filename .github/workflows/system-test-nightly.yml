@@ -56,4 +56,8 @@ jobs:
           # variables; the container-pull leg self-skips until then.
           STAGING_TEST_IMAGE_REF: ${{ vars.SYSTEM_TEST_IMAGE_REF }}
           STAGING_TEST_TARGET_SA: ${{ vars.SYSTEM_TEST_TARGET_SA }}
+          # `:cli:installDist` above doesn't bake a metadata-sidecar image ref in (that only happens
+          # in the Publish CLI workflow), so the one leg that runs a real container
+          # (HappyPathSystemTest's "run a real container image") needs it supplied this way instead.
+          WORKLOAD_METADATA_SIDECAR_IMAGE: ${{ vars.GCP_AR_REPO_ENDPOINT }}/workload/metadata-emulator:latest
         run: ./gradlew :system-test:test

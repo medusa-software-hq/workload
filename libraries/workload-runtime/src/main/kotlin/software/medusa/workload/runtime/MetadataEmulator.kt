@@ -130,8 +130,10 @@ private data class MetadataTokenResponse(
  * non-secret pointer (`GCE_METADATA_HOST=<addr>`) does.
  *
  * Binding and peer admission are injected because they differ per transport: `workload exec` binds
- * loopback and admits same-host callers; `workload run` binds a per-run bridge gateway and admits
- * only the started container's IP (wired in B3/B4).
+ * loopback and admits same-host callers (the child is a local process, not a container); `workload
+ * run` runs this class inside its own **sidecar container** (see `MetadataSidecar.kt`), bound wide
+ * open on that container's network namespace and admitting only the private-range source its
+ * dedicated per-run bridge network ever delivers.
  */
 class MetadataEmulator(
     private val tokenCache: RefreshingTokenCache,
@@ -395,26 +397,12 @@ fun metadataPointerEnv(hostPort: String): Map<String, String> =
     )
 
 /**
- * The host's primary outbound IPv4 address — the one a container reaches the host at (its bridge
- * traffic to this address is delivered locally, source-NAT'd to it). Found via a connected UDP
- * socket, which sends nothing but makes the OS pick the source address of the default route. Falls
- * back to the loopback host address if there's no usable route (e.g. offline), which at least keeps
- * `exec` working.
- */
-fun hostPrimaryAddress(): InetAddress =
-    java.net.DatagramSocket().use { socket ->
-      socket.connect(InetSocketAddress("8.8.8.8", 9))
-      socket.localAddress.takeUnless { it.isAnyLocalAddress } ?: InetAddress.getLocalHost()
-    }
-
-/**
- * The peer predicate `run` uses: admit a private-range source only. A container reaches the
- * host-bound emulator either as its own bridge IP or (after Docker's SNAT to the host's primary IP)
- * as that host address — both site-local; a public source never is. This, the required
- * `Metadata-Flavor` header, and the random ephemeral port are the guard. It is weaker than the
- * design's per-container check: on modern Docker a container can't reach a host-side listener on a
- * per-run network at all, so per-run-network isolation needs the sidecar variant (future work). See
- * the M4-B3 run wiring.
+ * The peer predicate the metadata **sidecar** container uses (see `MetadataSidecar.kt`): admit a
+ * private-range source only — a container's bridge IP always is one. Belt-and-braces, not the
+ * actual isolation boundary: the sidecar sits on a per-run bridge network with exactly one other
+ * member (the workload container it serves), so Docker itself never delivers a packet from anywhere
+ * else. This, the required `Metadata-Flavor` header, and the sidecar's non-published port are the
+ * defense-in-depth layered on top of that network-level guarantee.
  */
 fun isTrustedRunPeer(addr: InetAddress): Boolean = addr.isSiteLocalAddress
 

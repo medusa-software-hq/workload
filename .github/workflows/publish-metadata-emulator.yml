@@ -1,0 +1,88 @@
+name: Publish metadata-emulator image
+
+# The credential/metadata emulator, packaged as its own container and run by `workload run` as a
+# per-run network sidecar (see images/metadata-emulator/README.md). Unlike hello-workload (a test
+# fixture pushed to the integration-test project's private repo), this is a real product dependency
+# — every `workload run` pulls it — so it goes to the primary Artifact Registry, the same one
+# version-drift-checker and the API images publish to.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - trunk/*
+    paths:
+      - images/metadata-emulator/**
+      - libraries/workload-runtime/**
+      - .github/workflows/publish-metadata-emulator.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  NO_COLOR: 1
+  IMAGE_REF: ${{ vars.GCP_AR_REPO_ENDPOINT }}/workload/metadata-emulator
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_AR_REPO_HOSTNAME }}" --quiet
+
+      # The image is a Kotlin/JVM app. Build its fat jar here, once: it's architecture-neutral, so
+      # the multi-arch Docker build below just copies the same jar onto each arch's JRE base.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build the metadata-emulator fat jar
+        run: ./gradlew :images:metadata-emulator:shadowJar
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Multi-arch (linux/amd64,linux/arm64): a worker node running `workload run` can be an arm64
+      # host as easily as amd64 (the same reason hello-workload is multi-arch), and now that the
+      # emulator is a sidecar *container* rather than code inside the CLI's own JVM, it needs an
+      # image for whichever arch the daemon it's scheduled onto actually is.
+      - name: Build and push image
+        uses: docker/build-push-action@v7.1.0
+        with:
+          context: images/metadata-emulator
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE_REF }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report the pinned digest
+        run: |
+          digest=$(gcloud artifacts docker images describe "${{ env.IMAGE_REF }}:latest" --format='value(image_summary.digest)')
+          echo "Pushed ${{ env.IMAGE_REF }}:latest"
+          echo "  digest: $digest"
+          {
+            echo "### metadata-emulator published"
+            echo
+            echo "\`${{ env.IMAGE_REF }}:latest\` (linux/amd64 + linux/arm64)"
+            echo
+            echo "Pinned digest: \`$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"

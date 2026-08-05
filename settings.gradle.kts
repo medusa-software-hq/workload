@@ -18,6 +18,10 @@ include(":cli")
 // google-cloud-storage client that proves the Beacon path end to end from inside a `workload run`.
 include(":images:hello-workload")
 
+// The credential/metadata emulator, packaged as its own container image and run by `workload run`
+// as a per-run network sidecar — see images/metadata-emulator/README.md.
+include(":images:metadata-emulator")
+
 include(":libraries:docker-connector")
 
 // The container-run pipeline (claim -> resolve -> brokered pull -> sidecar wiring -> create/start

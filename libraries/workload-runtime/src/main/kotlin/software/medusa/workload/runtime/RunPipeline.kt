@@ -24,9 +24,8 @@ const val workloadRevisionLabel = "ms-workload.revision"
 const val workloadWorkerLabel = "ms-workload.worker"
 
 // Marks a per-run bridge network as workload-owned, so `workload ps --reap` can sweep any orphaned
-// by a hard-killed CLI (M4-B2). `run` doesn't create these today — the metadata emulator runs on
-// the host, not a per-run network (see runContainerWithMetadata) — but the label + reap stand ready
-// for the future sidecar-container variant that will. Presence == "workload owns it".
+// by a hard-killed CLI (M4-B2). `run` creates one of these per run to host its metadata sidecar
+// (see MetadataSidecar.kt's startMetadataSidecar) — presence == "workload owns it".
 const val workloadNetworkLabel = "ms-workload.network"
 
 /** Grace given to the container on Ctrl-C before the daemon SIGKILLs it. */
