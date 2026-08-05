@@ -1,3 +1,13 @@
+# GCE worker-plane node identities (M7): VMs allow-listed to authenticate to the broker with their
+# own service-account ID token (fetched from the metadata server) instead of a worker secret. Empty
+# by default — no node is accepted until an environment populates this with real node SA emails.
+# Separate from ADMIN_SERVICE_ACCOUNTS below: allow-listing a node here grants it no admin power.
+variable "gce_node_service_accounts" {
+  description = "GCE VM service-account emails allow-listed as worker-plane node identities."
+  type        = list(string)
+  default     = []
+}
+
 # Dedicated service account for the Cloud Run service.
 resource "google_service_account" "primary_service_sa" {
   project      = var.gcp_project_id
@@ -61,6 +71,14 @@ resource "google_cloud_run_v2_service" "primary" {
       env {
         name  = "ADMIN_SERVICE_ACCOUNTS"
         value = "workload-ci-admin@${var.gcp_project_id}.iam.gserviceaccount.com"
+      }
+
+      # GCE node principal (M7): the worker plane's counterpart to ADMIN_SERVICE_ACCOUNTS above,
+      # verified with the same API_URL audience but a separate allowlist (see
+      # var.gce_node_service_accounts and WorkerNodeIdentityService).
+      env {
+        name  = "GCE_NODE_SERVICE_ACCOUNTS"
+        value = join(",", var.gce_node_service_accounts)
       }
 
       env {

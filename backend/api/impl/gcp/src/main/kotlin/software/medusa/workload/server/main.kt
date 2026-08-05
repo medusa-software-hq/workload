@@ -11,6 +11,12 @@ private const val allowedDomainEnvVarName = "GOOGLE_ALLOWED_DOMAIN"
 // URL) and the comma-separated list of SA emails permitted on the admin plane.
 private const val serviceAudienceEnvVarName = "API_URL"
 private const val adminServiceAccountsEnvVarName = "ADMIN_SERVICE_ACCOUNTS"
+
+// GCE node principal (M7): a worker-plane node identity, verified the same way as the s2s admin
+// principal above — a Google-signed ID token naming this API's own URL as its audience — but
+// against a *separate* allowlist, so an admin-allow-listed SA gains no worker-plane power (or vice
+// versa). See WorkerNodeIdentityService and GooglePrincipalVerifier.
+private const val gceNodeServiceAccountsEnvVarName = "GCE_NODE_SERVICE_ACCOUNTS"
 private const val corsOriginRegexEnvVarName = "CORS_ALLOWED_ORIGIN_REGEX"
 private const val databaseUrlEnvVarName = "DATABASE_URL"
 
@@ -42,6 +48,16 @@ fun main() {
   // Allow-listed admin service accounts, comma-separated. Empty (or unset) means no SA is accepted.
   val adminServiceAccounts =
       System.getenv(adminServiceAccountsEnvVarName)
+          ?.split(",")
+          ?.map { it.trim() }
+          ?.filter { it.isNotEmpty() }
+          ?.toSet()
+          .orEmpty()
+
+  // Allow-listed GCE worker-plane node service accounts, comma-separated. Empty (or unset) means no
+  // node identity is accepted — the secret-based worker plane is untouched either way.
+  val gceNodeServiceAccounts =
+      System.getenv(gceNodeServiceAccountsEnvVarName)
           ?.split(",")
           ?.map { it.trim() }
           ?.filter { it.isNotEmpty() }
@@ -80,6 +96,15 @@ fun main() {
           tokenLifetimeSeconds = tokenLifetimeSeconds,
       )
   val workerIdTokenBroker = WorkerIdTokenBrokerService(fleetStore, tokenMinter)
+  val workerNodeIdentityService =
+      WorkerNodeIdentityService(
+          GooglePrincipalVerifier(
+              humanAudiences = emptySet(),
+              allowedDomain = allowedDomain,
+              serviceAudience = serviceAudience,
+              serviceAccountAllowlist = gceNodeServiceAccounts,
+          )
+      )
 
   buildServer(
           originRegex = corsOriginRegex,
@@ -102,6 +127,7 @@ fun main() {
           selfStatusService = SelfStatusService(fleetStore),
           v2RegistrationService = RegistrationServiceV2(fleetStore),
           workerRunService = WorkerRunService(fleetStore),
+          workerNodeIdentityService = workerNodeIdentityService,
       )
       .start()
       .join()
