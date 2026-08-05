@@ -12,7 +12,24 @@ analyze:
     - name: Lint
       task: detekt
 
+# The blanket `test` task also runs :system-test — the end-to-end harness
+# (HappyPathSystemTest, MidRunRevocationSystemTest, …) that needs a live stack
+# (running broker, real workers, tokens). Flow's health gate clones the repo and
+# runs `test` in a sandbox with none of that, so :system-test fails and blocks
+# every session before any work starts. Run the unit-test modules explicitly and
+# leave :system-test to this repo's own CI, which has the stack. (Mirrors flow's
+# own gradle.module.yaml, which likewise lists modules and omits its system-tests.)
 test:
   steps:
-    - name: Test
-      task: test
+    - name: cli
+      task: ":cli:test"
+    - name: docker-connector
+      task: ":libraries:docker-connector:test"
+    - name: token-format
+      task: ":libraries:token-format:test"
+    - name: front-door-refresher
+      task: ":backend:front-door-refresher:test"
+    - name: version-drift-checker
+      task: ":backend:version-drift-checker:test"
+    - name: api-shared
+      task: ":backend:api:impl:shared:test"
