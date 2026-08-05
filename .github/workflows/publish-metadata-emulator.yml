@@ -76,7 +76,8 @@ jobs:
 
       - name: Report the pinned digest
         run: |
-          digest=$(gcloud artifacts docker images describe "${{ env.IMAGE_REF }}:latest" --format='value(image_summary.digest)')
+          digest=$(gcloud artifacts docker images describe "${{ env.IMAGE_REF }}:latest" \
+            --format='value(image_summary.digest)')
           echo "Pushed ${{ env.IMAGE_REF }}:latest"
           echo "  digest: $digest"
           {
