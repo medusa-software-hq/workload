@@ -32,3 +32,9 @@ include(":backend:api:impl:shared")
 include(":backend:api:impl:local")
 
 include(":backend:api:impl:gcp")
+
+// Black-box system tests: drive the real, shipped CLI binary as a subprocess through full
+// register -> exec/run flows against a live backend (a hermetic in-process stack locally, or a
+// deployed environment via env vars), asserting outcomes through the admin gRPC client. See
+// system-test/README.md.
+include(":system-test")

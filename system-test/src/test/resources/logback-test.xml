@@ -1,0 +1,17 @@
+<!--
+  Quiet by default: this suite drives real Armeria/gRPC clients and an in-process Armeria server,
+  both chatty at DEBUG. Test-runner output belongs to what the harness itself reports (test
+  names/assertions) plus each CLI subprocess's own captured stdout/stderr, printed on failure.
+-->
+<configuration>
+  <appender name="STDERR" class="ch.qos.logback.core.ConsoleAppender">
+    <target>System.err</target>
+    <encoder>
+      <pattern>%-5level %logger{0} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <root level="WARN">
+    <appender-ref ref="STDERR" />
+  </root>
+</configuration>
