@@ -3,6 +3,7 @@ package software.medusa.workload.cli
 import com.github.ajalt.clikt.core.CliktCommand
 import com.github.ajalt.clikt.core.Context
 import com.github.ajalt.clikt.core.NoOpCliktCommand
+import com.github.ajalt.clikt.core.PrintMessage
 import com.github.ajalt.clikt.parameters.options.default
 import com.github.ajalt.clikt.parameters.options.flag
 import com.github.ajalt.clikt.parameters.options.option
@@ -314,26 +315,218 @@ class NodeEnrollCommand : NodeProvisionCommand(name = "enroll") {
 }
 
 class NodeCreateCommand : NodeProvisionCommand(name = "create") {
-  // "none" is today's only driver: this command mints credentials and renders media for a human
-  // to manually attach to a VM they provision themselves. A future cloud driver (e.g. "gce") would
-  // additionally call infra/modules/node-template + the Google API to create the instance; the
-  // seam is this option, not a rewrite of provision().
+  // "none" mints credentials and renders media for a human to manually attach to a VM they
+  // provision themselves — still the only cross-platform option. "utm" is a convenience layer
+  // over that exact same flow, scripted against a local UTM.app (macOS) instead of a human; see
+  // UtmDriver.kt. A future cloud driver (e.g. "gce") would implement the same NodeVmDriver seam
+  // against the Google API instead of utmctl/AppleScript.
   private val driver by
-      option("--driver", help = "Provisioning driver. Only 'none' (manual attach) exists today.")
-          .choice("none")
+      option(
+              "--driver",
+              help =
+                  "Provisioning driver: 'none' (manual attach, default) or 'utm' (local UTM.app " +
+                      "VM, macOS only).",
+          )
+          .choice("none", "utm")
           .required()
+  private val utmTemplate by
+      option(
+          "--utm-template",
+          help =
+              "Path to a template .utm VM bundle to clone for --driver utm — base OS already " +
+                  "installed, plus two empty removable CD-ROM drives named boot.iso / " +
+                  "identity.iso in its Images/ dir. Required with --driver utm.",
+      )
+  private val utmctlPath by
+      option("--utmctl", help = "Path to the utmctl binary (--driver utm only).").default("utmctl")
 
   override fun help(context: Context) =
       "Create a node. With --driver none, this mints credentials and renders boot/identity media " +
-          "for a VM you attach by hand — no cloud API is called."
+          "for a VM you attach by hand — no hypervisor is touched. With --driver utm, it also " +
+          "clones a template UTM VM, attaches the rendered media, and starts it."
 
   override fun run() {
     val nodeName = resolvedName()
     val artifacts = provision(nodeName)
-    echo(
-        "Driver '$driver' does not provision a VM for you — attach the media below to one yourself."
-    )
-    echo("Node '$nodeName' is enrolled and waiting for that VM to boot.")
-    printAttachInstructions(this, artifacts)
+    when (driver) {
+      "none" -> {
+        echo(
+            "Driver 'none' does not provision a VM for you — attach the media below to one " +
+                "yourself."
+        )
+        echo("Node '$nodeName' is enrolled and waiting for that VM to boot.")
+        printAttachInstructions(this, artifacts)
+      }
+      "utm" -> createUtmVm(nodeName, artifacts)
+    }
+  }
+
+  private fun createUtmVm(nodeName: String, artifacts: NodeArtifacts) {
+    val bootIso =
+        artifacts.bootIso
+            ?: throw PrintMessage(
+                "--driver utm needs a boot ISO, but no genisoimage/mkisofs/xorriso was found on " +
+                    "PATH.",
+                statusCode = 1,
+                printError = true,
+            )
+    val identityIso =
+        artifacts.identityIso
+            ?: throw PrintMessage(
+                "--driver utm needs an identity ISO, but no genisoimage/mkisofs/xorriso was " +
+                    "found on PATH.",
+                statusCode = 1,
+                printError = true,
+            )
+    val template =
+        utmTemplate?.let(Path::of)
+            ?: throw PrintMessage(
+                "--driver utm requires --utm-template <path to a template .utm bundle>. See " +
+                    "node/README.md.",
+                statusCode = 1,
+                printError = true,
+            )
+    val vmDriver: NodeVmDriver = UtmNodeVmDriver(UtmVmConfig(utmctlPath = utmctlPath))
+    echo("Cloning UTM template and starting '$nodeName'...")
+    try {
+      vmDriver.create(nodeName, template, bootIso, identityIso)
+    } catch (e: NodeVmDriverException) {
+      throw PrintMessage(e.message ?: "UTM driver failed.", statusCode = 1, printError = true)
+    }
+    echo("Node '$nodeName' created and started via UTM.")
+    echo("  status: workload node status --name $nodeName --driver utm")
+    echo("  stop:   workload node stop --name $nodeName --driver utm")
+  }
+}
+
+// ---------------------------------------------------------------------------
+// start / stop / status / rotate-identity — driver-controlled VM lifecycle
+// ---------------------------------------------------------------------------
+
+/** Options shared by the driver-controlled VM lifecycle commands below. */
+abstract class NodeVmCommand(name: String) : CliktCommand(name) {
+  val nodeName by option("--name", help = "Node/VM name.").required()
+  private val driver by
+      option("--driver", help = "VM driver. Only 'utm' controls a VM today.")
+          .choice("utm")
+          .default("utm")
+  private val utmctlPath by
+      option("--utmctl", help = "Path to the utmctl binary (--driver utm only).").default("utmctl")
+
+  internal fun driverFor(): NodeVmDriver =
+      when (driver) {
+        "utm" -> UtmNodeVmDriver(UtmVmConfig(utmctlPath = utmctlPath))
+        else -> throw PrintMessage("Unknown driver '$driver'.", statusCode = 1, printError = true)
+      }
+
+  internal inline fun <T> runDriver(block: NodeVmDriver.() -> T): T =
+      try {
+        driverFor().block()
+      } catch (e: NodeVmDriverException) {
+        throw PrintMessage(e.message ?: "Driver call failed.", statusCode = 1, printError = true)
+      }
+}
+
+class NodeStartCommand : NodeVmCommand(name = "start") {
+  override fun help(context: Context) = "Start a driver-managed node VM."
+
+  override fun run() {
+    runDriver { start(nodeName) }
+    echo("Started '$nodeName'.")
+  }
+}
+
+class NodeStopCommand : NodeVmCommand(name = "stop") {
+  private val force by
+      option("--force", help = "Force stop (power off) instead of a graceful shutdown.")
+          .flag(default = false)
+
+  override fun help(context: Context) = "Stop a driver-managed node VM."
+
+  override fun run() {
+    runDriver { stop(nodeName, force) }
+    echo("Stopped '$nodeName'.")
+  }
+}
+
+class NodeStatusCommand : NodeVmCommand(name = "status") {
+  override fun help(context: Context) = "Show a driver-managed node VM's power state."
+
+  override fun run() {
+    val status = runDriver { status(nodeName) }
+    echo(status.name.lowercase())
+  }
+}
+
+class NodeRotateIdentityCommand : AdminActionCommand(name = "rotate-identity") {
+  private val nodeName by option("--name", help = "Node/VM name.").required()
+  private val note by option("--note", help = "Free-text label recorded with the enrollment token.")
+  private val expiresInDays by
+      option("--expires-in-days", help = "Days until the token expires (server default: 7).").int()
+  private val requireApproval by
+      option(
+              "--require-approval",
+              help = "Land the node PENDING for admin approval instead of straight to ACTIVE.",
+          )
+          .flag(default = false)
+  private val out by
+      option(
+          "--out",
+          help = "Directory to write the fresh identity volume to (default: ./node-<name>).",
+      )
+  private val driver by
+      option("--driver", help = "VM driver to swap the identity volume on. Only 'utm' today.")
+          .choice("utm")
+          .default("utm")
+  private val utmctlPath by
+      option("--utmctl", help = "Path to the utmctl binary (--driver utm only).").default("utmctl")
+
+  override fun help(context: Context) =
+      "Mint a fresh enrollment token, render a new identity volume, and swap it into a " +
+          "driver-managed node VM. See node/utm-driver-spike.md: this is a stop -> swap -> start " +
+          "cycle under the hood, not a live hot-swap."
+
+  override fun run() {
+    val result = runAdmin {
+      client()
+          .createEnrollmentToken(
+              note ?: "$defaultNoteForNode (rotate-identity): $nodeName",
+              expiresInDays ?: 0,
+              requireApproval,
+          )
+    }
+    val outDir = out?.let(Path::of) ?: defaultNodeOutDir(nodeName)
+    val artifacts =
+        writeNodeArtifacts(
+            outDir = outDir,
+            nodeName = nodeName,
+            workloadEnvironment = env.label,
+            cliVersion = "unused",
+            enrollmentToken = result.token,
+            bootMedia = false,
+        )
+    val identityIso =
+        artifacts.identityIso
+            ?: throw PrintMessage(
+                "No genisoimage/mkisofs/xorriso on PATH — can't build the identity ISO --driver " +
+                    "utm needs.",
+                statusCode = 1,
+                printError = true,
+            )
+    val vmDriver: NodeVmDriver =
+        when (driver) {
+          "utm" -> UtmNodeVmDriver(UtmVmConfig(utmctlPath = utmctlPath))
+          else -> throw PrintMessage("Unknown driver '$driver'.", statusCode = 1, printError = true)
+        }
+    try {
+      vmDriver.rotateIdentity(nodeName, identityIso)
+    } catch (e: NodeVmDriverException) {
+      throw PrintMessage(
+          e.message ?: "Identity rotation failed.",
+          statusCode = 1,
+          printError = true,
+      )
+    }
+    echo("Rotated '$nodeName''s identity volume via UTM.")
   }
 }

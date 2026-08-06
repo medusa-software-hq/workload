@@ -77,6 +77,39 @@ itself); `none` is what exists today — attach the media to a VM yourself.
 `--identity-only` mints and renders just a fresh identity volume, for
 rotating an already-running node without touching its boot media at all.
 
+## `workload node create --driver utm` (local UTM VMs, macOS)
+
+`utm` is a convenience layer over the exact same manual flow above, scripted
+against a local [UTM.app](https://mac.getutm.app) instance instead of a human:
+
+```
+workload node create --driver utm --name my-node --utm-template ~/vms/node-template.utm
+```
+
+It mints the enrollment token and renders the boot/identity media exactly like
+`--driver none`, then clones `--utm-template` (a `.utm` bundle you build once
+by hand — base OS installed, two empty removable CD-ROM drives named
+`boot.iso` / `identity.iso` in its `Images/` directory), swaps in the freshly
+rendered ISOs, registers the clone with UTM, and starts it — see
+[`UtmDriver.kt`](../cli/src/main/kotlin/software/medusa/workload/cli/UtmDriver.kt).
+It shells out to `utmctl` for start/stop/status and to AppleScript only for the
+one thing `utmctl` can't do (registering a newly cloned bundle).
+
+Once created, the VM is controlled the same way:
+
+```
+workload node status --name my-node
+workload node stop --name my-node
+workload node start --name my-node
+workload node rotate-identity --name my-node   # mint + swap a fresh identity volume
+```
+
+`rotate-identity` stops the VM, swaps `identity.iso`, and restarts it — **not**
+a live swap. See [`utm-driver-spike.md`](utm-driver-spike.md) for why: neither
+`utmctl` nor UTM's AppleScript support exposes a way to change a running VM's
+removable-drive media, only the QEMU monitor UTM keeps internal does, and
+nothing scripts that today.
+
 ## Acceptance walkthrough
 
 - **Rendering the template both ways yields a bootable node.** Both
