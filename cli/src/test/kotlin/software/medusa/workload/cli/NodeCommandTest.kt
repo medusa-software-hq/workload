@@ -198,4 +198,16 @@ class NodeCommandTest {
   fun `node create rejects an unsupported driver before minting anything`() {
     assertFailsWith<BadParameterValue> { NodeCreateCommand().parse(arrayOf("--driver", "gce")) }
   }
+
+  @Test
+  fun `node start rejects an unsupported driver`() {
+    assertFailsWith<BadParameterValue> {
+      NodeStartCommand().parse(arrayOf("--name", "n1", "--driver", "gce"))
+    }
+  }
+
+  @Test
+  fun `node start requires a name`() {
+    assertFailsWith<Exception> { NodeStartCommand().parse(arrayOf("--driver", "utm")) }
+  }
 }

@@ -49,7 +49,10 @@ swappable identity-volume mechanism).
 | Command | What it does |
 | --- | --- |
 | `workload node enroll` | Mints an enrollment token and renders a node's boot/identity media, then prints manual VM-attach instructions. |
-| `workload node create --driver none` | Same as `enroll`, framed as "create a node" — `none` is today's only driver (no cloud API called; you attach the media yourself). |
+| `workload node create --driver none` | Same as `enroll`, framed as "create a node" — no hypervisor is touched; you attach the media yourself. |
+| `workload node create --driver utm --utm-template <path>` | Same, plus clones a template UTM VM, attaches the rendered media, and starts it (macOS + [UTM.app](https://mac.getutm.app) only). |
+| `workload node start\|stop\|status --name <name>` | Controls a driver-managed node VM (`utm` today). |
+| `workload node rotate-identity --name <name>` | Mints a fresh enrollment token and swaps it into a driver-managed node VM's identity volume (stop → swap → start — see `node/utm-driver-spike.md`). |
 
 `profiles show --json` emits the same spec shape `create` / `update` accept, so
 the natural round-trip works:
