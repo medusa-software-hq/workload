@@ -117,6 +117,7 @@ fun buildServer(
     v2RegistrationService: HttpService? = null,
     workerRunService: HttpService? = null,
     workerNodeIdentityService: HttpService? = null,
+    workerAssignmentsService: HttpService? = null,
 ): Server {
   val cors =
       CorsService.builderForOriginRegex(originRegex)
@@ -233,6 +234,15 @@ fun buildServer(
           route()
               .methods(HttpMethod.POST)
               .path("/worker/v2/runs/{runId}/end")
+              .build(it.decorate(v2WorkerCredentialDrop))
+        }
+        // The node's assignment set (M7-05): what workload-agent reconciles its containers
+        // against, plus the pause/serve switch. Read-only and cheap, same credential-drop as the
+        // run lifecycle above.
+        workerAssignmentsService?.let {
+          route()
+              .methods(HttpMethod.GET)
+              .path("/worker/v2/assignments")
               .build(it.decorate(v2WorkerCredentialDrop))
         }
         // A GCE node's alternative to the secret-based plane above (M7): same bare-hostname design,

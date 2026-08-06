@@ -23,6 +23,8 @@ test:
   steps:
     - name: cli
       task: ":cli:test"
+    - name: workload-agent
+      task: ":workload-agent:test"
     - name: docker-connector
       task: ":libraries:docker-connector:test"
     - name: workload-runtime

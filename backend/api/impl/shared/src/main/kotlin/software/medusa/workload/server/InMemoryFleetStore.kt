@@ -92,6 +92,11 @@ class InMemoryFleetStore : FleetStore {
         worker.copy(status = WorkerStatus.REVOKED, revokedAt = Instant.now())
       }
 
+  override suspend fun setWorkerPaused(workerId: WorkerId, paused: Boolean, now: Instant): Worker? =
+      workers.computeIfPresent(workerId) { _, worker ->
+        worker.copy(paused = paused, pausedAt = if (paused) now else null)
+      }
+
   override suspend fun touchLastSeen(workerId: WorkerId) {
     workers.computeIfPresent(workerId) { _, worker -> worker.copy(lastSeenAt = Instant.now()) }
   }

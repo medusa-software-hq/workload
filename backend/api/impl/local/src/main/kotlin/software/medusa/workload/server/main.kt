@@ -19,6 +19,7 @@ fun main() {
           selfStatusService = SelfStatusService(fleetStore),
           v2RegistrationService = RegistrationServiceV2(fleetStore),
           workerRunService = WorkerRunService(fleetStore),
+          workerAssignmentsService = WorkerAssignmentsService(fleetStore),
       )
       .start()
       .join()

@@ -13,6 +13,10 @@ service FleetService {
   rpc ApproveWorker(ApproveWorkerRequest) returns (ApproveWorkerResponse);
   rpc RejectWorker(RejectWorkerRequest) returns (RejectWorkerResponse);
   rpc RevokeWorker(RevokeWorkerRequest) returns (RevokeWorkerResponse);
+  // The operator pause/serve switch (M7-05): a paused node's workload-agent reconciles its
+  // assignment set down to empty (stopping every agent-managed container) but keeps heartbeating
+  // its AGENT-kind run, so it still shows present — just not serving. Idempotent either direction.
+  rpc SetWorkerPaused(SetWorkerPausedRequest) returns (SetWorkerPausedResponse);
 
   rpc ListProfiles(ListProfilesRequest) returns (ListProfilesResponse);
   rpc CreateProfile(CreateProfileRequest) returns (CreateProfileResponse);
@@ -79,11 +83,13 @@ enum ImageStatus {
   IMAGE_STATUS_UNDETERMINED = 4;
 }
 
-// A run's kind. Extensible: M7 adds AGENT (a session with no profile/revision).
+// A run's kind. AGENT (M7-05) is a long-lived agent-daemon presence session: no profile/revision,
+// heartbeated for as long as workload-agent is up, ended when it shuts down cleanly.
 enum RunKind {
   RUN_KIND_UNSPECIFIED = 0;
   RUN_KIND_RUN = 1;
   RUN_KIND_EXEC = 2;
+  RUN_KIND_AGENT = 3;
 }
 
 // A run's lifecycle state. RUNNING/SUCCEEDED/FAILED are stored; LOST is derived at read time from a
@@ -122,6 +128,12 @@ message Worker {
   string source_ip = 14;
   // When the worker was revoked; empty unless status is REVOKED (M6-B2).
   string revoked_at = 15;
+  // The operator pause/serve switch (M7-05). While true, this worker's workload-agent reconciles
+  // its assignment set down to empty instead of the granted set — a drain, not a revoke: the
+  // worker stays ACTIVE and keeps its grants, it just runs nothing until un-paused.
+  bool paused = 16;
+  // When paused was last set to true; empty unless paused.
+  string paused_at = 17;
 }
 
 // A run of a workload (M6-B1/B2). state may be LOST (a read-time derivation); everything else is as
@@ -187,6 +199,15 @@ message RevokeWorkerRequest {
 }
 
 message RevokeWorkerResponse {
+  Worker worker = 1;
+}
+
+message SetWorkerPausedRequest {
+  string worker_id = 1;
+  bool paused = 2;
+}
+
+message SetWorkerPausedResponse {
   Worker worker = 1;
 }
 

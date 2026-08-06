@@ -97,6 +97,30 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
+  fun `setWorkerPaused pauses and unpauses without touching status`() = test { store ->
+    val created = store.createWorker(newWorker())
+    store.approveWorker(created.workerId, approvedBy = "admin@example.com")
+    assertFalse(store.getWorker(created.workerId)!!.paused)
+
+    val paused = store.setWorkerPaused(created.workerId, paused = true)
+    assertNotNull(paused)
+    assertTrue(paused.paused)
+    assertNotNull(paused.pausedAt)
+    assertEquals(WorkerStatus.ACTIVE, paused.status)
+    assertTrue(store.getWorker(created.workerId)!!.paused)
+
+    val served = store.setWorkerPaused(created.workerId, paused = false)
+    assertNotNull(served)
+    assertFalse(served.paused)
+    assertNull(served.pausedAt)
+  }
+
+  @Test
+  fun `setWorkerPaused on an unknown id returns null`() = test { store ->
+    assertNull(store.setWorkerPaused(WorkerId(java.util.UUID.randomUUID()), paused = true))
+  }
+
+  @Test
   fun `touchLastSeen sets lastSeenAt on the worker`() = test { store ->
     val created = store.createWorker(newWorker())
     assertNull(created.lastSeenAt)

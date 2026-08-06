@@ -45,6 +45,8 @@ import software.medusa.workload.v1.RevokeWorkerResponse
 import software.medusa.workload.v1.Run as RunProto
 import software.medusa.workload.v1.RunKind as RunKindProto
 import software.medusa.workload.v1.RunState as RunStateProto
+import software.medusa.workload.v1.SetWorkerPausedRequest
+import software.medusa.workload.v1.SetWorkerPausedResponse
 import software.medusa.workload.v1.UpdateProfileRequest
 import software.medusa.workload.v1.UpdateProfileResponse
 import software.medusa.workload.v1.VerificationStatus as VerificationStatusProto
@@ -95,12 +97,15 @@ private fun Worker.toProto(grantedProfileIds: List<ProfileId>): WorkerProto =
         .setRegisteredVia(registeredVia.name.lowercase())
         .setSourceIp(sourceIp.orEmpty())
         .setRevokedAt(revokedAt?.toString().orEmpty())
+        .setPaused(paused)
+        .setPausedAt(pausedAt?.toString().orEmpty())
         .build()
 
 private fun RunKind.toProto(): RunKindProto =
     when (this) {
       RunKind.RUN -> RunKindProto.RUN_KIND_RUN
       RunKind.EXEC -> RunKindProto.RUN_KIND_EXEC
+      RunKind.AGENT -> RunKindProto.RUN_KIND_AGENT
     }
 
 private fun RunState.toProto(): RunStateProto =
@@ -397,6 +402,18 @@ class FleetServiceImpl(
     val revoked = fleetStore.revokeWorker(workerId) ?: throw notFound("worker", request.workerId)
     auditWorkerChange("worker_revoked", workerId)
     return RevokeWorkerResponse.newBuilder().setWorker(toProto(revoked)).build()
+  }
+
+  override suspend fun setWorkerPaused(request: SetWorkerPausedRequest): SetWorkerPausedResponse {
+    requireUnscopedPrincipal("SetWorkerPaused")
+    val workerId = parseWorkerId(request.workerId)
+    fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
+
+    val updated =
+        fleetStore.setWorkerPaused(workerId, request.paused)
+            ?: throw notFound("worker", request.workerId)
+    auditWorkerChange(if (request.paused) "worker_paused" else "worker_served", workerId)
+    return SetWorkerPausedResponse.newBuilder().setWorker(toProto(updated)).build()
   }
 
   private suspend fun toProto(worker: Worker): WorkerProto =
