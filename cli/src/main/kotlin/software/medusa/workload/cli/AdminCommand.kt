@@ -147,6 +147,9 @@ private fun CliktCommand.echoRevisionResult(
     if (revision.dockerImageDigest.isNotBlank())
         lines.add("  pinned: ${revision.dockerImageDigest}")
   }
+  if (revision.drainDeadline.isNotBlank()) {
+    lines.add("  drain deadline: ${revision.drainDeadline}")
+  }
   echo(lines.joinToString("\n"))
 }
 
@@ -821,6 +824,7 @@ internal fun formatRevisionDetail(
     field("  status", shortEnum(revision.imageStatus))
     if (revision.dockerImageDigest.isNotBlank()) field("  pinned", revision.dockerImageDigest)
   }
+  field("Drain deadline", revision.drainDeadline.ifBlank { "— (supervisor default)" })
   field("Note", revision.note.ifBlank { "—" })
   field(
       "Created",

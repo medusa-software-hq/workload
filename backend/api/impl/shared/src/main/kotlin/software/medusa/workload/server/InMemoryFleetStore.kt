@@ -123,6 +123,7 @@ class InMemoryFleetStore : FleetStore {
             secretEnvVars = revision.secretEnvVars,
             dockerImage = revision.dockerImage,
             imageStatus = initialImageStatus(revision.dockerImage),
+            drainDeadline = revision.drainDeadline,
         )
     revisions[profileId] = mutableListOf(firstRevision)
     profiles[profileId] = profile
@@ -150,6 +151,7 @@ class InMemoryFleetStore : FleetStore {
               secretEnvVars = revision.secretEnvVars,
               dockerImage = revision.dockerImage,
               imageStatus = initialImageStatus(revision.dockerImage),
+              drainDeadline = revision.drainDeadline,
           )
       profileRevisions.add(newRevision)
       profiles.computeIfPresent(profileId) { _, profile ->

@@ -135,6 +135,9 @@ data class ProfileRevision(
     val dockerImage: String? = null,
     val dockerImageDigest: String? = null,
     val imageStatus: ImageStatus = ImageStatus.NOT_APPLICABLE,
+    // The payload-declared stop timeout ("D") a supervisor passes when SIGTERM-draining a claim of
+    // this revision, e.g. "6h" for the Flow worker. Null means "the supervisor's own default".
+    val drainDeadline: String? = null,
 )
 
 data class NewProfileRevision(
@@ -144,6 +147,7 @@ data class NewProfileRevision(
     val envVars: Map<String, String> = emptyMap(),
     val secretEnvVars: Map<String, String> = emptyMap(),
     val dockerImage: String? = null,
+    val drainDeadline: String? = null,
 )
 
 /**

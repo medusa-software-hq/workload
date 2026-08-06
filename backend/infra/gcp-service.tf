@@ -69,8 +69,20 @@ resource "google_cloud_run_v2_service" "primary" {
       }
 
       env {
-        name  = "ADMIN_SERVICE_ACCOUNTS"
-        value = "workload-ci-admin@${var.gcp_project_id}.iam.gserviceaccount.com"
+        name = "ADMIN_SERVICE_ACCOUNTS"
+        value = join(",", [
+          "workload-ci-admin@${var.gcp_project_id}.iam.gserviceaccount.com",
+          "flow-worker-ci@${var.gcp_project_id}.iam.gserviceaccount.com",
+        ])
+      }
+
+      # Phase 2 of the automated-rollout epic (workload#126): confines flow-worker-ci to exactly
+      # the flow-worker profile (create/update/read only — see requireProfileScope/
+      # requireUnscopedPrincipal in FleetServiceImpl). workload-ci-admin is absent from this map, so
+      # it stays the pre-existing unrestricted s2s admin.
+      env {
+        name  = "ADMIN_SERVICE_ACCOUNT_PROFILE_SCOPES"
+        value = "flow-worker-ci@${var.gcp_project_id}.iam.gserviceaccount.com=flow-worker"
       }
 
       # GCE node principal (M7): the worker plane's counterpart to ADMIN_SERVICE_ACCOUNTS above,

@@ -67,6 +67,7 @@ private fun Profile_revisions.toDomain(): ProfileRevision =
         dockerImage = docker_image,
         dockerImageDigest = docker_image_digest,
         imageStatus = ImageStatus.valueOf(image_status),
+        drainDeadline = drain_deadline,
     )
 
 private fun Worker_profile_grants.toDomain(): Grant =
@@ -237,6 +238,7 @@ class PostgresFleetStore(
               docker_image = revision.dockerImage,
               docker_image_digest = null,
               image_status = initialImageStatus(revision.dockerImage).name,
+              drain_deadline = revision.drainDeadline,
           )
         }
         database.fleetQueries.selectProfileById(profileId.value).executeAsOne().toDomain()
@@ -263,6 +265,7 @@ class PostgresFleetStore(
               docker_image = revision.dockerImage,
               docker_image_digest = null,
               image_status = initialImageStatus(revision.dockerImage).name,
+              drain_deadline = revision.drainDeadline,
           )
           database.fleetQueries.updateProfileLatestRevision(nextRevisionNumber, profileId.value)
         }

@@ -151,6 +151,7 @@ private fun ProfileRevision.toProto(): ProfileRevisionProto =
         .setDockerImage(dockerImage.orEmpty())
         .setDockerImageDigest(dockerImageDigest.orEmpty())
         .setImageStatus(imageStatus.toProto())
+        .setDrainDeadline(drainDeadline.orEmpty())
         .build()
 
 private fun EnrollmentToken.toProto(): EnrollmentTokenProto =
@@ -277,11 +278,66 @@ private fun requireValidImageRef(dockerImage: String) {
   }
 }
 
+// A Go-style duration: one or more <number><unit> segments (h/m/s), e.g. "6h", "90m", "1h30m".
+// Matches the shape the drain contract expects the supervisor's stop timeout in.
+private val drainDeadlinePattern = Regex("""(\d+h)?(\d+m)?(\d+s)?""")
+
+/**
+ * Validates a non-blank drain_deadline; a blank value means "supervisor default" and is allowed.
+ */
+private fun requireValidDrainDeadline(drainDeadline: String) {
+  if (drainDeadline.isBlank()) return
+  if (!drainDeadlinePattern.matches(drainDeadline)) {
+    throw StatusException(
+        Status.INVALID_ARGUMENT.withDescription(
+            "drain_deadline '$drainDeadline' must be a duration like '6h', '90m', or '1h30m'"
+        )
+    )
+  }
+}
+
 private fun notFound(kind: String, id: String): StatusException =
     StatusException(Status.NOT_FOUND.withDescription("$kind '$id' not found"))
 
 private fun failedPrecondition(message: String): StatusException =
     StatusException(Status.FAILED_PRECONDITION.withDescription(message))
+
+private fun permissionDenied(message: String): StatusException =
+    StatusException(Status.PERMISSION_DENIED.withDescription(message))
+
+/**
+ * Enforces a scoped service principal's profile allowlist (Phase 2 of workload#126). A
+ * [Principal.Service] with an empty [Principal.Service.profileScope] is the pre-existing
+ * unrestricted s2s admin and passes through unchanged; a non-empty scope must contain [profileId]
+ * or the call is rejected. Human principals are never scoped.
+ */
+private fun requireProfileScope(profileId: ProfileId) {
+  val principal = currentAdminPrincipal()
+  if (
+      principal is Principal.Service &&
+          principal.profileScope.isNotEmpty() &&
+          profileId.value !in principal.profileScope
+  ) {
+    throw permissionDenied(
+        "service principal '${principal.email}' is not scoped to profile '${profileId.value}'"
+    )
+  }
+}
+
+/**
+ * Denies the call outright for a scoped service principal — used by every admin RPC that a
+ * profile-update-scoped CI principal has no business calling (worker lifecycle, grants, enrollment
+ * tokens, fleet-wide listing). Unscoped services and humans are unaffected.
+ */
+private fun requireUnscopedPrincipal(rpcName: String) {
+  val principal = currentAdminPrincipal()
+  if (principal is Principal.Service && principal.profileScope.isNotEmpty()) {
+    throw permissionDenied(
+        "service principal '${principal.email}' is scoped to profile create/update and may not " +
+            "call $rpcName"
+    )
+  }
+}
 
 /**
  * The admin plane: `FleetService`, consumed by the console behind the existing console auth (same
@@ -294,12 +350,15 @@ class FleetServiceImpl(
     private val imageDigestResolver: ImageDigestResolver,
 ) : FleetServiceGrpcKt.FleetServiceCoroutineImplBase() {
 
-  override suspend fun listWorkers(request: ListWorkersRequest): ListWorkersResponse =
-      ListWorkersResponse.newBuilder()
-          .addAllWorkers(fleetStore.listWorkers().map { toProto(it) })
-          .build()
+  override suspend fun listWorkers(request: ListWorkersRequest): ListWorkersResponse {
+    requireUnscopedPrincipal("ListWorkers")
+    return ListWorkersResponse.newBuilder()
+        .addAllWorkers(fleetStore.listWorkers().map { toProto(it) })
+        .build()
+  }
 
   override suspend fun approveWorker(request: ApproveWorkerRequest): ApproveWorkerResponse {
+    requireUnscopedPrincipal("ApproveWorker")
     val workerId = parseWorkerId(request.workerId)
     val current = fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
     if (current.status != WorkerStatus.PENDING) {
@@ -315,6 +374,7 @@ class FleetServiceImpl(
   }
 
   override suspend fun rejectWorker(request: RejectWorkerRequest): RejectWorkerResponse {
+    requireUnscopedPrincipal("RejectWorker")
     val workerId = parseWorkerId(request.workerId)
     val current = fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
     if (current.status != WorkerStatus.PENDING) {
@@ -327,6 +387,7 @@ class FleetServiceImpl(
   }
 
   override suspend fun revokeWorker(request: RevokeWorkerRequest): RevokeWorkerResponse {
+    requireUnscopedPrincipal("RevokeWorker")
     val workerId = parseWorkerId(request.workerId)
     val current = fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
     if (current.status != WorkerStatus.ACTIVE) {
@@ -342,10 +403,23 @@ class FleetServiceImpl(
       worker.toProto(fleetStore.listGrantedProfileIds(worker.workerId))
 
   override suspend fun listRuns(request: ListRunsRequest): ListRunsResponse {
+    // A scoped principal (the soak-gate job querying session outcomes by worker digest) must name
+    // exactly one of its allowed profiles — an unfiltered or out-of-scope query would leak runs
+    // across the whole fleet.
+    val requestProfileId = request.profileId.ifBlank { null }?.let { parseProfileId(it) }
+    requestProfileId?.let { requireProfileScope(it) }
+        ?: run {
+          val principal = currentAdminPrincipal()
+          if (principal is Principal.Service && principal.profileScope.isNotEmpty()) {
+            throw permissionDenied(
+                "service principal '${principal.email}' must filter ListRuns by an in-scope profile_id"
+            )
+          }
+        }
     val filter =
         RunFilter(
             workerId = request.workerId.ifBlank { null }?.let { parseWorkerId(it) },
-            profileId = request.profileId.ifBlank { null }?.let { parseProfileId(it) },
+            profileId = requestProfileId,
             liveOnly = request.liveOnly,
         )
     val runs = fleetStore.listRuns(filter)
@@ -356,16 +430,20 @@ class FleetServiceImpl(
         .build()
   }
 
-  override suspend fun listProfiles(request: ListProfilesRequest): ListProfilesResponse =
-      ListProfilesResponse.newBuilder()
-          .addAllProfiles(fleetStore.listProfiles().map { it.toProto() })
-          .build()
+  override suspend fun listProfiles(request: ListProfilesRequest): ListProfilesResponse {
+    requireUnscopedPrincipal("ListProfiles")
+    return ListProfilesResponse.newBuilder()
+        .addAllProfiles(fleetStore.listProfiles().map { it.toProto() })
+        .build()
+  }
 
   override suspend fun createProfile(request: CreateProfileRequest): CreateProfileResponse {
     val profileId = parseProfileId(request.profileId)
+    requireProfileScope(profileId)
     requireTargetServiceAccount(request.targetServiceAccount)
     requireValidEnvVars(request.envVarsMap, request.secretEnvVarsMap)
     requireValidImageRef(request.dockerImage)
+    requireValidDrainDeadline(request.drainDeadline)
     if (fleetStore.getProfile(profileId) != null) {
       throw StatusException(
           Status.ALREADY_EXISTS.withDescription("Profile '${profileId.value}' already exists")
@@ -391,6 +469,7 @@ class FleetServiceImpl(
                 envVars = request.envVarsMap,
                 secretEnvVars = request.secretEnvVarsMap,
                 dockerImage = request.dockerImage.ifBlank { null },
+                drainDeadline = request.drainDeadline.ifBlank { null },
             ),
         )
     val inserted = fleetStore.getLatestProfileRevision(profileId)!!
@@ -408,9 +487,11 @@ class FleetServiceImpl(
 
   override suspend fun updateProfile(request: UpdateProfileRequest): UpdateProfileResponse {
     val profileId = parseProfileId(request.profileId)
+    requireProfileScope(profileId)
     requireTargetServiceAccount(request.targetServiceAccount)
     requireValidEnvVars(request.envVarsMap, request.secretEnvVarsMap)
     requireValidImageRef(request.dockerImage)
+    requireValidDrainDeadline(request.drainDeadline)
     val existing = fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
     if (existing.archived) {
       throw failedPrecondition("profile '${profileId.value}' is archived")
@@ -433,6 +514,7 @@ class FleetServiceImpl(
                 envVars = request.envVarsMap,
                 secretEnvVars = request.secretEnvVarsMap,
                 dockerImage = request.dockerImage.ifBlank { null },
+                drainDeadline = request.drainDeadline.ifBlank { null },
             ),
         )
     val verified = recordVerification(profileId, appended)
@@ -449,6 +531,7 @@ class FleetServiceImpl(
   }
 
   override suspend fun archiveProfile(request: ArchiveProfileRequest): ArchiveProfileResponse {
+    requireUnscopedPrincipal("ArchiveProfile")
     val profileId = parseProfileId(request.profileId)
     fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
 
@@ -462,6 +545,7 @@ class FleetServiceImpl(
       request: ListProfileRevisionsRequest
   ): ListProfileRevisionsResponse {
     val profileId = parseProfileId(request.profileId)
+    requireProfileScope(profileId)
     fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
 
     return ListProfileRevisionsResponse.newBuilder()
@@ -471,6 +555,7 @@ class FleetServiceImpl(
 
   override suspend fun verifyProfile(request: VerifyProfileRequest): VerifyProfileResponse {
     val profileId = parseProfileId(request.profileId)
+    requireProfileScope(profileId)
     fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
     val latest = fleetStore.getLatestProfileRevision(profileId)!!
 
@@ -483,6 +568,7 @@ class FleetServiceImpl(
   }
 
   override suspend fun resolveImage(request: ResolveImageRequest): ResolveImageResponse {
+    requireUnscopedPrincipal("ResolveImage")
     requireTargetServiceAccount(request.targetServiceAccount)
     requireValidImageRef(request.dockerImage)
     if (request.dockerImage.isBlank()) {
@@ -512,6 +598,7 @@ class FleetServiceImpl(
   }
 
   override suspend fun grantProfile(request: GrantProfileRequest): GrantProfileResponse {
+    requireUnscopedPrincipal("GrantProfile")
     val workerId = parseWorkerId(request.workerId)
     val profileId = parseProfileId(request.profileId)
     fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
@@ -539,6 +626,7 @@ class FleetServiceImpl(
   override suspend fun revokeProfileGrant(
       request: RevokeProfileGrantRequest
   ): RevokeProfileGrantResponse {
+    requireUnscopedPrincipal("RevokeProfileGrant")
     val workerId = parseWorkerId(request.workerId)
     val profileId = parseProfileId(request.profileId)
     fleetStore.revoke(workerId, profileId)
@@ -559,6 +647,7 @@ class FleetServiceImpl(
   override suspend fun createEnrollmentToken(
       request: CreateEnrollmentTokenRequest
   ): CreateEnrollmentTokenResponse {
+    requireUnscopedPrincipal("CreateEnrollmentToken")
     val admin = currentAdminEmail()
     val ttlDays =
         if (request.expiresInDays > 0) request.expiresInDays.toLong()
@@ -584,16 +673,19 @@ class FleetServiceImpl(
 
   override suspend fun listEnrollmentTokens(
       request: ListEnrollmentTokensRequest
-  ): ListEnrollmentTokensResponse =
-      ListEnrollmentTokensResponse.newBuilder()
-          .addAllEnrollmentTokens(
-              fleetStore.listOutstandingEnrollmentTokens(Instant.now()).map { it.toProto() }
-          )
-          .build()
+  ): ListEnrollmentTokensResponse {
+    requireUnscopedPrincipal("ListEnrollmentTokens")
+    return ListEnrollmentTokensResponse.newBuilder()
+        .addAllEnrollmentTokens(
+            fleetStore.listOutstandingEnrollmentTokens(Instant.now()).map { it.toProto() }
+        )
+        .build()
+  }
 
   override suspend fun revokeEnrollmentToken(
       request: RevokeEnrollmentTokenRequest
   ): RevokeEnrollmentTokenResponse {
+    requireUnscopedPrincipal("RevokeEnrollmentToken")
     val id = parseEnrollmentTokenId(request.enrollmentTokenId)
     // A null return means it was already used, already revoked, or never existed — all indistinct
     // to the admin, and none of them leave anything to revoke.
