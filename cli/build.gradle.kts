@@ -90,7 +90,21 @@ val generateBuildConfig by tasks.registering {
   }
 }
 
-sourceSets.named("main") { resources.srcDir(generateBuildConfig) }
+// `workload node enroll`/`node create` render node/cloud-init/node.yaml.tmpl from the classpath —
+// the same file infra/modules/node-template renders via Terraform's templatefile(), so there is
+// exactly one copy of the template, not one baked into the CLI and a second one drifting in infra.
+val nodeTemplateResourcesDir = layout.buildDirectory.dir("generated/nodeTemplateResources")
+
+val copyNodeTemplate by
+    tasks.registering(Copy::class) {
+      from(rootProject.file("node/cloud-init/node.yaml.tmpl"))
+      into(nodeTemplateResourcesDir)
+    }
+
+sourceSets.named("main") {
+  resources.srcDir(generateBuildConfig)
+  resources.srcDir(copyNodeTemplate)
+}
 
 tasks.shadowJar {
   archiveBaseName = "workload-cli"
