@@ -39,6 +39,18 @@ management API — the same one the console SPA drives.
 | `workload admin workers approve\|reject\|revoke <id>` | Moves a worker through its registration lifecycle. |
 | `workload admin runs list` | Lists in-flight runs (`--profile`/`--worker` to filter, `--all` for finished ones, `--watch` to poll, `--json` for scripts). |
 
+## Node commands
+
+Node operations live under the `workload node` group — provisioning a
+machine to run workloads, rather than registering one that's already up. See
+`node/README.md` for the full picture (the unified cloud-init template, the
+swappable identity-volume mechanism).
+
+| Command | What it does |
+| --- | --- |
+| `workload node enroll` | Mints an enrollment token and renders a node's boot/identity media, then prints manual VM-attach instructions. |
+| `workload node create --driver none` | Same as `enroll`, framed as "create a node" — `none` is today's only driver (no cloud API called; you attach the media yourself). |
+
 `profiles show --json` emits the same spec shape `create` / `update` accept, so
 the natural round-trip works:
 

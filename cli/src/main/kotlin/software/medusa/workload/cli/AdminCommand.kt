@@ -94,7 +94,7 @@ abstract class AdminActionCommand(name: String) : CliktCommand(name) {
 }
 
 /** Turns the two expected admin failures into clean, actionable CLI errors. */
-private inline fun <T> runAdmin(block: () -> T): T =
+internal inline fun <T> runAdmin(block: () -> T): T =
     try {
       block()
     } catch (e: AdminNotLoggedInException) {

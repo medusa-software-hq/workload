@@ -136,6 +136,7 @@ private fun run(
                       ),
                   AdminRunsCommand().subcommands(AdminRunsListCommand()),
               ),
+          NodeCommand().subcommands(NodeEnrollCommand(), NodeCreateCommand()),
       )
       .main(args)
 }

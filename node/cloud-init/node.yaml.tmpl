@@ -1,0 +1,132 @@
+#cloud-config
+# Unified Workload node image template.
+#
+# One file, rendered two ways:
+#   - Terraform's templatefile() fills it in as GCE user-data for a cloud VM
+#     (infra/modules/node-template).
+#   - node/cloud-init/render-iso.sh fills it in with `sed` and burns it onto a
+#     NoCloud seed ISO for a manually-attached (driver "none") static VM.
+#
+# Both renderers only ever touch the three ${...} placeholders below
+# (workload_environment, node_name, cli_version) — every other "$" in this
+# file is a literal shell variable meant to be expanded on the node at boot,
+# always written *without* braces (bare $VAR) so neither renderer mistakes it
+# for a template placeholder. Terraform's templatefile() would otherwise choke
+# on any other ${...} it doesn't recognize as one of its vars.
+#
+# Node identity is never baked into this file. It is carried on a small,
+# separate, swappable "identity volume" — a block device labeled WLIDENTITY
+# (an attached ISO/disk) holding one file, `enrollment-token`. A boot-time
+# service and a udev-triggered one both run the same sync script, so
+# attaching a freshly-minted identity volume re-registers the node in place —
+# no reboot, no VM recreation.
+
+package_update: true
+packages:
+  - docker.io
+  - openjdk-21-jre-headless
+  - curl
+  - ca-certificates
+
+write_files:
+  - path: /etc/workload/node.env
+    permissions: '0644'
+    owner: root:root
+    content: |
+      WORKLOAD_ENVIRONMENT=${workload_environment}
+      WORKLOAD_NODE_NAME=${node_name}
+      WORKLOAD_CLI_VERSION=${cli_version}
+      HOME=/etc/workload
+
+  - path: /usr/local/bin/workload
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/bin/sh
+      exec java --enable-native-access=ALL-UNNAMED -jar /opt/workload/workload-cli.jar "$@"
+
+  - path: /usr/local/bin/workload-node-identity-sync
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/usr/bin/env bash
+      # Redeems whatever enrollment-token is on the attached identity volume (block device
+      # labeled WLIDENTITY) and (re-)registers this node under it. Safe to run repeatedly: run
+      # once at boot, and again every time udev sees a WLIDENTITY device attached (see
+      # 99-workload-identity.rules) — that second trigger is what lets an operator swap a node's
+      # identity without a reboot: eject the old volume, attach a freshly-minted one, and this
+      # script re-registers on top of the existing config, no restart of anything required.
+      set -euo pipefail
+
+      set -a
+      . /etc/workload/node.env
+      set +a
+
+      DEVICE=/dev/disk/by-label/WLIDENTITY
+      MOUNT_POINT=/mnt/workload-identity
+
+      if [ ! -e "$DEVICE" ]; then
+        echo "workload-node-identity-sync: no identity volume attached (label WLIDENTITY); nothing to do" >&2
+        exit 0
+      fi
+
+      mkdir -p "$MOUNT_POINT"
+      mount -o ro "$DEVICE" "$MOUNT_POINT"
+      trap 'umount "$MOUNT_POINT" >/dev/null 2>&1 || true' EXIT
+
+      TOKEN_FILE="$MOUNT_POINT/enrollment-token"
+      if [ ! -f "$TOKEN_FILE" ]; then
+        echo "workload-node-identity-sync: $DEVICE has no enrollment-token file" >&2
+        exit 1
+      fi
+
+      NAME="$WORKLOAD_NODE_NAME"
+      if [ -z "$NAME" ]; then
+        NAME="$(hostname)"
+      fi
+
+      export WORKER_ENROLLMENT_TOKEN
+      WORKER_ENROLLMENT_TOKEN="$(cat "$TOKEN_FILE")"
+
+      /usr/local/bin/workload worker register --force --name "$NAME"
+      echo "workload-node-identity-sync: registered/refreshed node identity for $NAME" >&2
+
+  - path: /etc/systemd/system/workload-node-identity-sync.service
+    permissions: '0644'
+    owner: root:root
+    content: |
+      [Unit]
+      Description=Redeem the Workload node's identity volume
+      After=docker.service network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      Environment=HOME=/etc/workload
+      ExecStart=/usr/local/bin/workload-node-identity-sync
+
+      [Install]
+      WantedBy=multi-user.target
+
+  - path: /etc/udev/rules.d/99-workload-identity.rules
+    permissions: '0644'
+    owner: root:root
+    content: |
+      # Fires every time an identity volume (block device labeled WLIDENTITY) is attached or
+      # re-attached, so swapping it hot-reloads the node's identity without a reboot.
+      ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="WLIDENTITY", TAG+="systemd", ENV{SYSTEMD_WANTS}+="workload-node-identity-sync.service"
+
+runcmd:
+  - |
+    set -eu
+    CLI_VERSION="${cli_version}"
+    mkdir -p /opt/workload
+    if [ "$CLI_VERSION" = "latest" ]; then
+      DOWNLOAD_URL="https://github.com/medusa-software-hq/workload-releases/releases/latest/download/workload-cli.jar"
+    else
+      DOWNLOAD_URL="https://github.com/medusa-software-hq/workload-releases/releases/download/$CLI_VERSION/workload-cli.jar"
+    fi
+    curl -fsSL "$DOWNLOAD_URL" -o /opt/workload/workload-cli.jar
+  - systemctl enable --now docker.service
+  - udevadm control --reload-rules
+  - systemctl enable --now workload-node-identity-sync.service
