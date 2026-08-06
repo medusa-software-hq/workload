@@ -44,6 +44,15 @@ resource "google_cloud_run_v2_service" "primary" {
         container_port = 8080
       }
 
+      resources {
+        # Extra CPU during container startup only — no idle cost. Cuts the JVM cold-start
+        # time that was tripping worker/console request timeouts while the service scales
+        # to zero. See backend/infra/README.md's bills-over-availability stance: this keeps
+        # min instances at 0 (no always-warm billing), it just makes the unavoidable cold
+        # start fast.
+        startup_cpu_boost = true
+      }
+
       env {
         name  = "GOOGLE_CLIENT_ID"
         value = module.common.google_client_id
