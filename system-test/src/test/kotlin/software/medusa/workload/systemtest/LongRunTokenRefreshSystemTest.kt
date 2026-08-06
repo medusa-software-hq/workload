@@ -36,9 +36,14 @@ internal class LongRunTokenRefreshSystemTest : SystemTestBase() {
     grant(worker.workerId, profileId)
 
     // Staging's real 900s lifetime needs the job to run past ~15 minutes; local's shortened
-    // lifetime needs only a handful of seconds (the point either way: probe well past the TTL, on
-    // an interval short enough to observe more than one refresh).
-    val (probeIntervalSeconds, iterations) = if (target.label == "staging") 60 to 17 else 3 to 12
+    // lifetime (localTokenLifetimeSeconds = 8s) needs only tens of seconds. The point either way:
+    // probe well past the TTL, on an interval short enough to observe more than one refresh.
+    //
+    // Locally we run a generous window (80s ≈ 10 token lifetimes) probing every 2s rather than a
+    // tight 36s/3s: at 12×3s the margin over the "1 initial claim + >=1 renewal" bar was thin
+    // enough that CI scheduling jitter occasionally logged <2 refreshes, flaking the gate. A wide
+    // window with frequent probes makes >=2 refreshes reliable without weakening the assertion.
+    val (probeIntervalSeconds, iterations) = if (target.label == "staging") 60 to 17 else 2 to 40
 
     val probeLoop =
         """
