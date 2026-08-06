@@ -11,6 +11,7 @@ class InMemoryFleetStore : FleetStore {
   private val grants = ConcurrentHashMap<Pair<WorkerId, ProfileId>, Grant>()
   private val enrollmentTokens = ConcurrentHashMap<EnrollmentTokenId, EnrollmentToken>()
   private val runs = ConcurrentHashMap<RunId, Run>()
+  private val assignments = ConcurrentHashMap<AssignmentId, Assignment>()
 
   override suspend fun createWorker(worker: NewWorker): Worker {
     val created =
@@ -229,6 +230,24 @@ class InMemoryFleetStore : FleetStore {
 
   override suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId> =
       grants.keys.filter { it.first == workerId }.map { it.second }.sortedBy { it.value }
+
+  override suspend fun createAssignment(assignment: NewAssignment): Assignment {
+    val created =
+        Assignment(
+            id = AssignmentId(UUID.randomUUID()),
+            workerId = assignment.workerId,
+            profileId = assignment.profileId,
+            createdAt = Instant.now(),
+            createdBy = assignment.createdBy,
+        )
+    assignments[created.id] = created
+    return created
+  }
+
+  override suspend fun deleteAssignment(id: AssignmentId): Assignment? = assignments.remove(id)
+
+  override suspend fun listAssignments(): List<Assignment> =
+      assignments.values.sortedByDescending { it.createdAt }
 
   override suspend fun createEnrollmentToken(token: NewEnrollmentToken): EnrollmentToken {
     val created =

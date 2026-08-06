@@ -9,6 +9,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import software.medusa.workload.db.Assignments
 import software.medusa.workload.db.Enrollment_tokens
 import software.medusa.workload.db.Profile_revisions
 import software.medusa.workload.db.Profiles
@@ -78,6 +79,15 @@ private fun Worker_profile_grants.toDomain(): Grant =
         profileId = ProfileId(profile_id),
         grantedAt = granted_at.toInstant(),
         grantedBy = granted_by,
+    )
+
+private fun Assignments.toDomain(): Assignment =
+    Assignment(
+        id = AssignmentId(assignment_id),
+        workerId = WorkerId(worker_id),
+        profileId = ProfileId(profile_id),
+        createdAt = created_at.toInstant(),
+        createdBy = created_by,
     )
 
 private fun Runs.toDomain(): Run =
@@ -388,6 +398,29 @@ class PostgresFleetStore(
         database.fleetQueries.selectGrantsByWorker(workerId.value).executeAsList().map {
           ProfileId(it.profile_id)
         }
+      }
+
+  override suspend fun createAssignment(assignment: NewAssignment): Assignment =
+      withContext(Dispatchers.IO) {
+        val id = UUID.randomUUID()
+        database.fleetQueries.insertAssignment(
+            assignment_id = id,
+            worker_id = assignment.workerId.value,
+            profile_id = assignment.profileId.value,
+            created_at = Instant.now().toOffsetDateTime(),
+            created_by = assignment.createdBy,
+        )
+        database.fleetQueries.selectAssignmentById(id).executeAsOne().toDomain()
+      }
+
+  override suspend fun deleteAssignment(id: AssignmentId): Assignment? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.deleteAssignment(id.value).executeAsOneOrNull()?.toDomain()
+      }
+
+  override suspend fun listAssignments(): List<Assignment> =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.selectAllAssignments().executeAsList().map { it.toDomain() }
       }
 
   override suspend fun createEnrollmentToken(token: NewEnrollmentToken): EnrollmentToken =

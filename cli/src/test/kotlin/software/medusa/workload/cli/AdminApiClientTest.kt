@@ -240,6 +240,51 @@ class AdminApiClientTest {
   }
 
   @Test
+  fun `listAssignments posts the filters and parses assignments`() {
+    val api =
+        StubApi(
+            200,
+            """{"assignments":[{"assignmentId":"a-1","workerId":"w-1","profileId":"flow-worker","createdBy":"admin@x","createdAt":"2026-07-22T10:00:00Z"}]}""",
+        )
+    stub = api
+    val assignments =
+        AdminApiClient(api.baseUrl, idTokenProvider = { "t" })
+            .listAssignments(workerId = "w-1", profileId = null)
+
+    assertEquals("/medusa.workload.v1.FleetService/ListAssignments", api.lastPath)
+    assertEquals("""{"workerId":"w-1","profileId":""}""", api.lastBody)
+    assertEquals(1, assignments.size)
+    assertEquals("a-1", assignments[0].assignmentId)
+    assertEquals("flow-worker", assignments[0].profileId)
+  }
+
+  @Test
+  fun `createAssignment posts both ids and parses the created assignment`() {
+    val api =
+        StubApi(
+            200,
+            """{"assignment":{"assignmentId":"a-2","workerId":"w-1","profileId":"p-1","createdBy":"admin@x"}}""",
+        )
+    stub = api
+    val assignment =
+        AdminApiClient(api.baseUrl, idTokenProvider = { "t" }).createAssignment("w-1", "p-1")
+
+    assertEquals("/medusa.workload.v1.FleetService/CreateAssignment", api.lastPath)
+    assertEquals("""{"workerId":"w-1","profileId":"p-1"}""", api.lastBody)
+    assertEquals("a-2", assignment.assignmentId)
+  }
+
+  @Test
+  fun `deleteAssignment posts the assignment id`() {
+    val api = StubApi(200, "{}")
+    stub = api
+    AdminApiClient(api.baseUrl, idTokenProvider = { "t" }).deleteAssignment("a-9")
+
+    assertEquals("/medusa.workload.v1.FleetService/DeleteAssignment", api.lastPath)
+    assertEquals("""{"assignmentId":"a-9"}""", api.lastBody)
+  }
+
+  @Test
   fun `revokeEnrollmentToken posts the token id`() {
     val api = StubApi(200, "{}")
     stub = api

@@ -10,9 +10,14 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 
-/** One profile `workload-agent` should keep running continuously on this node. */
+/**
+ * One profile `workload-agent` should keep running continuously on this node. Named
+ * `AgentAssignment` (not `Assignment`) to stay distinct from
+ * [software.medusa.workload.v1.Assignment], the first-class admin-managed placement record — this
+ * type is this endpoint's derived, unrelated wire shape.
+ */
 @Serializable
-internal data class Assignment(
+internal data class AgentAssignment(
     val profileId: String,
     val revision: Int,
     val dockerImage: String,
@@ -20,8 +25,8 @@ internal data class Assignment(
 )
 
 @Serializable
-internal data class AssignmentsResponse(
-    val assignments: List<Assignment>,
+internal data class AgentAssignmentsResponse(
+    val assignments: List<AgentAssignment>,
     // The operator pause/serve switch (M7-05): while true, the agent should reconcile to an empty
     // set regardless of [assignments] — a drain, not a change to what's granted.
     val paused: Boolean,
@@ -55,7 +60,7 @@ class WorkerAssignmentsService(
           if (profile.archived) return@mapNotNull null
           val revision = fleetStore.getLatestProfileRevision(profileId) ?: return@mapNotNull null
           if (revision.imageStatus != ImageStatus.RESOLVED) return@mapNotNull null
-          Assignment(
+          AgentAssignment(
               profileId = profileId.value,
               revision = revision.revision,
               dockerImage = revision.dockerImage.orEmpty(),
@@ -65,7 +70,7 @@ class WorkerAssignmentsService(
 
     return jsonResponse(
         HttpStatus.OK,
-        AssignmentsResponse(assignments = assignments, paused = worker.paused),
+        AgentAssignmentsResponse(assignments = assignments, paused = worker.paused),
     )
   }
 
@@ -81,7 +86,7 @@ class WorkerAssignmentsService(
   private fun unauthorized(): HttpResponse =
       jsonResponse(HttpStatus.UNAUTHORIZED, WorkerErrorResponse("unauthorized"))
 
-  private fun jsonResponse(status: HttpStatus, body: AssignmentsResponse): HttpResponse =
+  private fun jsonResponse(status: HttpStatus, body: AgentAssignmentsResponse): HttpResponse =
       HttpResponse.of(status, MediaType.JSON, workerJson.encodeToString(body))
 
   private fun jsonResponse(status: HttpStatus, body: WorkerErrorResponse): HttpResponse =

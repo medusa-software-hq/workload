@@ -112,6 +112,16 @@ interface FleetStore {
 
   suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId>
 
+  // Assignments — a first-class placement record, distinct from a grant (see [Assignment]).
+
+  suspend fun createAssignment(assignment: NewAssignment): Assignment
+
+  /** Returns the deleted assignment, or null if no assignment with that id exists. */
+  suspend fun deleteAssignment(id: AssignmentId): Assignment?
+
+  /** All assignments, newest first. */
+  suspend fun listAssignments(): List<Assignment>
+
   // Enrollment tokens
 
   suspend fun createEnrollmentToken(token: NewEnrollmentToken): EnrollmentToken

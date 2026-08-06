@@ -501,6 +501,86 @@ abstract class FleetStoreContractTest {
     assertTrue(store.hasGrant(worker.workerId, profile.profileId))
   }
 
+  @Test
+  fun `createAssignment persists a first-class placement record distinct from a grant`() =
+      test { store ->
+        val worker = store.createWorker(newWorker())
+        val profile =
+            store.createProfile(
+                ProfileId("assignment-profile-1"),
+                displayName = null,
+                revision =
+                    NewProfileRevision(
+                        "sa@project.iam.gserviceaccount.com",
+                        createdBy = "admin@example.com",
+                    ),
+            )
+
+        val created =
+            store.createAssignment(
+                NewAssignment(worker.workerId, profile.profileId, createdBy = "admin@example.com")
+            )
+        assertEquals(worker.workerId, created.workerId)
+        assertEquals(profile.profileId, created.profileId)
+        assertEquals("admin@example.com", created.createdBy)
+        assertNotNull(created.createdAt)
+        // Creating an assignment must not also create a grant — the two are separate primitives.
+        assertFalse(store.hasGrant(worker.workerId, profile.profileId))
+      }
+
+  @Test
+  fun `listAssignments returns every created assignment, newest first`() = test { store ->
+    val worker = store.createWorker(newWorker())
+    val profile =
+        store.createProfile(
+            ProfileId("assignment-profile-2"),
+            displayName = null,
+            revision =
+                NewProfileRevision(
+                    "sa@project.iam.gserviceaccount.com",
+                    createdBy = "admin@example.com",
+                ),
+        )
+
+    val first =
+        store.createAssignment(
+            NewAssignment(worker.workerId, profile.profileId, createdBy = "admin@example.com")
+        )
+    val second =
+        store.createAssignment(
+            NewAssignment(worker.workerId, profile.profileId, createdBy = "admin@example.com")
+        )
+
+    val ids = store.listAssignments().map { it.id }
+    assertTrue(ids.containsAll(listOf(first.id, second.id)))
+  }
+
+  @Test
+  fun `deleteAssignment removes it and returns the deleted record, unknown id returns null`() =
+      test { store ->
+        val worker = store.createWorker(newWorker())
+        val profile =
+            store.createProfile(
+                ProfileId("assignment-profile-3"),
+                displayName = null,
+                revision =
+                    NewProfileRevision(
+                        "sa@project.iam.gserviceaccount.com",
+                        createdBy = "admin@example.com",
+                    ),
+            )
+        val created =
+            store.createAssignment(
+                NewAssignment(worker.workerId, profile.profileId, createdBy = "admin@example.com")
+            )
+
+        val deleted = store.deleteAssignment(created.id)
+        assertEquals(created, deleted)
+        assertTrue(store.listAssignments().none { it.id == created.id })
+        assertNull(store.deleteAssignment(created.id))
+        assertNull(store.deleteAssignment(AssignmentId(java.util.UUID.randomUUID())))
+      }
+
   private fun newEnrollmentToken(
       plaintext: String,
       expiresAt: java.time.Instant = java.time.Instant.now().plusSeconds(3600),
