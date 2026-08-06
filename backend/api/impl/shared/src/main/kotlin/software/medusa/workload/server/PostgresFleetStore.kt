@@ -42,6 +42,8 @@ private fun Workers.toDomain(): Worker =
         registeredVia = RegisteredVia.valueOf(registered_via),
         sourceIp = source_ip,
         revokedAt = revoked_at?.toInstant(),
+        paused = paused,
+        pausedAt = paused_at?.toInstant(),
     )
 
 private fun Profiles.toDomain(): Profile =
@@ -202,6 +204,16 @@ class PostgresFleetStore(
   override suspend fun revokeWorker(workerId: WorkerId): Worker? =
       withContext(Dispatchers.IO) {
         database.fleetQueries.revokeWorker(Instant.now().toOffsetDateTime(), workerId.value)
+        database.fleetQueries.selectWorkerById(workerId.value).executeAsOneOrNull()?.toDomain()
+      }
+
+  override suspend fun setWorkerPaused(workerId: WorkerId, paused: Boolean, now: Instant): Worker? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.setWorkerPaused(
+            paused = paused,
+            paused_at = if (paused) now.toOffsetDateTime() else null,
+            worker_id = workerId.value,
+        )
         database.fleetQueries.selectWorkerById(workerId.value).executeAsOneOrNull()?.toDomain()
       }
 

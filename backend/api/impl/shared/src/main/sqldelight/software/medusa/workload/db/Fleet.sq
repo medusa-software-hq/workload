@@ -19,7 +19,10 @@ CREATE TABLE workers (
     registered_via    text NOT NULL DEFAULT 'V1',
     source_ip         text,
     -- Added in V11__add_worker_revoked_at.sql.
-    revoked_at        TIMESTAMPTZ
+    revoked_at        TIMESTAMPTZ,
+    -- Added in V13__add_worker_paused.sql.
+    paused            boolean NOT NULL DEFAULT FALSE,
+    paused_at         TIMESTAMPTZ
 );
 
 CREATE TABLE profiles (
@@ -117,6 +120,11 @@ WHERE worker_id = ?;
 updateLastSeen:
 UPDATE workers
 SET last_seen_at = ?
+WHERE worker_id = ?;
+
+setWorkerPaused:
+UPDATE workers
+SET paused = ?, paused_at = ?
 WHERE worker_id = ?;
 
 insertProfile:

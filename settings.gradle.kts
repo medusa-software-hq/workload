@@ -14,6 +14,13 @@ rootProject.name = "workload"
 // that module (and its subprojects) — which is what each module's Taskfile relies on.
 include(":cli")
 
+// The always-on node daemon (M7-05): reconciles a node's running containers against its fetched
+// assignment set, reports online/offline presence as an AGENT-kind run, honors the operator
+// pause/serve switch, adopts already-running containers on restart, and runs disk-pressure GC. Built
+// on :libraries:workload-runtime (no CLI dependency), shipped as its own jar the node image runs
+// under systemd — see node/README.md and node/cloud-init/node.yaml.tmpl.
+include(":workload-agent")
+
 // A tiny Kotlin app packaged as the hand-test container image (images/hello-workload) — an ordinary
 // google-cloud-storage client that proves the Beacon path end to end from inside a `workload run`.
 include(":images:hello-workload")

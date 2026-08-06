@@ -70,6 +70,22 @@ data class CreateRunResponse(
     val heartbeatIntervalSeconds: Long,
 )
 
+/** One profile `workload-agent` should keep running continuously on this node (M7-05). */
+@Serializable
+data class Assignment(
+    val profileId: String,
+    val revision: Int,
+    val dockerImage: String,
+    val dockerImageDigest: String,
+)
+
+/** `GET /worker/v2/assignments`'s body — the node's desired container set plus pause/serve. */
+@Serializable
+data class AssignmentsResponse(
+    val assignments: List<Assignment>,
+    val paused: Boolean,
+)
+
 @Serializable private data class RegisterWorkerRequest(val name: String, val hostname: String?)
 
 @Serializable
@@ -180,6 +196,26 @@ fun fetchSelfStatus(brokerBaseUrl: String, auth: BrokerAuth): SelfStatusResponse
   return json.decodeFromString(response.body())
 }
 
+/**
+ * Calls `GET <brokerBaseUrl>/worker/v2/assignments` (M7-05): the node's assignment set —
+ * `workload-agent` reconciles its running containers against it — plus the pause/serve switch.
+ */
+fun fetchAssignments(brokerBaseUrl: String, auth: BrokerAuth): AssignmentsResponse {
+  val request =
+      HttpRequest.newBuilder()
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/assignments"))
+          .header("Authorization", auth.authorizationHeader())
+          .timeout(Duration.ofSeconds(10))
+          .GET()
+          .build()
+
+  val response = send(request)
+  if (response.statusCode() != 200) {
+    throw WorkerApiException(response.statusCode(), errorReason(response.body()))
+  }
+  return json.decodeFromString(response.body())
+}
+
 /** Calls `POST <brokerBaseUrl>/worker/v2/token`. */
 fun claimToken(brokerBaseUrl: String, auth: BrokerAuth, profileId: String): TokenClaimResponse {
   val request =
@@ -251,13 +287,14 @@ fun claimWorkload(brokerBaseUrl: String, auth: BrokerAuth, profileId: String): W
 /**
  * Calls `POST <brokerBaseUrl>/worker/v2/runs`: records the start of a run (M6-B1), returning its id
  * and the server-controlled heartbeat cadence. Called after a successful claim, right before the
- * workload launches.
+ * workload launches. [profileId]/[revision] are null for an `agent`-kind presence session (M7-05),
+ * which has neither.
  */
 fun createRun(
     brokerBaseUrl: String,
     auth: BrokerAuth,
-    profileId: String,
-    revision: Int,
+    profileId: String?,
+    revision: Int?,
     kind: String,
     imageDigest: String?,
 ): CreateRunResponse {

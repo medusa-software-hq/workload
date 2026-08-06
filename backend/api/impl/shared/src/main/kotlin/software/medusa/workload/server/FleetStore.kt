@@ -44,6 +44,17 @@ interface FleetStore {
 
   suspend fun revokeWorker(workerId: WorkerId): Worker?
 
+  /**
+   * Sets the operator pause/serve switch (M7-05): [paused] true records [now] as `pausedAt`; false
+   * clears it. Never touches `status` — a paused worker stays exactly as active/pending/etc as it
+   * was. Returns null if the worker doesn't exist.
+   */
+  suspend fun setWorkerPaused(
+      workerId: WorkerId,
+      paused: Boolean,
+      now: Instant = Instant.now(),
+  ): Worker?
+
   /** Updates `lastSeenAt` to now; a no-op if the worker doesn't exist. */
   suspend fun touchLastSeen(workerId: WorkerId)
 

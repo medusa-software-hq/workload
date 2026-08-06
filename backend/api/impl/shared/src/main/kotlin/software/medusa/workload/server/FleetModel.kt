@@ -72,6 +72,11 @@ data class Worker(
     val sourceIp: String? = null,
     // When the worker was revoked (M6-B2); null unless status is REVOKED.
     val revokedAt: Instant? = null,
+    // The operator pause/serve switch (M7-05): a drain, not a revoke. While true, this worker's
+    // workload-agent reconciles its assignment set down to empty; the worker stays ACTIVE and
+    // keeps its grants.
+    val paused: Boolean = false,
+    val pausedAt: Instant? = null,
 )
 
 data class NewWorker(
@@ -206,12 +211,14 @@ value class RunId(
 )
 
 /**
- * What kind of workload a run represents. Extensible: M7 adds `AGENT` (a long-lived agent session,
- * with no profile/revision), which is why [Run.profileId]/[Run.revision] are nullable.
+ * What kind of workload a run represents. `AGENT` (M7-05) is a long-lived `workload-agent` presence
+ * session — no profile/revision, which is why [Run.profileId]/[Run.revision] are nullable —
+ * heartbeated for as long as the daemon is up and ended on clean shutdown.
  */
 enum class RunKind {
   RUN,
   EXEC,
+  AGENT,
 }
 
 /**

@@ -119,12 +119,31 @@ class WorkerRunServiceTest {
   @Test
   fun `create with an unknown kind is a bad request`() {
     val (workerId, secret) = registerActiveWorker()
-    val response = post("/worker/v2/runs", bearer(workerId, secret), createRunBody(kind = "agent"))
+    val response = post("/worker/v2/runs", bearer(workerId, secret), createRunBody(kind = "bogus"))
     assertEquals(HttpStatus.BAD_REQUEST, response.status())
     assertEquals(
         WorkerErrorResponse("invalid_kind"),
         workerJson.decodeFromString(response.contentUtf8()),
     )
+  }
+
+  @Test
+  fun `create with kind agent needs no profile or revision`() {
+    val (workerId, secret) = registerActiveWorker()
+    val body =
+        workerJson.encodeToString(
+            CreateRunRequest(profileId = null, revision = null, kind = "agent", imageDigest = null)
+        )
+
+    val response = post("/worker/v2/runs", bearer(workerId, secret), body)
+
+    assertEquals(HttpStatus.OK, response.status())
+    val created = workerJson.decodeFromString<CreateRunResponse>(response.contentUtf8())
+    val run = runBlocking { fleetStore.getRun(RunId(UUID.fromString(created.runId))) }
+    assertNotNull(run)
+    assertEquals(RunKind.AGENT, run.kind)
+    assertNull(run.profileId)
+    assertNull(run.revision)
   }
 
   @Test
