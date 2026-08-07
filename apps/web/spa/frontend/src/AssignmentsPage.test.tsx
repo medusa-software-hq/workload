@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@test-utils';
+import { render, screen, waitFor, within } from '@test-utils';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, test, vi } from 'vitest';
 import type { Assignment, Profile, Worker } from './gen/medusa/workload/v1/fleet_service_pb.ts';
@@ -57,9 +57,12 @@ test('renders an assignment with worker name, profile, and who created it', asyn
   listAssignments.mockResolvedValue({ assignments: [fakeAssignment()] });
   render(<AssignmentsPage token="tok" />);
 
-  expect(await screen.findByText('tux-worker')).toBeInTheDocument();
-  expect(screen.getByText('flow-worker')).toBeInTheDocument();
-  expect(screen.getByText('admin@example.com')).toBeInTheDocument();
+  // The worker name and profile id also render as Select option labels, so scope the
+  // assertions to the assignment's table row (anchored on the unique "created by" cell).
+  const row = (await screen.findByText('admin@example.com')).closest('tr') as HTMLElement;
+  expect(within(row).getByText('tux-worker')).toBeInTheDocument();
+  expect(within(row).getByText('flow-worker')).toBeInTheDocument();
+  expect(within(row).getByText('admin@example.com')).toBeInTheDocument();
 
   await waitFor(() => {
     expect(listAssignments).toHaveBeenCalledWith(
@@ -100,7 +103,8 @@ test('deleting an assignment posts its id and refreshes', async () => {
   deleteAssignment.mockResolvedValue({});
   render(<AssignmentsPage token="tok" />);
 
-  await screen.findByText('flow-worker');
+  // "flow-worker" also appears as a Select option label; wait on the unique row cell instead.
+  await screen.findByText('admin@example.com');
   await user.click(screen.getByRole('button', { name: 'Delete' }));
 
   await waitFor(() => {
