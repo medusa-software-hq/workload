@@ -77,6 +77,10 @@ data class Worker(
     // keeps its grants.
     val paused: Boolean = false,
     val pausedAt: Instant? = null,
+    // Marks this worker as (one of) the shared fallback node(s) for fallback-eligible profiles
+    // (workload#122 part 2). When more than one worker is flagged, the oldest active one is used —
+    // see FallbackPlacementReconciler.
+    val fallbackNode: Boolean = false,
 )
 
 data class NewWorker(
@@ -93,6 +97,10 @@ data class Profile(
     val latestRevision: Int,
     val archived: Boolean,
     val createdAt: Instant,
+    // Tags this profile for fallback auto-placement (workload#122 part 2): while true and no
+    // dedicated node is present, FallbackPlacementReconciler keeps it running on the shared
+    // fallback node, migrating it off automatically the moment a dedicated node appears.
+    val fallbackEligible: Boolean = false,
 )
 
 /**

@@ -17,12 +17,21 @@ service FleetService {
   // assignment set down to empty (stopping every agent-managed container) but keeps heartbeating
   // its AGENT-kind run, so it still shows present — just not serving. Idempotent either direction.
   rpc SetWorkerPaused(SetWorkerPausedRequest) returns (SetWorkerPausedResponse);
+  // Marks/unmarks this worker as (one of) the shared fallback node(s) — see SetProfileFallbackEligible.
+  rpc SetWorkerFallbackNode(SetWorkerFallbackNodeRequest) returns (SetWorkerFallbackNodeResponse);
 
   rpc ListProfiles(ListProfilesRequest) returns (ListProfilesResponse);
   rpc CreateProfile(CreateProfileRequest) returns (CreateProfileResponse);
   // Appends a revision; never mutates an existing one.
   rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
   rpc ArchiveProfile(ArchiveProfileRequest) returns (ArchiveProfileResponse);
+  // Fallback auto-placement (workload#122 part 2): while a profile is fallback-eligible, it is kept
+  // auto-assigned to the shared fallback node (the oldest active worker with fallback_node = true)
+  // whenever no dedicated assignment to a currently-active worker exists for it, and is migrated off
+  // automatically the moment one appears. The auto-created assignment is otherwise an ordinary
+  // Assignment, distinguishable only by its created_by ("system:fallback-placement").
+  rpc SetProfileFallbackEligible(SetProfileFallbackEligibleRequest)
+      returns (SetProfileFallbackEligibleResponse);
   rpc ListProfileRevisions(ListProfileRevisionsRequest) returns (ListProfileRevisionsResponse);
   // Dry-run mint against the latest revision's target service account; never returns a usable
   // token. CreateProfile/UpdateProfile run this implicitly against the revision they create.
@@ -143,6 +152,9 @@ message Worker {
   bool paused = 16;
   // When paused was last set to true; empty unless paused.
   string paused_at = 17;
+  // Marks this worker as (one of) the shared fallback node(s) for fallback-eligible profiles
+  // (workload#122 part 2). See FallbackPlacementReconciler.
+  bool fallback_node = 18;
 }
 
 // A run of a workload (M6-B1/B2). state may be LOST (a read-time derivation); everything else is as
@@ -220,12 +232,24 @@ message SetWorkerPausedResponse {
   Worker worker = 1;
 }
 
+message SetWorkerFallbackNodeRequest {
+  string worker_id = 1;
+  bool fallback_node = 2;
+}
+
+message SetWorkerFallbackNodeResponse {
+  Worker worker = 1;
+}
+
 message Profile {
   string profile_id = 1;
   string display_name = 2;
   int32 latest_revision = 3;
   bool archived = 4;
   string created_at = 5;
+  // Tags this profile for fallback auto-placement (workload#122 part 2). See
+  // SetProfileFallbackEligible.
+  bool fallback_eligible = 6;
 }
 
 message ProfileRevision {
@@ -323,6 +347,15 @@ message ArchiveProfileRequest {
 }
 
 message ArchiveProfileResponse {
+  Profile profile = 1;
+}
+
+message SetProfileFallbackEligibleRequest {
+  string profile_id = 1;
+  bool fallback_eligible = 2;
+}
+
+message SetProfileFallbackEligibleResponse {
   Profile profile = 1;
 }
 

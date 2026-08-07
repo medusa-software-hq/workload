@@ -151,4 +151,94 @@ class WorkerAssignmentsServiceTest {
   fun `a malformed bearer is unauthorized`() {
     assertEquals(HttpStatus.UNAUTHORIZED, get("not-a-valid-token").status())
   }
+
+  @Test
+  fun `a fallback-eligible profile with no dedicated node lands on the fallback worker`() {
+    val (fallbackWorkerId, fallbackSecret) = registerActiveWorker("fallback-worker")
+    val reconciler = FallbackPlacementReconciler(fleetStore)
+    runBlocking {
+      fleetStore.setWorkerFallbackNode(fallbackWorkerId, fallbackNode = true)
+      val profile =
+          fleetStore.createProfile(
+              ProfileId("fallback-profile"),
+              displayName = null,
+              revision =
+                  NewProfileRevision(
+                      targetServiceAccount = "sa@example.iam.gserviceaccount.com",
+                      createdBy = "admin@example.com",
+                      dockerImage = "us-docker.pkg.dev/p/repo/fallback-profile:v1",
+                  ),
+          )
+      fleetStore.recordImageDigest(
+          profile.profileId,
+          revision = 1,
+          digest = "sha256:deadbeef",
+          ImageStatus.RESOLVED,
+      )
+      fleetStore.setProfileFallbackEligible(profile.profileId, fallbackEligible = true)
+      reconciler.reconcile(profile.profileId)
+    }
+
+    val body =
+        workerJson.decodeFromString<AgentAssignmentsResponse>(
+            get(bearer(fallbackWorkerId, fallbackSecret)).contentUtf8()
+        )
+    assertEquals(1, body.assignments.size)
+    assertEquals("fallback-profile", body.assignments.single().profileId)
+  }
+
+  @Test
+  fun `it migrates off the fallback worker once a dedicated worker is granted the profile`() {
+    val (fallbackWorkerId, fallbackSecret) = registerActiveWorker("fallback-worker-2")
+    val (dedicatedWorkerId, dedicatedSecret) = registerActiveWorker("dedicated-worker")
+    val reconciler = FallbackPlacementReconciler(fleetStore)
+    val profileId = ProfileId("fallback-profile-2")
+    runBlocking {
+      fleetStore.setWorkerFallbackNode(fallbackWorkerId, fallbackNode = true)
+      fleetStore.createProfile(
+          profileId,
+          displayName = null,
+          revision =
+              NewProfileRevision(
+                  targetServiceAccount = "sa@example.iam.gserviceaccount.com",
+                  createdBy = "admin@example.com",
+                  dockerImage = "us-docker.pkg.dev/p/repo/fallback-profile-2:v1",
+              ),
+      )
+      fleetStore.recordImageDigest(
+          profileId,
+          revision = 1,
+          digest = "sha256:deadbeef",
+          ImageStatus.RESOLVED,
+      )
+      fleetStore.setProfileFallbackEligible(profileId, fallbackEligible = true)
+      reconciler.reconcile(profileId)
+    }
+    assertEquals(
+        1,
+        workerJson
+            .decodeFromString<AgentAssignmentsResponse>(
+                get(bearer(fallbackWorkerId, fallbackSecret)).contentUtf8()
+            )
+            .assignments
+            .size,
+    )
+
+    // A dedicated node appears — an admin grants the profile to a real worker.
+    runBlocking {
+      fleetStore.grant(dedicatedWorkerId, profileId, grantedBy = "admin@example.com")
+      reconciler.reconcile(profileId)
+    }
+
+    val fallbackBody =
+        workerJson.decodeFromString<AgentAssignmentsResponse>(
+            get(bearer(fallbackWorkerId, fallbackSecret)).contentUtf8()
+        )
+    assertTrue(fallbackBody.assignments.isEmpty())
+    val dedicatedBody =
+        workerJson.decodeFromString<AgentAssignmentsResponse>(
+            get(bearer(dedicatedWorkerId, dedicatedSecret)).contentUtf8()
+        )
+    assertEquals(1, dedicatedBody.assignments.size)
+  }
 }

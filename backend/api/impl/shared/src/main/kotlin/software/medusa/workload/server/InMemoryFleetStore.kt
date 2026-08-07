@@ -102,6 +102,9 @@ class InMemoryFleetStore : FleetStore {
     workers.computeIfPresent(workerId) { _, worker -> worker.copy(lastSeenAt = Instant.now()) }
   }
 
+  override suspend fun setWorkerFallbackNode(workerId: WorkerId, fallbackNode: Boolean): Worker? =
+      workers.computeIfPresent(workerId) { _, worker -> worker.copy(fallbackNode = fallbackNode) }
+
   override suspend fun createProfile(
       profileId: ProfileId,
       displayName: String?,
@@ -170,6 +173,14 @@ class InMemoryFleetStore : FleetStore {
   override suspend fun archiveProfile(profileId: ProfileId): Profile? =
       profiles.computeIfPresent(profileId) { _, profile -> profile.copy(archived = true) }
 
+  override suspend fun setProfileFallbackEligible(
+      profileId: ProfileId,
+      fallbackEligible: Boolean,
+  ): Profile? =
+      profiles.computeIfPresent(profileId) { _, profile ->
+        profile.copy(fallbackEligible = fallbackEligible)
+      }
+
   override suspend fun getProfile(profileId: ProfileId): Profile? = profiles[profileId]
 
   override suspend fun listProfiles(): List<Profile> =
@@ -227,6 +238,9 @@ class InMemoryFleetStore : FleetStore {
 
   override suspend fun hasGrant(workerId: WorkerId, profileId: ProfileId): Boolean =
       grants.containsKey(workerId to profileId)
+
+  override suspend fun getGrant(workerId: WorkerId, profileId: ProfileId): Grant? =
+      grants[workerId to profileId]
 
   override suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId> =
       grants.keys.filter { it.first == workerId }.map { it.second }.sortedBy { it.value }
