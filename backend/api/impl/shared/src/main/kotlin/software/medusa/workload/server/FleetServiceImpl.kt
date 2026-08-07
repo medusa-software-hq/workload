@@ -7,6 +7,8 @@ import java.time.Instant
 import java.util.UUID
 import software.medusa.workload.tokenformat.TokenKind
 import software.medusa.workload.tokenformat.WorkloadToken
+import software.medusa.workload.v1.AgentAssignmentState as AgentAssignmentStateProto
+import software.medusa.workload.v1.AgentAssignmentStatus as AgentAssignmentStatusProto
 import software.medusa.workload.v1.ApproveWorkerRequest
 import software.medusa.workload.v1.ApproveWorkerResponse
 import software.medusa.workload.v1.ArchiveProfileRequest
@@ -111,6 +113,26 @@ private fun Worker.toProto(grantedProfileIds: List<ProfileId>): WorkerProto =
         .setPaused(paused)
         .setPausedAt(pausedAt?.toString().orEmpty())
         .setFallbackNode(fallbackNode)
+        .addAllAssignmentStatuses(assignmentStatuses.map { it.toProto() })
+        .build()
+
+private fun AgentAssignmentState.toProto(): AgentAssignmentStateProto =
+    when (this) {
+      AgentAssignmentState.CONVERGED -> AgentAssignmentStateProto.AGENT_ASSIGNMENT_STATE_CONVERGED
+      AgentAssignmentState.DRAINING -> AgentAssignmentStateProto.AGENT_ASSIGNMENT_STATE_DRAINING
+      AgentAssignmentState.CRASHLOOP_HOLD ->
+          AgentAssignmentStateProto.AGENT_ASSIGNMENT_STATE_CRASHLOOP_HOLD
+      AgentAssignmentState.REPLACING -> AgentAssignmentStateProto.AGENT_ASSIGNMENT_STATE_REPLACING
+    }
+
+private fun AgentAssignmentStatus.toProto(): AgentAssignmentStatusProto =
+    AgentAssignmentStatusProto.newBuilder()
+        .setProfileId(profileId.value)
+        .setRunningDigest(runningDigest.orEmpty())
+        .setDesiredDigest(desiredDigest.orEmpty())
+        .setState(state.toProto())
+        .setSince(since.toString())
+        .setDrainDeadline(drainDeadline?.toString().orEmpty())
         .build()
 
 private fun RunKind.toProto(): RunKindProto =

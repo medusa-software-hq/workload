@@ -23,6 +23,13 @@ const val workloadProfileLabel = "ms-workload.profile"
 const val workloadRevisionLabel = "ms-workload.revision"
 const val workloadWorkerLabel = "ms-workload.worker"
 
+// The pinned digest a container was actually started at (M7 drain contract). Revision alone isn't
+// a reliable non-conformance signal: a revision's tag can re-resolve to a different digest between
+// one claim and the next without the revision number itself changing. Carrying the digest as its
+// own label lets the agent's diff key be (profile, revision, digest) instead of just (profile,
+// revision), so a digest-only drift still reads as "replace this", not "converged".
+const val workloadImageDigestLabel = "ms-workload.image-digest"
+
 // Marks a per-run bridge network as workload-owned, so `workload ps --reap` can sweep any orphaned
 // by a hard-killed CLI (M4-B2). `run` creates one of these per run to host its metadata sidecar
 // (see MetadataSidecar.kt's startMetadataSidecar) — presence == "workload owns it".
@@ -215,7 +222,7 @@ fun containerLabels(claim: WorkerClaimResponse, workerId: String): Map<String, S
         workloadProfileLabel to claim.profileId,
         workloadRevisionLabel to claim.revision.toString(),
         workloadWorkerLabel to workerId,
-    )
+    ) + (claim.image?.digest?.let { mapOf(workloadImageDigestLabel to it) } ?: emptyMap())
 
 /**
  * create -> start -> stream logs -> wait, returning the container's exit code. The whole post-pull

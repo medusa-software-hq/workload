@@ -42,6 +42,22 @@ data class AdminWorker(
     val grantedProfileIds: List<String> = emptyList(),
     val sourceIp: String = "",
     val revokedAt: String = "",
+    val assignmentStatuses: List<AdminAssignmentStatus> = emptyList(),
+)
+
+/**
+ * One profile's reconcile status on a worker (M7 automated rollout), as reported by
+ * `workload-agent`. `state` arrives as its proto enum name (e.g. AGENT_ASSIGNMENT_STATE_CONVERGED),
+ * mapped for display in [AdminFormat].
+ */
+@Serializable
+data class AdminAssignmentStatus(
+    val profileId: String = "",
+    val runningDigest: String = "",
+    val desiredDigest: String = "",
+    val state: String = "",
+    val since: String = "",
+    val drainDeadline: String = "",
 )
 
 /**

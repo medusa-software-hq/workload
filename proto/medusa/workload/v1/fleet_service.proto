@@ -155,6 +155,44 @@ message Worker {
   // Marks this worker as (one of) the shared fallback node(s) for fallback-eligible profiles
   // (workload#122 part 2). See FallbackPlacementReconciler.
   bool fallback_node = 18;
+  // Per-profile reconcile status (M7 automated rollout), reported by workload-agent's own
+  // `POST /worker/v2/status` each tick — running/desired digest, drain/crashloop state. What
+  // `admin workers list` shows as fleet version + drain state per worker. Empty for a worker whose
+  // agent hasn't reported yet (a pre-M7 CLI-only worker, or one that just registered).
+  repeated AgentAssignmentStatus assignment_statuses = 19;
+}
+
+// A profile's point-in-time reconcile status on one worker (M7 automated rollout). Derived, never
+// stored durably beyond the latest report — see WorkerAssignmentsService's sibling status-report
+// endpoint.
+message AgentAssignmentStatus {
+  string profile_id = 1;
+  // Empty if nothing is currently running for this profile on this worker.
+  string running_digest = 2;
+  // Empty if the profile isn't currently desired on this worker at all (e.g. mid-drain after
+  // being unassigned).
+  string desired_digest = 3;
+  AgentAssignmentState state = 4;
+  // When `state` was entered (RFC 3339). Exact for DRAINING and CRASHLOOP_HOLD; approximated as
+  // the report time for REPLACING, which has no durable marker of its own once the pre-
+  // replacement container is gone.
+  string since = 5;
+  // Only set while `state` is DRAINING — when the drain will escalate to SIGKILL.
+  string drain_deadline = 6;
+}
+
+enum AgentAssignmentState {
+  AGENT_ASSIGNMENT_STATE_UNSPECIFIED = 0;
+  // Running digest matches desired digest — nothing to do.
+  AGENT_ASSIGNMENT_STATE_CONVERGED = 1;
+  // The previous container is being SIGTERM-drained (see ProfileRevision.drain_deadline) before
+  // its replacement (or, if unassigned, nothing) starts.
+  AGENT_ASSIGNMENT_STATE_DRAINING = 2;
+  // The desired digest has crashed more than the crashloop threshold within the crashloop window;
+  // the agent has stopped restarting it and is waiting on operator intervention.
+  AGENT_ASSIGNMENT_STATE_CRASHLOOP_HOLD = 3;
+  // Between drained-and-gone and started — a normal, usually brief, transient state.
+  AGENT_ASSIGNMENT_STATE_REPLACING = 4;
 }
 
 // A run of a workload (M6-B1/B2). state may be LOST (a read-time derivation); everything else is as

@@ -105,6 +105,13 @@ class InMemoryFleetStore : FleetStore {
   override suspend fun setWorkerFallbackNode(workerId: WorkerId, fallbackNode: Boolean): Worker? =
       workers.computeIfPresent(workerId) { _, worker -> worker.copy(fallbackNode = fallbackNode) }
 
+  override suspend fun updateAssignmentStatuses(
+      workerId: WorkerId,
+      statuses: List<AgentAssignmentStatus>,
+  ) {
+    workers.computeIfPresent(workerId) { _, worker -> worker.copy(assignmentStatuses = statuses) }
+  }
+
   override suspend fun createProfile(
       profileId: ProfileId,
       displayName: String?,

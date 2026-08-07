@@ -24,7 +24,9 @@ CREATE TABLE workers (
     paused            boolean NOT NULL DEFAULT FALSE,
     paused_at         TIMESTAMPTZ,
     -- Added in V15__add_fallback_placement.sql.
-    fallback_node     boolean NOT NULL DEFAULT FALSE
+    fallback_node     boolean NOT NULL DEFAULT FALSE,
+    -- JSON-encoded List<AgentAssignmentStatus>; see V16__add_worker_assignment_status.sql.
+    assignment_status_json text
 );
 
 CREATE TABLE profiles (
@@ -144,6 +146,11 @@ WHERE worker_id = ?;
 setWorkerFallbackNode:
 UPDATE workers
 SET fallback_node = ?
+WHERE worker_id = ?;
+
+updateAssignmentStatuses:
+UPDATE workers
+SET assignment_status_json = ?
 WHERE worker_id = ?;
 
 insertProfile:

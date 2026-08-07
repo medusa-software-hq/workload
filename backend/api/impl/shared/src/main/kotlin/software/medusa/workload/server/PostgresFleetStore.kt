@@ -6,6 +6,7 @@ import java.time.ZoneOffset
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -27,6 +28,47 @@ private fun Map<String, String>.toJson(): String = envVarsJson.encodeToString(th
 
 private fun String.toEnvVarMap(): Map<String, String> = envVarsJson.decodeFromString(this)
 
+@Serializable
+private data class AgentAssignmentStatusDto(
+    val profileId: String,
+    val runningDigest: String? = null,
+    val desiredDigest: String? = null,
+    val state: String,
+    val since: String,
+    val drainDeadline: String? = null,
+)
+
+private fun List<AgentAssignmentStatus>.toJson(): String =
+    envVarsJson.encodeToString(
+        map {
+          AgentAssignmentStatusDto(
+              profileId = it.profileId.value,
+              runningDigest = it.runningDigest,
+              desiredDigest = it.desiredDigest,
+              state = it.state.name,
+              since = it.since.toString(),
+              drainDeadline = it.drainDeadline?.toString(),
+          )
+        }
+    )
+
+private fun String?.toAssignmentStatuses(): List<AgentAssignmentStatus> =
+    this?.let { raw ->
+      runCatching {
+            envVarsJson.decodeFromString<List<AgentAssignmentStatusDto>>(raw).map {
+              AgentAssignmentStatus(
+                  profileId = ProfileId(it.profileId),
+                  runningDigest = it.runningDigest,
+                  desiredDigest = it.desiredDigest,
+                  state = AgentAssignmentState.valueOf(it.state),
+                  since = Instant.parse(it.since),
+                  drainDeadline = it.drainDeadline?.let(Instant::parse),
+              )
+            }
+          }
+          .getOrDefault(emptyList())
+    } ?: emptyList()
+
 private fun Workers.toDomain(): Worker =
     Worker(
         workerId = WorkerId(worker_id),
@@ -46,6 +88,7 @@ private fun Workers.toDomain(): Worker =
         paused = paused,
         pausedAt = paused_at?.toInstant(),
         fallbackNode = fallback_node,
+        assignmentStatuses = assignment_status_json.toAssignmentStatuses(),
     )
 
 private fun Profiles.toDomain(): Profile =
@@ -240,6 +283,15 @@ class PostgresFleetStore(
         database.fleetQueries.setWorkerFallbackNode(fallbackNode, workerId.value)
         database.fleetQueries.selectWorkerById(workerId.value).executeAsOneOrNull()?.toDomain()
       }
+
+  override suspend fun updateAssignmentStatuses(
+      workerId: WorkerId,
+      statuses: List<AgentAssignmentStatus>,
+  ) {
+    withContext(Dispatchers.IO) {
+      database.fleetQueries.updateAssignmentStatuses(statuses.toJson(), workerId.value)
+    }
+  }
 
   override suspend fun createProfile(
       profileId: ProfileId,

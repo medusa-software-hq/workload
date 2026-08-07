@@ -81,6 +81,34 @@ data class Worker(
     // (workload#122 part 2). When more than one worker is flagged, the oldest active one is used —
     // see FallbackPlacementReconciler.
     val fallbackNode: Boolean = false,
+    // Per-profile reconcile status (M7 automated rollout), last reported by this worker's own
+    // workload-agent via `POST /worker/v2/status` — see WorkerStatusReportService. Point-in-time,
+    // not audit history: each report replaces the previous one wholesale. Empty for a worker whose
+    // agent hasn't reported yet.
+    val assignmentStatuses: List<AgentAssignmentStatus> = emptyList(),
+)
+
+/** A profile's point-in-time reconcile state on one worker, as workload-agent last reported it. */
+enum class AgentAssignmentState {
+  CONVERGED,
+  DRAINING,
+  CRASHLOOP_HOLD,
+  REPLACING,
+}
+
+/**
+ * One profile's reconcile status on a worker (M7 automated rollout) — what `admin workers list`
+ * shows as fleet version + drain state. See `AgentReconciler.kt`'s `AgentAssignmentStatus` (the
+ * agent-side counterpart this is reported from) for the full contract.
+ */
+data class AgentAssignmentStatus(
+    val profileId: ProfileId,
+    val runningDigest: String?,
+    val desiredDigest: String?,
+    val state: AgentAssignmentState,
+    val since: Instant,
+    // Only meaningful while [state] is [AgentAssignmentState.DRAINING].
+    val drainDeadline: Instant? = null,
 )
 
 data class NewWorker(

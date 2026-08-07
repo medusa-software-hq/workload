@@ -118,6 +118,7 @@ fun buildServer(
     workerRunService: HttpService? = null,
     workerNodeIdentityService: HttpService? = null,
     workerAssignmentsService: HttpService? = null,
+    workerStatusReportService: HttpService? = null,
 ): Server {
   val cors =
       CorsService.builderForOriginRegex(originRegex)
@@ -243,6 +244,15 @@ fun buildServer(
           route()
               .methods(HttpMethod.GET)
               .path("/worker/v2/assignments")
+              .build(it.decorate(v2WorkerCredentialDrop))
+        }
+        // The agent's own report of what it's actually doing with the assignment set above (M7
+        // automated rollout) — running/desired digest, drain/crashloop state — surfaced on
+        // `admin workers list`. Same credential-drop as everything else on the plane.
+        workerStatusReportService?.let {
+          route()
+              .methods(HttpMethod.POST)
+              .path("/worker/v2/status")
               .build(it.decorate(v2WorkerCredentialDrop))
         }
         // A GCE node's alternative to the secret-based plane above (M7): same bare-hostname design,
