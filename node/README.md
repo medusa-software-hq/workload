@@ -10,12 +10,14 @@ first boot looks like.
 [`cloud-init/node.yaml.tmpl`](cloud-init/node.yaml.tmpl) is a `#cloud-config`
 template with exactly three placeholders — `${workload_environment}`,
 `${node_name}`, `${cli_version}` — that installs Docker, a JRE, the
-`workload` CLI, and a systemd service (`workload-node-identity-sync`) that
-redeems whatever's on the node's identity volume. Nothing else in the file
-uses `${...}`: every other `$` is a literal shell variable meant to expand on
-the node at boot (see the template's header comment for why that matters —
-it's what lets both renderers below fill in the same file without fighting
-over syntax).
+`workload` CLI, a systemd service (`workload-node-identity-sync`) that
+redeems whatever's on the node's identity volume, and a second systemd
+service (`workload-agent`) that runs the always-on reconciler daemon —
+`workload-agent`'s own jar, ordered to start after identity sync so it never
+races an unregistered node. Nothing else in the file uses `${...}`: every
+other `$` is a literal shell variable meant to expand on the node at boot
+(see the template's header comment for why that matters — it's what lets
+both renderers below fill in the same file without fighting over syntax).
 
 It's rendered two ways:
 
@@ -157,3 +159,9 @@ and run on real e2-micro/amd64 hardware, not just in CI) — see `ops/README.md`
   `identity.iso`, attach a freshly built one (new enrollment token); the udev
   rule fires `workload-node-identity-sync` again, which re-registers in
   place — the VM itself never restarts.
+- **An enrolled node self-reconciles with no manual daemon launch.** Once
+  `workload-node-identity-sync` has written a worker credential,
+  `workload-agent.service` (already enabled at boot, retrying on a timer
+  until that credential exists) starts converging: assign a profile via
+  `admin assignments create`, and the node picks it up on its next
+  reconcile pass — no SSH, no manually running the jar.

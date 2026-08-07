@@ -47,6 +47,13 @@ write_files:
       #!/bin/sh
       exec java --enable-native-access=ALL-UNNAMED -jar /opt/workload/workload-cli.jar "$@"
 
+  - path: /usr/local/bin/workload-agent
+    permissions: '0755'
+    owner: root:root
+    content: |
+      #!/bin/sh
+      exec java --enable-native-access=ALL-UNNAMED -jar /opt/workload/workload-agent.jar "$@"
+
   - path: /usr/local/bin/workload-node-identity-sync
     permissions: '0755'
     owner: root:root
@@ -118,17 +125,44 @@ write_files:
       # re-attached, so swapping it hot-reloads the node's identity without a reboot.
       ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="WLIDENTITY", TAG+="systemd", ENV{SYSTEMD_WANTS}+="workload-node-identity-sync.service"
 
+  - path: /etc/systemd/system/workload-agent.service
+    permissions: '0644'
+    owner: root:root
+    content: |
+      [Unit]
+      Description=Workload agent (reconciles this node's assignment set)
+      After=docker.service network-online.target workload-node-identity-sync.service
+      Wants=network-online.target
+
+      [Service]
+      EnvironmentFile=/etc/workload/node.env
+      ExecStart=/usr/local/bin/workload-agent
+      # The agent exits(1) if 'workload worker register' hasn't run yet (no config.json) — expected
+      # on a node whose identity volume isn't attached at boot. Restart=always with no start-limit
+      # keeps it retrying rather than landing in a permanent failed state; the next
+      # workload-node-identity-sync run (boot or udev-triggered, see 99-workload-identity.rules)
+      # writes the credential this needs and the next restart picks it up.
+      Restart=always
+      RestartSec=15s
+      StartLimitIntervalSec=0
+
+      [Install]
+      WantedBy=multi-user.target
+
 runcmd:
   - |
     set -eu
     CLI_VERSION="${cli_version}"
     mkdir -p /opt/workload
     if [ "$CLI_VERSION" = "latest" ]; then
-      DOWNLOAD_URL="https://github.com/medusa-software-hq/workload-releases/releases/latest/download/workload-cli.jar"
+      RELEASE_BASE_URL="https://github.com/medusa-software-hq/workload-releases/releases/latest/download"
     else
-      DOWNLOAD_URL="https://github.com/medusa-software-hq/workload-releases/releases/download/$CLI_VERSION/workload-cli.jar"
+      RELEASE_BASE_URL="https://github.com/medusa-software-hq/workload-releases/releases/download/$CLI_VERSION"
     fi
-    curl -fsSL "$DOWNLOAD_URL" -o /opt/workload/workload-cli.jar
+    curl -fsSL "$RELEASE_BASE_URL/workload-cli.jar" -o /opt/workload/workload-cli.jar
+    # workload-agent ships in the same release as the CLI (same $CLI_VERSION tag) — see
+    # .github/workflows/publish-cli.yml.
+    curl -fsSL "$RELEASE_BASE_URL/workload-agent.jar" -o /opt/workload/workload-agent.jar
   # Smallest supported cloud shapes (e.g. e2-micro, 1 GiB RAM — see infra/gcp-fallback-node.tf)
   # have no swap by default, so a JRE + Docker + a workload's own container can OOM well before
   # disk fills up. A 2G swapfile is cheap insurance on any node, cloud or static, and a no-op
@@ -147,3 +181,4 @@ runcmd:
   - systemctl enable --now docker.service
   - udevadm control --reload-rules
   - systemctl enable --now workload-node-identity-sync.service
+  - systemctl enable --now workload-agent.service
