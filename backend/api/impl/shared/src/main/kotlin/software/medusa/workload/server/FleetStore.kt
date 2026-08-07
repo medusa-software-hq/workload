@@ -58,6 +58,12 @@ interface FleetStore {
   /** Updates `lastSeenAt` to now; a no-op if the worker doesn't exist. */
   suspend fun touchLastSeen(workerId: WorkerId)
 
+  /**
+   * Marks/unmarks this worker as (one of) the shared fallback node(s) (workload#122 part 2).
+   * Returns null if the worker doesn't exist.
+   */
+  suspend fun setWorkerFallbackNode(workerId: WorkerId, fallbackNode: Boolean): Worker?
+
   // Profiles + revisions
 
   /** Creates a profile together with its first revision — a profile never exists without one. */
@@ -74,6 +80,12 @@ interface FleetStore {
   ): ProfileRevision
 
   suspend fun archiveProfile(profileId: ProfileId): Profile?
+
+  /**
+   * Tags/untags this profile for fallback auto-placement (workload#122 part 2). Returns null if the
+   * profile doesn't exist.
+   */
+  suspend fun setProfileFallbackEligible(profileId: ProfileId, fallbackEligible: Boolean): Profile?
 
   suspend fun getProfile(profileId: ProfileId): Profile?
 
@@ -109,6 +121,9 @@ interface FleetStore {
   suspend fun revoke(workerId: WorkerId, profileId: ProfileId)
 
   suspend fun hasGrant(workerId: WorkerId, profileId: ProfileId): Boolean
+
+  /** The grant for this (worker, profile) pair, or null if none exists. */
+  suspend fun getGrant(workerId: WorkerId, profileId: ProfileId): Grant?
 
   suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId>
 

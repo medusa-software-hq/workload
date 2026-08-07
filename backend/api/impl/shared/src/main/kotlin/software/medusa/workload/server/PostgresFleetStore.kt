@@ -45,6 +45,7 @@ private fun Workers.toDomain(): Worker =
         revokedAt = revoked_at?.toInstant(),
         paused = paused,
         pausedAt = paused_at?.toInstant(),
+        fallbackNode = fallback_node,
     )
 
 private fun Profiles.toDomain(): Profile =
@@ -54,6 +55,7 @@ private fun Profiles.toDomain(): Profile =
         latestRevision = latest_revision,
         archived = archived,
         createdAt = created_at.toInstant(),
+        fallbackEligible = fallback_eligible,
     )
 
 private fun Profile_revisions.toDomain(): ProfileRevision =
@@ -233,6 +235,12 @@ class PostgresFleetStore(
     }
   }
 
+  override suspend fun setWorkerFallbackNode(workerId: WorkerId, fallbackNode: Boolean): Worker? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.setWorkerFallbackNode(fallbackNode, workerId.value)
+        database.fleetQueries.selectWorkerById(workerId.value).executeAsOneOrNull()?.toDomain()
+      }
+
   override suspend fun createProfile(
       profileId: ProfileId,
       displayName: String?,
@@ -302,6 +310,15 @@ class PostgresFleetStore(
   override suspend fun archiveProfile(profileId: ProfileId): Profile? =
       withContext(Dispatchers.IO) {
         database.fleetQueries.archiveProfile(profileId.value)
+        database.fleetQueries.selectProfileById(profileId.value).executeAsOneOrNull()?.toDomain()
+      }
+
+  override suspend fun setProfileFallbackEligible(
+      profileId: ProfileId,
+      fallbackEligible: Boolean,
+  ): Profile? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.setProfileFallbackEligible(fallbackEligible, profileId.value)
         database.fleetQueries.selectProfileById(profileId.value).executeAsOneOrNull()?.toDomain()
       }
 
@@ -391,6 +408,14 @@ class PostgresFleetStore(
       withContext(Dispatchers.IO) {
         database.fleetQueries.selectGrant(workerId.value, profileId.value).executeAsOneOrNull() !=
             null
+      }
+
+  override suspend fun getGrant(workerId: WorkerId, profileId: ProfileId): Grant? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries
+            .selectGrant(workerId.value, profileId.value)
+            .executeAsOneOrNull()
+            ?.toDomain()
       }
 
   override suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId> =

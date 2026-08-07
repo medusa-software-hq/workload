@@ -52,6 +52,10 @@ import software.medusa.workload.v1.RevokeWorkerResponse
 import software.medusa.workload.v1.Run as RunProto
 import software.medusa.workload.v1.RunKind as RunKindProto
 import software.medusa.workload.v1.RunState as RunStateProto
+import software.medusa.workload.v1.SetProfileFallbackEligibleRequest
+import software.medusa.workload.v1.SetProfileFallbackEligibleResponse
+import software.medusa.workload.v1.SetWorkerFallbackNodeRequest
+import software.medusa.workload.v1.SetWorkerFallbackNodeResponse
 import software.medusa.workload.v1.SetWorkerPausedRequest
 import software.medusa.workload.v1.SetWorkerPausedResponse
 import software.medusa.workload.v1.UpdateProfileRequest
@@ -106,6 +110,7 @@ private fun Worker.toProto(grantedProfileIds: List<ProfileId>): WorkerProto =
         .setRevokedAt(revokedAt?.toString().orEmpty())
         .setPaused(paused)
         .setPausedAt(pausedAt?.toString().orEmpty())
+        .setFallbackNode(fallbackNode)
         .build()
 
 private fun RunKind.toProto(): RunKindProto =
@@ -147,6 +152,7 @@ private fun Profile.toProto(): ProfileProto =
         .setLatestRevision(latestRevision)
         .setArchived(archived)
         .setCreatedAt(createdAt.toString())
+        .setFallbackEligible(fallbackEligible)
         .build()
 
 private fun ProfileRevision.toProto(): ProfileRevisionProto =
@@ -378,6 +384,8 @@ class FleetServiceImpl(
     private val fleetStore: FleetStore,
     private val impersonationVerifier: ImpersonationVerifier,
     private val imageDigestResolver: ImageDigestResolver,
+    private val fallbackPlacementReconciler: FallbackPlacementReconciler =
+        FallbackPlacementReconciler(fleetStore),
 ) : FleetServiceGrpcKt.FleetServiceCoroutineImplBase() {
 
   override suspend fun listWorkers(request: ListWorkersRequest): ListWorkersResponse {
@@ -400,6 +408,9 @@ class FleetServiceImpl(
         fleetStore.approveWorker(workerId, approvedBy = admin)
             ?: throw notFound("worker", request.workerId)
     auditWorkerChange("worker_approved", workerId)
+    // A newly-active worker may be the fallback node coming up, or the dedicated node a
+    // fallback-eligible profile has been waiting for.
+    fallbackPlacementReconciler.reconcileAll()
     return ApproveWorkerResponse.newBuilder().setWorker(toProto(approved)).build()
   }
 
@@ -426,6 +437,9 @@ class FleetServiceImpl(
 
     val revoked = fleetStore.revokeWorker(workerId) ?: throw notFound("worker", request.workerId)
     auditWorkerChange("worker_revoked", workerId)
+    // If this was a dedicated (or the fallback) node, fallback-eligible profiles may need to
+    // land/move onto the fallback node now that it's gone.
+    fallbackPlacementReconciler.reconcileAll()
     return RevokeWorkerResponse.newBuilder().setWorker(toProto(revoked)).build()
   }
 
@@ -439,6 +453,26 @@ class FleetServiceImpl(
             ?: throw notFound("worker", request.workerId)
     auditWorkerChange(if (request.paused) "worker_paused" else "worker_served", workerId)
     return SetWorkerPausedResponse.newBuilder().setWorker(toProto(updated)).build()
+  }
+
+  override suspend fun setWorkerFallbackNode(
+      request: SetWorkerFallbackNodeRequest
+  ): SetWorkerFallbackNodeResponse {
+    requireUnscopedPrincipal("SetWorkerFallbackNode")
+    val workerId = parseWorkerId(request.workerId)
+    fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
+
+    val updated =
+        fleetStore.setWorkerFallbackNode(workerId, request.fallbackNode)
+            ?: throw notFound("worker", request.workerId)
+    auditWorkerChange(
+        if (request.fallbackNode) "worker_fallback_node_set" else "worker_fallback_node_unset",
+        workerId,
+    )
+    // The set of fallback-eligible profiles that should run here (or should move off, if this
+    // worker just lost the flag) may have changed.
+    fallbackPlacementReconciler.reconcileAll()
+    return SetWorkerFallbackNodeResponse.newBuilder().setWorker(toProto(updated)).build()
   }
 
   private suspend fun toProto(worker: Worker): WorkerProto =
@@ -580,7 +614,29 @@ class FleetServiceImpl(
     val archived =
         fleetStore.archiveProfile(profileId) ?: throw notFound("profile", request.profileId)
     auditProfileChange("profile_archived", profileId, revision = null)
+    // An archived profile is never placed on the fallback node — drop it if it was.
+    fallbackPlacementReconciler.reconcile(profileId)
     return ArchiveProfileResponse.newBuilder().setProfile(archived.toProto()).build()
+  }
+
+  override suspend fun setProfileFallbackEligible(
+      request: SetProfileFallbackEligibleRequest
+  ): SetProfileFallbackEligibleResponse {
+    val profileId = parseProfileId(request.profileId)
+    requireProfileScope(profileId)
+    fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
+
+    val updated =
+        fleetStore.setProfileFallbackEligible(profileId, request.fallbackEligible)
+            ?: throw notFound("profile", request.profileId)
+    auditProfileChange(
+        if (request.fallbackEligible) "profile_fallback_eligible_set"
+        else "profile_fallback_eligible_unset",
+        profileId,
+        revision = null,
+    )
+    fallbackPlacementReconciler.reconcile(profileId)
+    return SetProfileFallbackEligibleResponse.newBuilder().setProfile(updated.toProto()).build()
   }
 
   override suspend fun listProfileRevisions(
@@ -662,6 +718,9 @@ class FleetServiceImpl(
             result = "success",
         )
     )
+    // A grant to a real (non-fallback) worker is a dedicated node appearing — migrate off fallback
+    // if this profile is fallback-eligible and was running there.
+    fallbackPlacementReconciler.reconcile(profileId)
     return GrantProfileResponse.getDefaultInstance()
   }
 
@@ -683,6 +742,8 @@ class FleetServiceImpl(
             result = "success",
         )
     )
+    // The revoked worker may have been this profile's dedicated node — fall back if so.
+    fallbackPlacementReconciler.reconcile(profileId)
     return RevokeProfileGrantResponse.getDefaultInstance()
   }
 
@@ -728,6 +789,9 @@ class FleetServiceImpl(
             result = "success",
         )
     )
+    // A first-class assignment to a real (non-fallback) worker is a dedicated node appearing too —
+    // migrate off fallback if this profile is fallback-eligible and was running there.
+    fallbackPlacementReconciler.reconcile(profileId)
     return CreateAssignmentResponse.newBuilder().setAssignment(created.toProto()).build()
   }
 
@@ -749,6 +813,8 @@ class FleetServiceImpl(
             result = "success",
         )
     )
+    // The deleted assignment may have been this profile's dedicated node — fall back if so.
+    fallbackPlacementReconciler.reconcile(deleted.profileId)
     return DeleteAssignmentResponse.getDefaultInstance()
   }
 

@@ -121,6 +121,29 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
+  fun `setWorkerFallbackNode flags and unflags without touching status`() = test { store ->
+    val created = store.createWorker(newWorker())
+    assertFalse(store.getWorker(created.workerId)!!.fallbackNode)
+
+    val flagged = store.setWorkerFallbackNode(created.workerId, fallbackNode = true)
+    assertNotNull(flagged)
+    assertTrue(flagged.fallbackNode)
+    assertEquals(WorkerStatus.PENDING, flagged.status)
+    assertTrue(store.getWorker(created.workerId)!!.fallbackNode)
+
+    val unflagged = store.setWorkerFallbackNode(created.workerId, fallbackNode = false)
+    assertNotNull(unflagged)
+    assertFalse(unflagged.fallbackNode)
+  }
+
+  @Test
+  fun `setWorkerFallbackNode on an unknown id returns null`() = test { store ->
+    assertNull(
+        store.setWorkerFallbackNode(WorkerId(java.util.UUID.randomUUID()), fallbackNode = true)
+    )
+  }
+
+  @Test
   fun `touchLastSeen sets lastSeenAt on the worker`() = test { store ->
     val created = store.createWorker(newWorker())
     assertNull(created.lastSeenAt)
@@ -423,6 +446,38 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
+  fun `setProfileFallbackEligible tags and untags without touching other fields`() = test { store ->
+    val created =
+        store.createProfile(
+            ProfileId("fallback-tag-profile"),
+            displayName = null,
+            revision =
+                NewProfileRevision(
+                    "sa@project.iam.gserviceaccount.com",
+                    createdBy = "admin@example.com",
+                ),
+        )
+    assertFalse(created.fallbackEligible)
+
+    val tagged = store.setProfileFallbackEligible(created.profileId, fallbackEligible = true)
+    assertNotNull(tagged)
+    assertTrue(tagged.fallbackEligible)
+    assertFalse(tagged.archived)
+    assertTrue(store.getProfile(created.profileId)!!.fallbackEligible)
+
+    val untagged = store.setProfileFallbackEligible(created.profileId, fallbackEligible = false)
+    assertNotNull(untagged)
+    assertFalse(untagged.fallbackEligible)
+  }
+
+  @Test
+  fun `setProfileFallbackEligible on an unknown id returns null`() = test { store ->
+    assertNull(
+        store.setProfileFallbackEligible(ProfileId("no-such-profile"), fallbackEligible = true)
+    )
+  }
+
+  @Test
   fun `grant then revoke round-trips hasGrant`() = test { store ->
     val worker = store.createWorker(newWorker())
     val profile =
@@ -444,6 +499,32 @@ abstract class FleetStoreContractTest {
     store.revoke(worker.workerId, profile.profileId)
     assertFalse(store.hasGrant(worker.workerId, profile.profileId))
   }
+
+  @Test
+  fun `getGrant returns the grant with who granted it, null once revoked or if never granted`() =
+      test { store ->
+        val worker = store.createWorker(newWorker())
+        val profile =
+            store.createProfile(
+                ProfileId("my-profile-grant-lookup"),
+                displayName = null,
+                revision =
+                    NewProfileRevision(
+                        "sa@project.iam.gserviceaccount.com",
+                        createdBy = "admin@example.com",
+                    ),
+            )
+
+        assertNull(store.getGrant(worker.workerId, profile.profileId))
+
+        store.grant(worker.workerId, profile.profileId, grantedBy = "admin@example.com")
+        val grant = store.getGrant(worker.workerId, profile.profileId)
+        assertNotNull(grant)
+        assertEquals("admin@example.com", grant.grantedBy)
+
+        store.revoke(worker.workerId, profile.profileId)
+        assertNull(store.getGrant(worker.workerId, profile.profileId))
+      }
 
   @Test
   fun `listGrantedProfileIds reflects grant and revoke`() = test { store ->

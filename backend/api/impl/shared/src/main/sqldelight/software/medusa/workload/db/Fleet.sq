@@ -22,7 +22,9 @@ CREATE TABLE workers (
     revoked_at        TIMESTAMPTZ,
     -- Added in V13__add_worker_paused.sql.
     paused            boolean NOT NULL DEFAULT FALSE,
-    paused_at         TIMESTAMPTZ
+    paused_at         TIMESTAMPTZ,
+    -- Added in V15__add_fallback_placement.sql.
+    fallback_node     boolean NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE profiles (
@@ -30,7 +32,9 @@ CREATE TABLE profiles (
     display_name    text,
     latest_revision int  NOT NULL,
     archived        boolean NOT NULL DEFAULT FALSE,
-    created_at      TIMESTAMPTZ NOT NULL
+    created_at      TIMESTAMPTZ NOT NULL,
+    -- Added in V15__add_fallback_placement.sql.
+    fallback_eligible boolean NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE profile_revisions (
@@ -137,6 +141,11 @@ UPDATE workers
 SET paused = ?, paused_at = ?
 WHERE worker_id = ?;
 
+setWorkerFallbackNode:
+UPDATE workers
+SET fallback_node = ?
+WHERE worker_id = ?;
+
 insertProfile:
 INSERT INTO profiles (profile_id, display_name, latest_revision, archived, created_at)
 VALUES (?, ?, ?, ?, ?);
@@ -150,6 +159,9 @@ UPDATE profiles SET latest_revision = ? WHERE profile_id = ?;
 
 archiveProfile:
 UPDATE profiles SET archived = TRUE WHERE profile_id = ?;
+
+setProfileFallbackEligible:
+UPDATE profiles SET fallback_eligible = ? WHERE profile_id = ?;
 
 selectProfileById:
 SELECT * FROM profiles WHERE profile_id = ?;
