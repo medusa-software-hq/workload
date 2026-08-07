@@ -71,9 +71,12 @@ val generateBuildConfig by tasks.registering {
   val clientSecret = providers.gradleProperty("adminOauthClientSecret").orElse("")
   val stagingClientSecret = providers.gradleProperty("stagingAdminOauthClientSecret").orElse("")
   val metadataSidecarImage = providers.gradleProperty("metadataSidecarImage").orElse("")
+  val cloudflaredAccessSidecarImage =
+      providers.gradleProperty("cloudflaredAccessSidecarImage").orElse("")
   inputs.property("clientSecret", clientSecret)
   inputs.property("stagingClientSecret", stagingClientSecret)
   inputs.property("metadataSidecarImage", metadataSidecarImage)
+  inputs.property("cloudflaredAccessSidecarImage", cloudflaredAccessSidecarImage)
   outputs.dir(bakedBuildConfigDir)
   doLast {
     val file = bakedBuildConfigDir.get().file("workload-build.properties").asFile
@@ -85,7 +88,8 @@ val generateBuildConfig by tasks.registering {
     file.writeText(
         "oauthClientSecret=${clientSecret.get()}\n" +
             "stagingOauthClientSecret=${stagingClientSecret.get()}\n" +
-            "metadataSidecarImage=${metadataSidecarImage.get()}\n"
+            "metadataSidecarImage=${metadataSidecarImage.get()}\n" +
+            "cloudflaredAccessSidecarImage=${cloudflaredAccessSidecarImage.get()}\n"
     )
   }
 }

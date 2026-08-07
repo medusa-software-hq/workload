@@ -1,0 +1,74 @@
+name: Publish cloudflared-access image
+
+# The network-egress sidecar wrapping `cloudflared access tcp`, packaged as its own container and
+# run by `workload run` as a per-run network sidecar (see images/cloudflared-access/README.md). Like
+# metadata-emulator, this is a real product dependency — any `workload run --private-service-hostname
+# ...` pulls it — so it goes to the primary Artifact Registry, the same one version-drift-checker and
+# the API images publish to.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - trunk/*
+    paths:
+      - images/cloudflared-access/**
+      - .github/workflows/publish-cloudflared-access.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  NO_COLOR: 1
+  IMAGE_REF: ${{ vars.GCP_AR_REPO_ENDPOINT }}/workload/cloudflared-access
+
+jobs:
+  publish:
+    name: Publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6.0.2
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_CICD_WI_PROVIDER_NAME }}
+          service_account: ${{ vars.GCP_CICD_SA_EMAIL }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_AR_REPO_HOSTNAME }}" --quiet
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      # Multi-arch (linux/amd64,linux/arm64): a worker node running `workload run` can be an arm64
+      # host as easily as amd64 (the same reason metadata-emulator and hello-workload are multi-arch).
+      - name: Build and push image
+        uses: docker/build-push-action@v7.1.0
+        with:
+          context: images/cloudflared-access
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE_REF }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report the pinned digest
+        run: |
+          digest=$(gcloud artifacts docker images describe "${{ env.IMAGE_REF }}:latest" \
+            --format='value(image_summary.digest)')
+          echo "Pushed ${{ env.IMAGE_REF }}:latest"
+          echo "  digest: $digest"
+          {
+            echo "### cloudflared-access published"
+            echo
+            echo "\`${{ env.IMAGE_REF }}:latest\` (linux/amd64 + linux/arm64)"
+            echo
+            echo "Pinned digest: \`$digest\`"
+          } >> "$GITHUB_STEP_SUMMARY"

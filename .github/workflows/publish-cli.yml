@@ -44,11 +44,13 @@ jobs:
           ADMIN_OAUTH_CLIENT_SECRET: ${{ secrets.WORKLOAD_ADMIN_OAUTH_CLIENT_SECRET }}
           STAGING_ADMIN_OAUTH_CLIENT_SECRET: ${{ secrets.WORKLOAD_ADMIN_OAUTH_CLIENT_SECRET_STAGING }}
           METADATA_SIDECAR_IMAGE: ${{ vars.GCP_AR_REPO_ENDPOINT }}/workload/metadata-emulator
+          CLOUDFLARED_ACCESS_SIDECAR_IMAGE: ${{ vars.GCP_AR_REPO_ENDPOINT }}/workload/cloudflared-access
         run: |
           ../gradlew shadowJar \
             -PadminOauthClientSecret="$ADMIN_OAUTH_CLIENT_SECRET" \
             -PstagingAdminOauthClientSecret="$STAGING_ADMIN_OAUTH_CLIENT_SECRET" \
-            -PmetadataSidecarImage="$METADATA_SIDECAR_IMAGE"
+            -PmetadataSidecarImage="$METADATA_SIDECAR_IMAGE" \
+            -PcloudflaredAccessSidecarImage="$CLOUDFLARED_ACCESS_SIDECAR_IMAGE"
           echo "JAR=$GITHUB_WORKSPACE/cli/build/libs/workload-cli.jar" >> $GITHUB_ENV
           echo "VERSION=0.0.${{ github.run_number }}" >> $GITHUB_ENV
 
