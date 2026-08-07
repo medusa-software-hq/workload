@@ -16,6 +16,14 @@ class FallbackPlacementReconcilerTest {
     block(store, FallbackPlacementReconciler(store))
   }
 
+  private fun test(
+      slotCapacity: Int,
+      block: suspend (FleetStore, FallbackPlacementReconciler) -> Unit,
+  ) = runBlocking {
+    val store = InMemoryFleetStore()
+    block(store, FallbackPlacementReconciler(store, slotCapacity))
+  }
+
   private suspend fun activeWorker(store: FleetStore, name: String): WorkerId {
     val worker =
         store.createWorker(
@@ -239,5 +247,115 @@ class FallbackPlacementReconcilerTest {
         assertTrue(!store.hasGrant(first, profileId))
         assertTrue(store.hasGrant(second, profileId))
         assertEquals(second, store.fallbackAssignment(profileId)?.workerId)
+      }
+
+  // Slot capacity + FIFO overflow (workload#122 part 3).
+
+  @Test
+  fun `a placement beyond slot capacity is queued -- recorded as an assignment but not granted`() =
+      test(slotCapacity = 1) { store, reconciler ->
+        val fallback = activeWorker(store, "fallback")
+        store.setWorkerFallbackNode(fallback, fallbackNode = true)
+        val first = profile(store, "profile-1")
+        val second = profile(store, "profile-2")
+        store.setProfileFallbackEligible(first, fallbackEligible = true)
+        store.setProfileFallbackEligible(second, fallbackEligible = true)
+
+        reconciler.reconcile(first)
+        reconciler.reconcile(second)
+
+        assertTrue(store.hasGrant(fallback, first))
+        assertTrue(!store.hasGrant(fallback, second))
+        // Still placed (queued) on the fallback node, just not granted a slot yet.
+        assertEquals(fallback, store.fallbackAssignment(second)?.workerId)
+      }
+
+  @Test
+  fun `admits the oldest queued profile once a slot frees`() =
+      test(slotCapacity = 1) { store, reconciler ->
+        val fallback = activeWorker(store, "fallback")
+        store.setWorkerFallbackNode(fallback, fallbackNode = true)
+        val first = profile(store, "profile-1")
+        val second = profile(store, "profile-2")
+        store.setProfileFallbackEligible(first, fallbackEligible = true)
+        store.setProfileFallbackEligible(second, fallbackEligible = true)
+        reconciler.reconcile(first)
+        reconciler.reconcile(second)
+        assertTrue(!store.hasGrant(fallback, second))
+
+        store.setProfileFallbackEligible(first, fallbackEligible = false)
+        reconciler.reconcile(first)
+
+        assertNull(store.fallbackAssignment(first))
+        assertTrue(store.hasGrant(fallback, second))
+      }
+
+  @Test
+  fun `a dedicated node appearing for a queued profile frees nothing for the next in line`() =
+      test(slotCapacity = 1) { store, reconciler ->
+        val fallback = activeWorker(store, "fallback")
+        store.setWorkerFallbackNode(fallback, fallbackNode = true)
+        val first = profile(store, "profile-1")
+        val second = profile(store, "profile-2")
+        store.setProfileFallbackEligible(first, fallbackEligible = true)
+        store.setProfileFallbackEligible(second, fallbackEligible = true)
+        reconciler.reconcile(first)
+        reconciler.reconcile(second)
+
+        // The queued profile gets a dedicated node instead of ever reaching the fallback node.
+        val dedicated = activeWorker(store, "dedicated")
+        store.grant(dedicated, second, grantedBy = "admin@example.com")
+        reconciler.reconcile(second)
+
+        assertNull(store.fallbackAssignment(second))
+        assertTrue(store.hasGrant(dedicated, second))
+        // The slot occupant is unaffected.
+        assertTrue(store.hasGrant(fallback, first))
+      }
+
+  @Test
+  fun `drains multiple queued profiles strictly in arrival order as slots free one at a time`() =
+      test(slotCapacity = 2) { store, reconciler ->
+        val fallback = activeWorker(store, "fallback")
+        store.setWorkerFallbackNode(fallback, fallbackNode = true)
+        val p1 = profile(store, "profile-1")
+        val p2 = profile(store, "profile-2")
+        val p3 = profile(store, "profile-3")
+        listOf(p1, p2, p3).forEach { store.setProfileFallbackEligible(it, fallbackEligible = true) }
+
+        reconciler.reconcile(p1)
+        reconciler.reconcile(p2)
+        reconciler.reconcile(p3)
+
+        assertTrue(store.hasGrant(fallback, p1))
+        assertTrue(store.hasGrant(fallback, p2))
+        assertTrue(!store.hasGrant(fallback, p3))
+
+        store.setProfileFallbackEligible(p1, fallbackEligible = false)
+        reconciler.reconcile(p1)
+
+        // p3 was next in line, ahead of any later arrival; p2's slot is untouched.
+        assertTrue(store.hasGrant(fallback, p2))
+        assertTrue(store.hasGrant(fallback, p3))
+      }
+
+  @Test
+  fun `reconcileAll grants up to capacity and leaves the rest queued`() =
+      test(slotCapacity = 2) { store, reconciler ->
+        val fallback = activeWorker(store, "fallback")
+        store.setWorkerFallbackNode(fallback, fallbackNode = true)
+        val p1 = profile(store, "profile-1")
+        val p2 = profile(store, "profile-2")
+        val p3 = profile(store, "profile-3")
+        listOf(p1, p2, p3).forEach { store.setProfileFallbackEligible(it, fallbackEligible = true) }
+
+        reconciler.reconcileAll()
+
+        val granted = listOf(p1, p2, p3).count { store.hasGrant(fallback, it) }
+        assertEquals(2, granted)
+        // Every eligible profile is at least placed, granted or not.
+        listOf(p1, p2, p3).forEach {
+          assertEquals(fallback, store.fallbackAssignment(it)?.workerId)
+        }
       }
 }
