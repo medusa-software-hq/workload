@@ -73,6 +73,42 @@ fun shortRunEnum(value: String): String =
     if (value.isBlank()) "—" else value.substringAfterLast('_').lowercase()
 
 /**
+ * `AGENT_ASSIGNMENT_STATE_CRASHLOOP_HOLD` → `crashloop-hold`, `AGENT_ASSIGNMENT_STATE_DRAINING` →
+ * `draining`; blank → `—`. Can't use [shortRunEnum]'s last-underscore trick — several of these
+ * states are themselves multiple words (`CRASHLOOP_HOLD`).
+ */
+fun shortAssignmentState(value: String): String =
+    if (value.isBlank()) "—"
+    else value.substringAfter("AGENT_ASSIGNMENT_STATE_", value).lowercase().replace('_', '-')
+
+/** `sha256:deadbeef...` → `deadbeef1234`; blank → `—`. */
+fun shortDigest(digest: String): String = digest.removePrefix("sha256:").take(12).ifBlank { "—" }
+
+/**
+ * A worker's fleet column for `admin workers list` (M7 automated rollout): one line summarizing
+ * every profile's [AdminAssignmentStatus] — the *worst* state wins (crashloop-hold, then draining,
+ * then replacing), since that's what an operator scanning the list needs to notice first. `—` for a
+ * worker whose agent hasn't reported yet (a pre-M7 CLI-only worker, or one that just registered).
+ */
+fun formatFleetSummary(
+    statuses: List<AdminAssignmentStatus>,
+    now: Instant = Instant.now(),
+): String {
+  if (statuses.isEmpty()) return "—"
+  val held = statuses.filter { shortAssignmentState(it.state) == "crashloop-hold" }
+  if (held.isNotEmpty()) return "⚠ crashloop-hold: ${held.joinToString(",") { it.profileId }}"
+  val draining = statuses.filter { shortAssignmentState(it.state) == "draining" }
+  if (draining.isNotEmpty()) {
+    return draining.joinToString(", ") {
+      "draining: ${it.profileId} (${formatRelative(it.since, now)})"
+    }
+  }
+  val replacing = statuses.filter { shortAssignmentState(it.state) == "replacing" }
+  if (replacing.isNotEmpty()) return "replacing: ${replacing.joinToString(",") { it.profileId }}"
+  return "converged (${statuses.size})"
+}
+
+/**
  * A coarse "how long ago" for a timestamp: `30s ago`, `4m ago`, `2h ago`, `3d ago`. Blank →
  * `never`, unparseable → passed through. [now] is injectable for tests.
  */

@@ -150,6 +150,7 @@ fun main() {
           workerRunService = WorkerRunService(fleetStore),
           workerNodeIdentityService = workerNodeIdentityService,
           workerAssignmentsService = WorkerAssignmentsService(fleetStore),
+          workerStatusReportService = WorkerStatusReportService(fleetStore),
       )
       .start()
       .join()

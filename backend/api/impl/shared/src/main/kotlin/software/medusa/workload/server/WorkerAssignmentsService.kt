@@ -22,6 +22,9 @@ internal data class AgentAssignment(
     val revision: Int,
     val dockerImage: String,
     val dockerImageDigest: String,
+    // The revision's declared stop timeout (M7 drain contract) — see ProfileRevision.drainDeadline.
+    // Null/blank means the supervisor's own default applies.
+    val drainDeadline: String? = null,
 )
 
 @Serializable
@@ -65,6 +68,7 @@ class WorkerAssignmentsService(
               revision = revision.revision,
               dockerImage = revision.dockerImage.orEmpty(),
               dockerImageDigest = revision.dockerImageDigest.orEmpty(),
+              drainDeadline = revision.drainDeadline,
           )
         }
 

@@ -64,6 +64,13 @@ interface FleetStore {
    */
   suspend fun setWorkerFallbackNode(workerId: WorkerId, fallbackNode: Boolean): Worker?
 
+  /**
+   * Replaces this worker's [Worker.assignmentStatuses] wholesale with [statuses] (M7 automated
+   * rollout) — each `POST /worker/v2/status` report supersedes the last entirely, it never merges.
+   * A no-op if the worker doesn't exist.
+   */
+  suspend fun updateAssignmentStatuses(workerId: WorkerId, statuses: List<AgentAssignmentStatus>)
+
   // Profiles + revisions
 
   /** Creates a profile together with its first revision — a profile never exists without one. */

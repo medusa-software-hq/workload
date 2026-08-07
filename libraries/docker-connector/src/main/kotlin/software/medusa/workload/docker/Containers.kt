@@ -103,6 +103,37 @@ class ContainerApi internal constructor(private val engine: DockerEngine) {
   }
 
   /**
+   * `POST /containers/{id}/kill?signal=` — sends [signal] and returns immediately, unlike [stop]
+   * which blocks the caller until the container exits or its timeout elapses. This is what a
+   * multi-hour drain deadline needs: the reconcile loop can't block a tick for hours waiting on
+   * `stop`, so a drain starts here (`SIGTERM`) and the deadline is enforced across later ticks
+   * instead of inside one blocking call.
+   */
+  suspend fun kill(id: String, signal: String) {
+    val query = queryOf("signal" to signal)
+    val response =
+        engine.exchange(HttpMethod.POST, engine.versionedPath("/containers/$id/kill") + "?" + query)
+    response.ensureSuccess(engine.json)
+  }
+
+  /**
+   * `POST /containers/{id}/rename?name=` — the one piece of a container's identity Docker lets a
+   * caller change after creation. Used to stamp a drain-started marker onto an already-running
+   * container (labels are creation-time-only and can't be added later), so the deadline survives an
+   * agent restart: a freshly restarted agent re-lists containers and recovers the marker from the
+   * name it already has, instead of needing a separate state file that could go stale.
+   */
+  suspend fun rename(id: String, name: String) {
+    val query = queryOf("name" to name)
+    val response =
+        engine.exchange(
+            HttpMethod.POST,
+            engine.versionedPath("/containers/$id/rename") + "?" + query,
+        )
+    response.ensureSuccess(engine.json)
+  }
+
+  /**
    * `DELETE /containers/{id}`. [force] kills a running container first; [removeVolumes] (default
    * `true`) also removes anonymous volumes the container created.
    */

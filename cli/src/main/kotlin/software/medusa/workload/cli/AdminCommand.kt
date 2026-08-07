@@ -800,13 +800,14 @@ internal fun formatWorkerSections(
     sections +=
         section(
             "Workers:",
-            listOf("WORKER ID", "NAME", "ACTIVITY", "GRANTS", "LAST SEEN", "CREATED"),
+            listOf("WORKER ID", "NAME", "ACTIVITY", "FLEET", "GRANTS", "LAST SEEN", "CREATED"),
             active.map {
               val running = runningByWorker[it.workerId] ?: 0
               listOf(
                   it.workerId,
                   it.name.ifBlank { "—" },
                   if (running > 0) "● $running running" else "idle",
+                  formatFleetSummary(it.assignmentStatuses),
                   if (it.grantedProfileIds.isEmpty()) "—"
                   else it.grantedProfileIds.joinToString(","),
                   formatRelative(it.lastSeenAt),
