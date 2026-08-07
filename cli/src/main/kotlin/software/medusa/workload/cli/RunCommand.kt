@@ -13,6 +13,7 @@ import software.medusa.workload.docker.DockerConnectionException
 import software.medusa.workload.docker.DockerConnector
 import software.medusa.workload.docker.DockerConnectorConfig
 import software.medusa.workload.docker.DockerConnectorException
+import software.medusa.workload.runtime.CloudflaredAccessSidecar
 import software.medusa.workload.runtime.MetadataSidecar
 import software.medusa.workload.runtime.RunReporter
 import software.medusa.workload.runtime.SecretBrokerAuth
@@ -21,6 +22,7 @@ import software.medusa.workload.runtime.WorkerApiException
 import software.medusa.workload.runtime.WorkerClaimResponse
 import software.medusa.workload.runtime.buildMetadataContainerEnv
 import software.medusa.workload.runtime.claimWorkload
+import software.medusa.workload.runtime.cloudflaredAccessSidecarEnv
 import software.medusa.workload.runtime.containerLabels
 import software.medusa.workload.runtime.containerStopGrace
 import software.medusa.workload.runtime.garbageCollectAfterRun
@@ -28,13 +30,16 @@ import software.medusa.workload.runtime.installContainerTeardownHook
 import software.medusa.workload.runtime.metadataPointerEnv
 import software.medusa.workload.runtime.metadataSidecarEnv
 import software.medusa.workload.runtime.pinnedImageRef
+import software.medusa.workload.runtime.privateServicePointerEnv
 import software.medusa.workload.runtime.pullBrokeredImage
 import software.medusa.workload.runtime.pullFailureMessage
 import software.medusa.workload.runtime.renderPullProgress
 import software.medusa.workload.runtime.repositoryOf
 import software.medusa.workload.runtime.resolveSecrets
 import software.medusa.workload.runtime.runContainerToCompletion
+import software.medusa.workload.runtime.startCloudflaredAccessSidecar
 import software.medusa.workload.runtime.startMetadataSidecar
+import software.medusa.workload.runtime.stopCloudflaredAccessSidecar
 import software.medusa.workload.runtime.stopMetadataSidecar
 import software.medusa.workload.runtime.tokenClaimErrorMessage
 import software.medusa.workload.runtime.workloadNetworkLabel
@@ -45,6 +50,12 @@ import software.medusa.workload.runtime.workloadNetworkLabel
  */
 internal const val metadataSidecarImageEnvVar = "WORKLOAD_METADATA_SIDECAR_IMAGE"
 
+/**
+ * Env var overriding the cloudflared-access sidecar image `workload run` pulls when
+ * `--private-service-hostname` is given — see [resolveCloudflaredAccessSidecarImage].
+ */
+internal const val cloudflaredAccessSidecarImageEnvVar = "WORKLOAD_CLOUDFLARED_ACCESS_SIDECAR_IMAGE"
+
 class RunCommand : CliktCommand(name = "run") {
   override fun help(context: Context) =
       "Run a profile's container image with its environment injected. Streams the container's " +
@@ -53,7 +64,46 @@ class RunCommand : CliktCommand(name = "run") {
   private val env by requireEnvironment()
   private val profileId by option("--profile", "-p", help = "The profile to run").required()
 
+  // Network egress: off by default. A hostname alone reaches an Access application that doesn't
+  // require a service token (e.g. gated some other way); the token pair authenticates this sidecar
+  // to Access as a headless client when one is required.
+  private val privateServiceHostname by
+      option(
+          "--private-service-hostname",
+          help =
+              "A private hostname behind Cloudflare Access the workload container should be able " +
+                  "to reach. Starts a cloudflared-access sidecar (see images/cloudflared-access) " +
+                  "on the run's own network; the workload sees it via WORKLOAD_PRIVATE_SERVICE_ADDR.",
+      )
+  private val privateServiceTokenId by
+      option(
+          "--private-service-token-id",
+          help =
+              "Cloudflare Access service-token client id, paired with --private-service-token-secret.",
+      )
+  private val privateServiceTokenSecret by
+      option(
+          "--private-service-token-secret",
+          help =
+              "Cloudflare Access service-token client secret, paired with --private-service-token-id.",
+      )
+
   override fun run() {
+    if ((privateServiceTokenId == null) != (privateServiceTokenSecret == null)) {
+      throw PrintMessage(
+          "--private-service-token-id and --private-service-token-secret must be given together.",
+          statusCode = 1,
+          printError = true,
+      )
+    }
+    if (privateServiceHostname == null && privateServiceTokenId != null) {
+      throw PrintMessage(
+          "--private-service-token-id/--private-service-token-secret require --private-service-hostname.",
+          statusCode = 1,
+          printError = true,
+      )
+    }
+
     val config = loadConfigOrFail(env)
     val auth = SecretBrokerAuth(config.workerId, config.workerSecret)
 
@@ -206,6 +256,28 @@ class RunCommand : CliktCommand(name = "run") {
     }
     echo("Metadata:     http://${sidecar.address} (tokens refresh automatically)", err = true)
 
+    // Network egress (opt-in): joins the same per-run network the metadata sidecar just created, so
+    // it shares its isolation — see CloudflaredAccessSidecar.kt's doc.
+    val cloudflaredSidecar = privateServiceHostname?.let { hostname ->
+      val cloudflaredImage = resolveCloudflaredAccessSidecarImage()
+      pullCloudflaredAccessSidecarImage(connector, cloudflaredImage)
+      runBlocking {
+            startCloudflaredAccessSidecar(
+                connector = connector,
+                image = cloudflaredImage,
+                networkName = networkName,
+                env =
+                    cloudflaredAccessSidecarEnv(
+                        hostname = hostname,
+                        serviceTokenId = privateServiceTokenId,
+                        serviceTokenSecret = privateServiceTokenSecret,
+                    ),
+                labels = labels,
+            )
+          }
+          .also { echo("Private service: $hostname via ${it.address}", err = true) }
+    }
+
     // Record the run + start heartbeating (M6-B1). Best-effort: a broker hiccup here never stops
     // the
     // container — reporter is null / its calls warn, and the workload runs regardless.
@@ -228,13 +300,18 @@ class RunCommand : CliktCommand(name = "run") {
                 env =
                     buildMetadataContainerEnv(
                         claim.envVars + secretValues,
-                        metadataPointerEnv(sidecar.address),
+                        metadataPointerEnv(sidecar.address) +
+                            (cloudflaredSidecar?.let {
+                              privateServicePointerEnv(privateServiceHostname!!, it.address)
+                            } ?: emptyMap()),
                     ),
                 labels = labels,
                 extraHosts =
                     listOf("metadata.google.internal:${sidecar.address.substringBefore(':')}"),
                 networkMode = networkName,
-                onCreated = { id -> hook = stopOnShutdownHook(connector, id, sidecar) },
+                onCreated = { id ->
+                  hook = stopOnShutdownHook(connector, id, sidecar, cloudflaredSidecar)
+                },
                 onStdout = {
                   System.out.write(it)
                   System.out.flush()
@@ -258,7 +335,12 @@ class RunCommand : CliktCommand(name = "run") {
       reporter?.close()
       hook?.let { runCatching { Runtime.getRuntime().removeShutdownHook(it) } }
       // The workload container is already gone by this point (runContainerToCompletion's own
-      // finally removed it), so the sidecar container is the network's last endpoint.
+      // finally removed it). The cloudflared sidecar (if any) must go before the metadata one:
+      // stopMetadataSidecar removes the shared network, which fails while any other container is
+      // still attached to it.
+      cloudflaredSidecar?.let {
+        runCatching { runBlocking { stopCloudflaredAccessSidecar(connector, it) } }
+      }
       runCatching { runBlocking { stopMetadataSidecar(connector, sidecar) } }
       // Second GC pass at teardown (M7-00): our container has been removed, so its now-exited
       // predecessor is reapable and this repo's superseded image sweepable. Best-effort.
@@ -289,8 +371,14 @@ class RunCommand : CliktCommand(name = "run") {
       connector: DockerConnector,
       containerId: String,
       sidecar: MetadataSidecar,
+      cloudflaredSidecar: CloudflaredAccessSidecar?,
   ): Thread =
       installContainerTeardownHook(connector, containerId, containerStopGrace) {
+        // Same ordering constraint as the normal-exit teardown path: the cloudflared sidecar (if
+        // any) must be removed before the metadata sidecar, which removes their shared network.
+        cloudflaredSidecar?.let {
+          runCatching { runBlocking { stopCloudflaredAccessSidecar(connector, it) } }
+        }
         runCatching { runBlocking { stopMetadataSidecar(connector, sidecar) } }
       }
 
@@ -332,6 +420,48 @@ class RunCommand : CliktCommand(name = "run") {
               "This image is pulled with this host's own Docker sign-in, not the brokered token " +
               "(it's what obtains that token). Run 'gcloud auth configure-docker' for a private " +
               "registry, or point $metadataSidecarImageEnvVar at one this host can already reach.",
+          statusCode = 1,
+          printError = true,
+      )
+    }
+  }
+
+  /**
+   * The cloudflared-access sidecar image ref, resolved the same way as
+   * [resolveMetadataSidecarImage]: [cloudflaredAccessSidecarImageEnvVar] if set, else the ref baked
+   * in at publish time. Only ever called when `--private-service-hostname` was given, so a build
+   * with neither set fails clearly rather than silently skipping the sidecar.
+   */
+  private fun resolveCloudflaredAccessSidecarImage(): String =
+      System.getenv(cloudflaredAccessSidecarImageEnvVar)?.ifBlank { null }
+          ?: BuildConfig.bakedProperty("cloudflaredAccessSidecarImage")
+          ?: throw PrintMessage(
+              "No cloudflared-access sidecar image configured. Set " +
+                  "$cloudflaredAccessSidecarImageEnvVar to an image ref this host can pull (see " +
+                  "images/cloudflared-access), or use a published CLI build, which bakes one in.",
+              statusCode = 1,
+              printError = true,
+          )
+
+  /**
+   * Pulls the cloudflared-access sidecar image with this host's own ambient Docker credentials —
+   * same reasoning as [pullMetadataSidecarImage].
+   */
+  private fun pullCloudflaredAccessSidecarImage(connector: DockerConnector, image: String) {
+    echo("Pulling cloudflared-access sidecar $image ...", err = true)
+    val seen = mutableSetOf<String>()
+    try {
+      runBlocking {
+        connector.images.pull(image).collect { progress ->
+          renderPullProgress(progress, seen)?.let { echo(it, err = true) }
+        }
+      }
+    } catch (e: DockerConnectorException) {
+      throw PrintMessage(
+          "Failed to pull the cloudflared-access sidecar image ($image): ${e.message}\n" +
+              "This image is pulled with this host's own Docker sign-in. Run " +
+              "'gcloud auth configure-docker' for a private registry, or point " +
+              "$cloudflaredAccessSidecarImageEnvVar at one this host can already reach.",
           statusCode = 1,
           printError = true,
       )

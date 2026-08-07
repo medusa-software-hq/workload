@@ -14,10 +14,13 @@ import kotlinx.coroutines.runBlocking
 import software.medusa.workload.tokenformat.TokenKind
 import software.medusa.workload.tokenformat.WorkloadToken
 import software.medusa.workload.v1.ApproveWorkerRequest
+import software.medusa.workload.v1.CreateAssignmentRequest
 import software.medusa.workload.v1.CreateEnrollmentTokenRequest
 import software.medusa.workload.v1.CreateProfileRequest
+import software.medusa.workload.v1.DeleteAssignmentRequest
 import software.medusa.workload.v1.FleetServiceGrpcKt
 import software.medusa.workload.v1.GrantProfileRequest
+import software.medusa.workload.v1.ListAssignmentsRequest
 import software.medusa.workload.v1.ListEnrollmentTokensRequest
 import software.medusa.workload.v1.ListProfilesRequest
 import software.medusa.workload.v1.ListRunsRequest
@@ -141,6 +144,59 @@ class FleetServiceImplTest {
                 )
                 .worker
         assertEquals(WorkerStatus.WORKER_STATUS_REVOKED, revoked.status)
+      }
+
+  @Test
+  fun `create, list, and delete an assignment — a first-class record distinct from a grant`() =
+      runBlocking {
+        val worker =
+            fleetStore.createWorker(
+                NewWorker(
+                    secretHash = hashWorkerSecret(WorkloadToken.generate(TokenKind.WORKER)),
+                    name = "worker-assign",
+                    hostname = null,
+                    os = null,
+                    cliVersion = null,
+                )
+            )
+        stub.createProfile(
+            CreateProfileRequest.newBuilder()
+                .setProfileId("assignment-profile")
+                .setTargetServiceAccount("sa@project.iam.gserviceaccount.com")
+                .build()
+        )
+
+        val created =
+            stub
+                .createAssignment(
+                    CreateAssignmentRequest.newBuilder()
+                        .setWorkerId(worker.workerId.value.toString())
+                        .setProfileId("assignment-profile")
+                        .build()
+                )
+                .assignment
+        assertEquals(worker.workerId.value.toString(), created.workerId)
+        assertEquals("assignment-profile", created.profileId)
+        assertTrue(created.assignmentId.isNotBlank())
+        // Creating an assignment must not also create a grant.
+        assertTrue(!fleetStore.hasGrant(worker.workerId, ProfileId("assignment-profile")))
+
+        val listed =
+            stub.listAssignments(ListAssignmentsRequest.getDefaultInstance()).assignmentsList
+        assertTrue(listed.any { it.assignmentId == created.assignmentId })
+
+        stub.deleteAssignment(
+            DeleteAssignmentRequest.newBuilder().setAssignmentId(created.assignmentId).build()
+        )
+        val afterDelete =
+            stub.listAssignments(ListAssignmentsRequest.getDefaultInstance()).assignmentsList
+        assertTrue(afterDelete.none { it.assignmentId == created.assignmentId })
+
+        assertFailsWith<StatusException> {
+          stub.deleteAssignment(
+              DeleteAssignmentRequest.newBuilder().setAssignmentId(created.assignmentId).build()
+          )
+        }
       }
 
   @Test

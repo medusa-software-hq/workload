@@ -12,6 +12,13 @@ private const val allowedDomainEnvVarName = "GOOGLE_ALLOWED_DOMAIN"
 private const val serviceAudienceEnvVarName = "API_URL"
 private const val adminServiceAccountsEnvVarName = "ADMIN_SERVICE_ACCOUNTS"
 
+// Phase 2 of the automated-rollout epic (workload#126): a CI principal that only needs to push a
+// worker digest (e.g. Flow's release automation) can be allow-listed here with a profile scope
+// instead of full admin. Format: "email1=profile-a,profile-b;email2=profile-c" — an SA on
+// ADMIN_SERVICE_ACCOUNTS but absent from this map is unrestricted (the pre-existing s2s admin).
+private const val adminServiceAccountProfileScopesEnvVarName =
+    "ADMIN_SERVICE_ACCOUNT_PROFILE_SCOPES"
+
 // GCE node principal (M7): a worker-plane node identity, verified the same way as the s2s admin
 // principal above — a Google-signed ID token naming this API's own URL as its audience — but
 // against a *separate* allowlist, so an admin-allow-listed SA gains no worker-plane power (or vice
@@ -52,6 +59,19 @@ fun main() {
           ?.map { it.trim() }
           ?.filter { it.isNotEmpty() }
           ?.toSet()
+          .orEmpty()
+
+  // Per-SA profile scope for the admin plane, ";"-separated entries of "email=id1,id2". Empty (or
+  // unset) means every admin SA above stays unrestricted.
+  val adminServiceAccountProfileScopes =
+      System.getenv(adminServiceAccountProfileScopesEnvVarName)
+          ?.split(";")
+          ?.map { it.trim() }
+          ?.filter { it.isNotEmpty() }
+          ?.associate { entry ->
+            val (email, ids) = entry.split("=", limit = 2)
+            email.trim() to ids.split(",").map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+          }
           .orEmpty()
 
   // Allow-listed GCE worker-plane node service accounts, comma-separated. Empty (or unset) means no
@@ -116,6 +136,7 @@ fun main() {
                       allowedDomain = allowedDomain,
                       serviceAudience = serviceAudience,
                       serviceAccountAllowlist = adminServiceAccounts,
+                      serviceAccountProfileScopes = adminServiceAccountProfileScopes,
                   )
               ),
           fleetStore = fleetStore,
@@ -128,6 +149,8 @@ fun main() {
           v2RegistrationService = RegistrationServiceV2(fleetStore),
           workerRunService = WorkerRunService(fleetStore),
           workerNodeIdentityService = workerNodeIdentityService,
+          workerAssignmentsService = WorkerAssignmentsService(fleetStore),
+          workerStatusReportService = WorkerStatusReportService(fleetStore),
       )
       .start()
       .join()

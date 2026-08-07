@@ -7,19 +7,28 @@ import java.time.Instant
 import java.util.UUID
 import software.medusa.workload.tokenformat.TokenKind
 import software.medusa.workload.tokenformat.WorkloadToken
+import software.medusa.workload.v1.AgentAssignmentState as AgentAssignmentStateProto
+import software.medusa.workload.v1.AgentAssignmentStatus as AgentAssignmentStatusProto
 import software.medusa.workload.v1.ApproveWorkerRequest
 import software.medusa.workload.v1.ApproveWorkerResponse
 import software.medusa.workload.v1.ArchiveProfileRequest
 import software.medusa.workload.v1.ArchiveProfileResponse
+import software.medusa.workload.v1.Assignment as AssignmentProto
+import software.medusa.workload.v1.CreateAssignmentRequest
+import software.medusa.workload.v1.CreateAssignmentResponse
 import software.medusa.workload.v1.CreateEnrollmentTokenRequest
 import software.medusa.workload.v1.CreateEnrollmentTokenResponse
 import software.medusa.workload.v1.CreateProfileRequest
 import software.medusa.workload.v1.CreateProfileResponse
+import software.medusa.workload.v1.DeleteAssignmentRequest
+import software.medusa.workload.v1.DeleteAssignmentResponse
 import software.medusa.workload.v1.EnrollmentToken as EnrollmentTokenProto
 import software.medusa.workload.v1.FleetServiceGrpcKt
 import software.medusa.workload.v1.GrantProfileRequest
 import software.medusa.workload.v1.GrantProfileResponse
 import software.medusa.workload.v1.ImageStatus as ImageStatusProto
+import software.medusa.workload.v1.ListAssignmentsRequest
+import software.medusa.workload.v1.ListAssignmentsResponse
 import software.medusa.workload.v1.ListEnrollmentTokensRequest
 import software.medusa.workload.v1.ListEnrollmentTokensResponse
 import software.medusa.workload.v1.ListProfileRevisionsRequest
@@ -45,6 +54,12 @@ import software.medusa.workload.v1.RevokeWorkerResponse
 import software.medusa.workload.v1.Run as RunProto
 import software.medusa.workload.v1.RunKind as RunKindProto
 import software.medusa.workload.v1.RunState as RunStateProto
+import software.medusa.workload.v1.SetProfileFallbackEligibleRequest
+import software.medusa.workload.v1.SetProfileFallbackEligibleResponse
+import software.medusa.workload.v1.SetWorkerFallbackNodeRequest
+import software.medusa.workload.v1.SetWorkerFallbackNodeResponse
+import software.medusa.workload.v1.SetWorkerPausedRequest
+import software.medusa.workload.v1.SetWorkerPausedResponse
 import software.medusa.workload.v1.UpdateProfileRequest
 import software.medusa.workload.v1.UpdateProfileResponse
 import software.medusa.workload.v1.VerificationStatus as VerificationStatusProto
@@ -95,12 +110,36 @@ private fun Worker.toProto(grantedProfileIds: List<ProfileId>): WorkerProto =
         .setRegisteredVia(registeredVia.name.lowercase())
         .setSourceIp(sourceIp.orEmpty())
         .setRevokedAt(revokedAt?.toString().orEmpty())
+        .setPaused(paused)
+        .setPausedAt(pausedAt?.toString().orEmpty())
+        .setFallbackNode(fallbackNode)
+        .addAllAssignmentStatuses(assignmentStatuses.map { it.toProto() })
+        .build()
+
+private fun AgentAssignmentState.toProto(): AgentAssignmentStateProto =
+    when (this) {
+      AgentAssignmentState.CONVERGED -> AgentAssignmentStateProto.AGENT_ASSIGNMENT_STATE_CONVERGED
+      AgentAssignmentState.DRAINING -> AgentAssignmentStateProto.AGENT_ASSIGNMENT_STATE_DRAINING
+      AgentAssignmentState.CRASHLOOP_HOLD ->
+          AgentAssignmentStateProto.AGENT_ASSIGNMENT_STATE_CRASHLOOP_HOLD
+      AgentAssignmentState.REPLACING -> AgentAssignmentStateProto.AGENT_ASSIGNMENT_STATE_REPLACING
+    }
+
+private fun AgentAssignmentStatus.toProto(): AgentAssignmentStatusProto =
+    AgentAssignmentStatusProto.newBuilder()
+        .setProfileId(profileId.value)
+        .setRunningDigest(runningDigest.orEmpty())
+        .setDesiredDigest(desiredDigest.orEmpty())
+        .setState(state.toProto())
+        .setSince(since.toString())
+        .setDrainDeadline(drainDeadline?.toString().orEmpty())
         .build()
 
 private fun RunKind.toProto(): RunKindProto =
     when (this) {
       RunKind.RUN -> RunKindProto.RUN_KIND_RUN
       RunKind.EXEC -> RunKindProto.RUN_KIND_EXEC
+      RunKind.AGENT -> RunKindProto.RUN_KIND_AGENT
     }
 
 private fun RunState.toProto(): RunStateProto =
@@ -135,6 +174,7 @@ private fun Profile.toProto(): ProfileProto =
         .setLatestRevision(latestRevision)
         .setArchived(archived)
         .setCreatedAt(createdAt.toString())
+        .setFallbackEligible(fallbackEligible)
         .build()
 
 private fun ProfileRevision.toProto(): ProfileRevisionProto =
@@ -151,6 +191,16 @@ private fun ProfileRevision.toProto(): ProfileRevisionProto =
         .setDockerImage(dockerImage.orEmpty())
         .setDockerImageDigest(dockerImageDigest.orEmpty())
         .setImageStatus(imageStatus.toProto())
+        .setDrainDeadline(drainDeadline.orEmpty())
+        .build()
+
+private fun Assignment.toProto(): AssignmentProto =
+    AssignmentProto.newBuilder()
+        .setAssignmentId(id.value.toString())
+        .setWorkerId(workerId.value.toString())
+        .setProfileId(profileId.value)
+        .setCreatedAt(createdAt.toString())
+        .setCreatedBy(createdBy)
         .build()
 
 private fun EnrollmentToken.toProto(): EnrollmentTokenProto =
@@ -175,6 +225,15 @@ private fun parseEnrollmentTokenId(raw: String): EnrollmentTokenId =
     } catch (e: IllegalArgumentException) {
       throw StatusException(
           Status.INVALID_ARGUMENT.withDescription("Invalid enrollment_token_id: '$raw'")
+      )
+    }
+
+private fun parseAssignmentId(raw: String): AssignmentId =
+    try {
+      AssignmentId(UUID.fromString(raw))
+    } catch (e: IllegalArgumentException) {
+      throw StatusException(
+          Status.INVALID_ARGUMENT.withDescription("Invalid assignment_id: '$raw'")
       )
     }
 
@@ -277,11 +336,66 @@ private fun requireValidImageRef(dockerImage: String) {
   }
 }
 
+// A Go-style duration: one or more <number><unit> segments (h/m/s), e.g. "6h", "90m", "1h30m".
+// Matches the shape the drain contract expects the supervisor's stop timeout in.
+private val drainDeadlinePattern = Regex("""(\d+h)?(\d+m)?(\d+s)?""")
+
+/**
+ * Validates a non-blank drain_deadline; a blank value means "supervisor default" and is allowed.
+ */
+private fun requireValidDrainDeadline(drainDeadline: String) {
+  if (drainDeadline.isBlank()) return
+  if (!drainDeadlinePattern.matches(drainDeadline)) {
+    throw StatusException(
+        Status.INVALID_ARGUMENT.withDescription(
+            "drain_deadline '$drainDeadline' must be a duration like '6h', '90m', or '1h30m'"
+        )
+    )
+  }
+}
+
 private fun notFound(kind: String, id: String): StatusException =
     StatusException(Status.NOT_FOUND.withDescription("$kind '$id' not found"))
 
 private fun failedPrecondition(message: String): StatusException =
     StatusException(Status.FAILED_PRECONDITION.withDescription(message))
+
+private fun permissionDenied(message: String): StatusException =
+    StatusException(Status.PERMISSION_DENIED.withDescription(message))
+
+/**
+ * Enforces a scoped service principal's profile allowlist (Phase 2 of workload#126). A
+ * [Principal.Service] with an empty [Principal.Service.profileScope] is the pre-existing
+ * unrestricted s2s admin and passes through unchanged; a non-empty scope must contain [profileId]
+ * or the call is rejected. Human principals are never scoped.
+ */
+private fun requireProfileScope(profileId: ProfileId) {
+  val principal = currentAdminPrincipal()
+  if (
+      principal is Principal.Service &&
+          principal.profileScope.isNotEmpty() &&
+          profileId.value !in principal.profileScope
+  ) {
+    throw permissionDenied(
+        "service principal '${principal.email}' is not scoped to profile '${profileId.value}'"
+    )
+  }
+}
+
+/**
+ * Denies the call outright for a scoped service principal — used by every admin RPC that a
+ * profile-update-scoped CI principal has no business calling (worker lifecycle, grants, enrollment
+ * tokens, fleet-wide listing). Unscoped services and humans are unaffected.
+ */
+private fun requireUnscopedPrincipal(rpcName: String) {
+  val principal = currentAdminPrincipal()
+  if (principal is Principal.Service && principal.profileScope.isNotEmpty()) {
+    throw permissionDenied(
+        "service principal '${principal.email}' is scoped to profile create/update and may not " +
+            "call $rpcName"
+    )
+  }
+}
 
 /**
  * The admin plane: `FleetService`, consumed by the console behind the existing console auth (same
@@ -292,14 +406,19 @@ class FleetServiceImpl(
     private val fleetStore: FleetStore,
     private val impersonationVerifier: ImpersonationVerifier,
     private val imageDigestResolver: ImageDigestResolver,
+    private val fallbackPlacementReconciler: FallbackPlacementReconciler =
+        FallbackPlacementReconciler(fleetStore),
 ) : FleetServiceGrpcKt.FleetServiceCoroutineImplBase() {
 
-  override suspend fun listWorkers(request: ListWorkersRequest): ListWorkersResponse =
-      ListWorkersResponse.newBuilder()
-          .addAllWorkers(fleetStore.listWorkers().map { toProto(it) })
-          .build()
+  override suspend fun listWorkers(request: ListWorkersRequest): ListWorkersResponse {
+    requireUnscopedPrincipal("ListWorkers")
+    return ListWorkersResponse.newBuilder()
+        .addAllWorkers(fleetStore.listWorkers().map { toProto(it) })
+        .build()
+  }
 
   override suspend fun approveWorker(request: ApproveWorkerRequest): ApproveWorkerResponse {
+    requireUnscopedPrincipal("ApproveWorker")
     val workerId = parseWorkerId(request.workerId)
     val current = fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
     if (current.status != WorkerStatus.PENDING) {
@@ -311,10 +430,14 @@ class FleetServiceImpl(
         fleetStore.approveWorker(workerId, approvedBy = admin)
             ?: throw notFound("worker", request.workerId)
     auditWorkerChange("worker_approved", workerId)
+    // A newly-active worker may be the fallback node coming up, or the dedicated node a
+    // fallback-eligible profile has been waiting for.
+    fallbackPlacementReconciler.reconcileAll()
     return ApproveWorkerResponse.newBuilder().setWorker(toProto(approved)).build()
   }
 
   override suspend fun rejectWorker(request: RejectWorkerRequest): RejectWorkerResponse {
+    requireUnscopedPrincipal("RejectWorker")
     val workerId = parseWorkerId(request.workerId)
     val current = fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
     if (current.status != WorkerStatus.PENDING) {
@@ -327,6 +450,7 @@ class FleetServiceImpl(
   }
 
   override suspend fun revokeWorker(request: RevokeWorkerRequest): RevokeWorkerResponse {
+    requireUnscopedPrincipal("RevokeWorker")
     val workerId = parseWorkerId(request.workerId)
     val current = fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
     if (current.status != WorkerStatus.ACTIVE) {
@@ -335,17 +459,65 @@ class FleetServiceImpl(
 
     val revoked = fleetStore.revokeWorker(workerId) ?: throw notFound("worker", request.workerId)
     auditWorkerChange("worker_revoked", workerId)
+    // If this was a dedicated (or the fallback) node, fallback-eligible profiles may need to
+    // land/move onto the fallback node now that it's gone.
+    fallbackPlacementReconciler.reconcileAll()
     return RevokeWorkerResponse.newBuilder().setWorker(toProto(revoked)).build()
+  }
+
+  override suspend fun setWorkerPaused(request: SetWorkerPausedRequest): SetWorkerPausedResponse {
+    requireUnscopedPrincipal("SetWorkerPaused")
+    val workerId = parseWorkerId(request.workerId)
+    fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
+
+    val updated =
+        fleetStore.setWorkerPaused(workerId, request.paused)
+            ?: throw notFound("worker", request.workerId)
+    auditWorkerChange(if (request.paused) "worker_paused" else "worker_served", workerId)
+    return SetWorkerPausedResponse.newBuilder().setWorker(toProto(updated)).build()
+  }
+
+  override suspend fun setWorkerFallbackNode(
+      request: SetWorkerFallbackNodeRequest
+  ): SetWorkerFallbackNodeResponse {
+    requireUnscopedPrincipal("SetWorkerFallbackNode")
+    val workerId = parseWorkerId(request.workerId)
+    fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
+
+    val updated =
+        fleetStore.setWorkerFallbackNode(workerId, request.fallbackNode)
+            ?: throw notFound("worker", request.workerId)
+    auditWorkerChange(
+        if (request.fallbackNode) "worker_fallback_node_set" else "worker_fallback_node_unset",
+        workerId,
+    )
+    // The set of fallback-eligible profiles that should run here (or should move off, if this
+    // worker just lost the flag) may have changed.
+    fallbackPlacementReconciler.reconcileAll()
+    return SetWorkerFallbackNodeResponse.newBuilder().setWorker(toProto(updated)).build()
   }
 
   private suspend fun toProto(worker: Worker): WorkerProto =
       worker.toProto(fleetStore.listGrantedProfileIds(worker.workerId))
 
   override suspend fun listRuns(request: ListRunsRequest): ListRunsResponse {
+    // A scoped principal (the soak-gate job querying session outcomes by worker digest) must name
+    // exactly one of its allowed profiles — an unfiltered or out-of-scope query would leak runs
+    // across the whole fleet.
+    val requestProfileId = request.profileId.ifBlank { null }?.let { parseProfileId(it) }
+    requestProfileId?.let { requireProfileScope(it) }
+        ?: run {
+          val principal = currentAdminPrincipal()
+          if (principal is Principal.Service && principal.profileScope.isNotEmpty()) {
+            throw permissionDenied(
+                "service principal '${principal.email}' must filter ListRuns by an in-scope profile_id"
+            )
+          }
+        }
     val filter =
         RunFilter(
             workerId = request.workerId.ifBlank { null }?.let { parseWorkerId(it) },
-            profileId = request.profileId.ifBlank { null }?.let { parseProfileId(it) },
+            profileId = requestProfileId,
             liveOnly = request.liveOnly,
         )
     val runs = fleetStore.listRuns(filter)
@@ -356,16 +528,20 @@ class FleetServiceImpl(
         .build()
   }
 
-  override suspend fun listProfiles(request: ListProfilesRequest): ListProfilesResponse =
-      ListProfilesResponse.newBuilder()
-          .addAllProfiles(fleetStore.listProfiles().map { it.toProto() })
-          .build()
+  override suspend fun listProfiles(request: ListProfilesRequest): ListProfilesResponse {
+    requireUnscopedPrincipal("ListProfiles")
+    return ListProfilesResponse.newBuilder()
+        .addAllProfiles(fleetStore.listProfiles().map { it.toProto() })
+        .build()
+  }
 
   override suspend fun createProfile(request: CreateProfileRequest): CreateProfileResponse {
     val profileId = parseProfileId(request.profileId)
+    requireProfileScope(profileId)
     requireTargetServiceAccount(request.targetServiceAccount)
     requireValidEnvVars(request.envVarsMap, request.secretEnvVarsMap)
     requireValidImageRef(request.dockerImage)
+    requireValidDrainDeadline(request.drainDeadline)
     if (fleetStore.getProfile(profileId) != null) {
       throw StatusException(
           Status.ALREADY_EXISTS.withDescription("Profile '${profileId.value}' already exists")
@@ -391,6 +567,7 @@ class FleetServiceImpl(
                 envVars = request.envVarsMap,
                 secretEnvVars = request.secretEnvVarsMap,
                 dockerImage = request.dockerImage.ifBlank { null },
+                drainDeadline = request.drainDeadline.ifBlank { null },
             ),
         )
     val inserted = fleetStore.getLatestProfileRevision(profileId)!!
@@ -408,9 +585,11 @@ class FleetServiceImpl(
 
   override suspend fun updateProfile(request: UpdateProfileRequest): UpdateProfileResponse {
     val profileId = parseProfileId(request.profileId)
+    requireProfileScope(profileId)
     requireTargetServiceAccount(request.targetServiceAccount)
     requireValidEnvVars(request.envVarsMap, request.secretEnvVarsMap)
     requireValidImageRef(request.dockerImage)
+    requireValidDrainDeadline(request.drainDeadline)
     val existing = fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
     if (existing.archived) {
       throw failedPrecondition("profile '${profileId.value}' is archived")
@@ -433,6 +612,7 @@ class FleetServiceImpl(
                 envVars = request.envVarsMap,
                 secretEnvVars = request.secretEnvVarsMap,
                 dockerImage = request.dockerImage.ifBlank { null },
+                drainDeadline = request.drainDeadline.ifBlank { null },
             ),
         )
     val verified = recordVerification(profileId, appended)
@@ -449,19 +629,43 @@ class FleetServiceImpl(
   }
 
   override suspend fun archiveProfile(request: ArchiveProfileRequest): ArchiveProfileResponse {
+    requireUnscopedPrincipal("ArchiveProfile")
     val profileId = parseProfileId(request.profileId)
     fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
 
     val archived =
         fleetStore.archiveProfile(profileId) ?: throw notFound("profile", request.profileId)
     auditProfileChange("profile_archived", profileId, revision = null)
+    // An archived profile is never placed on the fallback node — drop it if it was.
+    fallbackPlacementReconciler.reconcile(profileId)
     return ArchiveProfileResponse.newBuilder().setProfile(archived.toProto()).build()
+  }
+
+  override suspend fun setProfileFallbackEligible(
+      request: SetProfileFallbackEligibleRequest
+  ): SetProfileFallbackEligibleResponse {
+    val profileId = parseProfileId(request.profileId)
+    requireProfileScope(profileId)
+    fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
+
+    val updated =
+        fleetStore.setProfileFallbackEligible(profileId, request.fallbackEligible)
+            ?: throw notFound("profile", request.profileId)
+    auditProfileChange(
+        if (request.fallbackEligible) "profile_fallback_eligible_set"
+        else "profile_fallback_eligible_unset",
+        profileId,
+        revision = null,
+    )
+    fallbackPlacementReconciler.reconcile(profileId)
+    return SetProfileFallbackEligibleResponse.newBuilder().setProfile(updated.toProto()).build()
   }
 
   override suspend fun listProfileRevisions(
       request: ListProfileRevisionsRequest
   ): ListProfileRevisionsResponse {
     val profileId = parseProfileId(request.profileId)
+    requireProfileScope(profileId)
     fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
 
     return ListProfileRevisionsResponse.newBuilder()
@@ -471,6 +675,7 @@ class FleetServiceImpl(
 
   override suspend fun verifyProfile(request: VerifyProfileRequest): VerifyProfileResponse {
     val profileId = parseProfileId(request.profileId)
+    requireProfileScope(profileId)
     fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
     val latest = fleetStore.getLatestProfileRevision(profileId)!!
 
@@ -483,6 +688,7 @@ class FleetServiceImpl(
   }
 
   override suspend fun resolveImage(request: ResolveImageRequest): ResolveImageResponse {
+    requireUnscopedPrincipal("ResolveImage")
     requireTargetServiceAccount(request.targetServiceAccount)
     requireValidImageRef(request.dockerImage)
     if (request.dockerImage.isBlank()) {
@@ -512,6 +718,7 @@ class FleetServiceImpl(
   }
 
   override suspend fun grantProfile(request: GrantProfileRequest): GrantProfileResponse {
+    requireUnscopedPrincipal("GrantProfile")
     val workerId = parseWorkerId(request.workerId)
     val profileId = parseProfileId(request.profileId)
     fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
@@ -533,12 +740,16 @@ class FleetServiceImpl(
             result = "success",
         )
     )
+    // A grant to a real (non-fallback) worker is a dedicated node appearing — migrate off fallback
+    // if this profile is fallback-eligible and was running there.
+    fallbackPlacementReconciler.reconcile(profileId)
     return GrantProfileResponse.getDefaultInstance()
   }
 
   override suspend fun revokeProfileGrant(
       request: RevokeProfileGrantRequest
   ): RevokeProfileGrantResponse {
+    requireUnscopedPrincipal("RevokeProfileGrant")
     val workerId = parseWorkerId(request.workerId)
     val profileId = parseProfileId(request.profileId)
     fleetStore.revoke(workerId, profileId)
@@ -553,12 +764,86 @@ class FleetServiceImpl(
             result = "success",
         )
     )
+    // The revoked worker may have been this profile's dedicated node — fall back if so.
+    fallbackPlacementReconciler.reconcile(profileId)
     return RevokeProfileGrantResponse.getDefaultInstance()
+  }
+
+  override suspend fun listAssignments(request: ListAssignmentsRequest): ListAssignmentsResponse {
+    requireUnscopedPrincipal("ListAssignments")
+    val workerFilter = request.workerId.ifBlank { null }?.let { parseWorkerId(it) }
+    val profileFilter = request.profileId.ifBlank { null }?.let { parseProfileId(it) }
+    val assignments =
+        fleetStore.listAssignments().filter {
+          (workerFilter == null || it.workerId == workerFilter) &&
+              (profileFilter == null || it.profileId == profileFilter)
+        }
+    return ListAssignmentsResponse.newBuilder()
+        .addAllAssignments(assignments.map { it.toProto() })
+        .build()
+  }
+
+  override suspend fun createAssignment(
+      request: CreateAssignmentRequest
+  ): CreateAssignmentResponse {
+    requireUnscopedPrincipal("CreateAssignment")
+    val workerId = parseWorkerId(request.workerId)
+    val profileId = parseProfileId(request.profileId)
+    fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
+    val profile = fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
+    if (profile.archived) {
+      throw failedPrecondition("profile '${profileId.value}' is archived")
+    }
+
+    val admin = currentAdminEmail()
+    val created =
+        fleetStore.createAssignment(
+            NewAssignment(workerId = workerId, profileId = profileId, createdBy = admin)
+        )
+    adminAudit(
+        AuditLogEntry(
+            event = "assignment_created",
+            requestId = UUID.randomUUID().toString(),
+            timestamp = Instant.now().toString(),
+            sourceIp = currentSourceIp(),
+            workerId = workerId.value.toString(),
+            profileId = profileId.value,
+            result = "success",
+        )
+    )
+    // A first-class assignment to a real (non-fallback) worker is a dedicated node appearing too —
+    // migrate off fallback if this profile is fallback-eligible and was running there.
+    fallbackPlacementReconciler.reconcile(profileId)
+    return CreateAssignmentResponse.newBuilder().setAssignment(created.toProto()).build()
+  }
+
+  override suspend fun deleteAssignment(
+      request: DeleteAssignmentRequest
+  ): DeleteAssignmentResponse {
+    requireUnscopedPrincipal("DeleteAssignment")
+    val id = parseAssignmentId(request.assignmentId)
+    val deleted =
+        fleetStore.deleteAssignment(id) ?: throw notFound("assignment", request.assignmentId)
+    adminAudit(
+        AuditLogEntry(
+            event = "assignment_deleted",
+            requestId = UUID.randomUUID().toString(),
+            timestamp = Instant.now().toString(),
+            sourceIp = currentSourceIp(),
+            workerId = deleted.workerId.value.toString(),
+            profileId = deleted.profileId.value,
+            result = "success",
+        )
+    )
+    // The deleted assignment may have been this profile's dedicated node — fall back if so.
+    fallbackPlacementReconciler.reconcile(deleted.profileId)
+    return DeleteAssignmentResponse.getDefaultInstance()
   }
 
   override suspend fun createEnrollmentToken(
       request: CreateEnrollmentTokenRequest
   ): CreateEnrollmentTokenResponse {
+    requireUnscopedPrincipal("CreateEnrollmentToken")
     val admin = currentAdminEmail()
     val ttlDays =
         if (request.expiresInDays > 0) request.expiresInDays.toLong()
@@ -584,16 +869,19 @@ class FleetServiceImpl(
 
   override suspend fun listEnrollmentTokens(
       request: ListEnrollmentTokensRequest
-  ): ListEnrollmentTokensResponse =
-      ListEnrollmentTokensResponse.newBuilder()
-          .addAllEnrollmentTokens(
-              fleetStore.listOutstandingEnrollmentTokens(Instant.now()).map { it.toProto() }
-          )
-          .build()
+  ): ListEnrollmentTokensResponse {
+    requireUnscopedPrincipal("ListEnrollmentTokens")
+    return ListEnrollmentTokensResponse.newBuilder()
+        .addAllEnrollmentTokens(
+            fleetStore.listOutstandingEnrollmentTokens(Instant.now()).map { it.toProto() }
+        )
+        .build()
+  }
 
   override suspend fun revokeEnrollmentToken(
       request: RevokeEnrollmentTokenRequest
   ): RevokeEnrollmentTokenResponse {
+    requireUnscopedPrincipal("RevokeEnrollmentToken")
     val id = parseEnrollmentTokenId(request.enrollmentTokenId)
     // A null return means it was already used, already revoked, or never existed — all indistinct
     // to the admin, and none of them leave anything to revoke.

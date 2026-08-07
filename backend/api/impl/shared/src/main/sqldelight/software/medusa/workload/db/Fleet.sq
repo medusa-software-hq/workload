@@ -19,7 +19,14 @@ CREATE TABLE workers (
     registered_via    text NOT NULL DEFAULT 'V1',
     source_ip         text,
     -- Added in V11__add_worker_revoked_at.sql.
-    revoked_at        TIMESTAMPTZ
+    revoked_at        TIMESTAMPTZ,
+    -- Added in V13__add_worker_paused.sql.
+    paused            boolean NOT NULL DEFAULT FALSE,
+    paused_at         TIMESTAMPTZ,
+    -- Added in V15__add_fallback_placement.sql.
+    fallback_node     boolean NOT NULL DEFAULT FALSE,
+    -- JSON-encoded List<AgentAssignmentStatus>; see V16__add_worker_assignment_status.sql.
+    assignment_status_json text
 );
 
 CREATE TABLE profiles (
@@ -27,7 +34,9 @@ CREATE TABLE profiles (
     display_name    text,
     latest_revision int  NOT NULL,
     archived        boolean NOT NULL DEFAULT FALSE,
-    created_at      TIMESTAMPTZ NOT NULL
+    created_at      TIMESTAMPTZ NOT NULL,
+    -- Added in V15__add_fallback_placement.sql.
+    fallback_eligible boolean NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE profile_revisions (
@@ -45,6 +54,8 @@ CREATE TABLE profile_revisions (
     docker_image            text,
     docker_image_digest     text,
     image_status            text NOT NULL DEFAULT 'NOT_APPLICABLE',
+    -- Payload-declared supervisor stop timeout; see V12__add_profile_revision_drain_deadline.sql.
+    drain_deadline          text,
     PRIMARY KEY (profile_id, revision)
 );
 
@@ -54,6 +65,16 @@ CREATE TABLE worker_profile_grants (
     granted_at TIMESTAMPTZ NOT NULL,
     granted_by text NOT NULL,
     PRIMARY KEY (worker_id, profile_id)
+);
+
+-- Kept in sync with V14__create_assignments.sql. A first-class placement record, distinct from
+-- worker_profile_grants (see Assignment's doc comment in fleet_service.proto).
+CREATE TABLE assignments (
+    assignment_id uuid PRIMARY KEY,
+    worker_id     uuid NOT NULL REFERENCES workers,
+    profile_id    text NOT NULL REFERENCES profiles,
+    created_at    TIMESTAMPTZ NOT NULL,
+    created_by    text NOT NULL
 );
 
 -- Kept in sync with V7__create_enrollment_tokens.sql.
@@ -117,19 +138,37 @@ UPDATE workers
 SET last_seen_at = ?
 WHERE worker_id = ?;
 
+setWorkerPaused:
+UPDATE workers
+SET paused = ?, paused_at = ?
+WHERE worker_id = ?;
+
+setWorkerFallbackNode:
+UPDATE workers
+SET fallback_node = ?
+WHERE worker_id = ?;
+
+updateAssignmentStatuses:
+UPDATE workers
+SET assignment_status_json = ?
+WHERE worker_id = ?;
+
 insertProfile:
 INSERT INTO profiles (profile_id, display_name, latest_revision, archived, created_at)
 VALUES (?, ?, ?, ?, ?);
 
 insertProfileRevision:
-INSERT INTO profile_revisions (profile_id, revision, target_service_account, created_at, created_by, note, env_vars, secret_env_vars, docker_image, docker_image_digest, image_status)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO profile_revisions (profile_id, revision, target_service_account, created_at, created_by, note, env_vars, secret_env_vars, docker_image, docker_image_digest, image_status, drain_deadline)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 updateProfileLatestRevision:
 UPDATE profiles SET latest_revision = ? WHERE profile_id = ?;
 
 archiveProfile:
 UPDATE profiles SET archived = TRUE WHERE profile_id = ?;
+
+setProfileFallbackEligible:
+UPDATE profiles SET fallback_eligible = ? WHERE profile_id = ?;
 
 selectProfileById:
 SELECT * FROM profiles WHERE profile_id = ?;
@@ -162,6 +201,20 @@ SELECT * FROM worker_profile_grants WHERE worker_id = ? AND profile_id = ?;
 
 selectGrantsByWorker:
 SELECT * FROM worker_profile_grants WHERE worker_id = ? ORDER BY profile_id;
+
+insertAssignment:
+INSERT INTO assignments (assignment_id, worker_id, profile_id, created_at, created_by)
+VALUES (?, ?, ?, ?, ?);
+
+selectAssignmentById:
+SELECT * FROM assignments WHERE assignment_id = ?;
+
+deleteAssignment:
+DELETE FROM assignments WHERE assignment_id = ?
+RETURNING *;
+
+selectAllAssignments:
+SELECT * FROM assignments ORDER BY created_at DESC;
 
 insertEnrollmentToken:
 INSERT INTO enrollment_tokens (enrollment_token_id, token_hash, note, created_by, created_at, expires_at, require_approval)

@@ -94,7 +94,7 @@ abstract class AdminActionCommand(name: String) : CliktCommand(name) {
 }
 
 /** Turns the two expected admin failures into clean, actionable CLI errors. */
-private inline fun <T> runAdmin(block: () -> T): T =
+internal inline fun <T> runAdmin(block: () -> T): T =
     try {
       block()
     } catch (e: AdminNotLoggedInException) {
@@ -146,6 +146,9 @@ private fun CliktCommand.echoRevisionResult(
     lines.add("  image: ${shortEnum(revision.imageStatus)}")
     if (revision.dockerImageDigest.isNotBlank())
         lines.add("  pinned: ${revision.dockerImageDigest}")
+  }
+  if (revision.drainDeadline.isNotBlank()) {
+    lines.add("  drain deadline: ${revision.drainDeadline}")
   }
   echo(lines.joinToString("\n"))
 }
@@ -458,6 +461,51 @@ private fun CliktCommand.echoWorker(worker: AdminWorker, verb: String) {
 }
 
 // ---------------------------------------------------------------------------
+// admin assignments ...
+// ---------------------------------------------------------------------------
+
+class AdminAssignmentsCommand : NoOpCliktCommand(name = "assignments") {
+  override fun help(context: Context) =
+      "Inspect and manage assignments — a first-class (worker, profile) placement record, " +
+          "distinct from a grant."
+}
+
+class AdminAssignmentsListCommand : AdminActionCommand(name = "list") {
+  private val workerId by option("--worker", "-w", help = "Only assignments on this worker.")
+  private val profileId by option("--profile", "-p", help = "Only assignments of this profile.")
+
+  override fun help(context: Context) = "List assignments."
+
+  override fun run() {
+    echo(formatAssignmentTable(runAdmin { client().listAssignments(workerId, profileId) }))
+  }
+}
+
+class AdminAssignmentsCreateCommand : AdminActionCommand(name = "create") {
+  private val profileId by argument(name = "profile-id")
+  private val workerId by argument(name = "worker-id")
+
+  override fun help(context: Context) =
+      "Assign a profile to a worker (does not also grant it — see 'admin profiles grant')."
+
+  override fun run() {
+    val assignment = runAdmin { client().createAssignment(workerId, profileId) }
+    echo("Created assignment ${assignment.assignmentId}: $profileId -> $workerId.")
+  }
+}
+
+class AdminAssignmentsDeleteCommand : AdminActionCommand(name = "delete") {
+  private val assignmentId by argument(name = "assignment-id")
+
+  override fun help(context: Context) = "Delete an assignment."
+
+  override fun run() {
+    runAdmin { client().deleteAssignment(assignmentId) }
+    echo("Deleted assignment $assignmentId.")
+  }
+}
+
+// ---------------------------------------------------------------------------
 // enrollment
 // ---------------------------------------------------------------------------
 
@@ -669,6 +717,22 @@ internal fun formatProfileTable(profiles: List<AdminProfile>, liveRuns: List<Adm
   )
 }
 
+internal fun formatAssignmentTable(assignments: List<AdminAssignment>): String {
+  if (assignments.isEmpty()) return "No assignments."
+  return renderTable(
+      listOf("ASSIGNMENT ID", "WORKER ID", "PROFILE ID", "CREATED BY", "CREATED"),
+      assignments.map {
+        listOf(
+            it.assignmentId,
+            it.workerId,
+            it.profileId,
+            it.createdBy.ifBlank { "-" },
+            formatTimestamp(it.createdAt),
+        )
+      },
+  )
+}
+
 internal fun formatEnrollmentTokenTable(tokens: List<AdminEnrollmentToken>): String {
   if (tokens.isEmpty()) return "No outstanding enrollment tokens."
   return renderTable(
@@ -736,13 +800,14 @@ internal fun formatWorkerSections(
     sections +=
         section(
             "Workers:",
-            listOf("WORKER ID", "NAME", "ACTIVITY", "GRANTS", "LAST SEEN", "CREATED"),
+            listOf("WORKER ID", "NAME", "ACTIVITY", "FLEET", "GRANTS", "LAST SEEN", "CREATED"),
             active.map {
               val running = runningByWorker[it.workerId] ?: 0
               listOf(
                   it.workerId,
                   it.name.ifBlank { "—" },
                   if (running > 0) "● $running running" else "idle",
+                  formatFleetSummary(it.assignmentStatuses),
                   if (it.grantedProfileIds.isEmpty()) "—"
                   else it.grantedProfileIds.joinToString(","),
                   formatRelative(it.lastSeenAt),
@@ -821,6 +886,7 @@ internal fun formatRevisionDetail(
     field("  status", shortEnum(revision.imageStatus))
     if (revision.dockerImageDigest.isNotBlank()) field("  pinned", revision.dockerImageDigest)
   }
+  field("Drain deadline", revision.drainDeadline.ifBlank { "— (supervisor default)" })
   field("Note", revision.note.ifBlank { "—" })
   field(
       "Created",

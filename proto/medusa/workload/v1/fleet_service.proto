@@ -13,12 +13,25 @@ service FleetService {
   rpc ApproveWorker(ApproveWorkerRequest) returns (ApproveWorkerResponse);
   rpc RejectWorker(RejectWorkerRequest) returns (RejectWorkerResponse);
   rpc RevokeWorker(RevokeWorkerRequest) returns (RevokeWorkerResponse);
+  // The operator pause/serve switch (M7-05): a paused node's workload-agent reconciles its
+  // assignment set down to empty (stopping every agent-managed container) but keeps heartbeating
+  // its AGENT-kind run, so it still shows present — just not serving. Idempotent either direction.
+  rpc SetWorkerPaused(SetWorkerPausedRequest) returns (SetWorkerPausedResponse);
+  // Marks/unmarks this worker as (one of) the shared fallback node(s) — see SetProfileFallbackEligible.
+  rpc SetWorkerFallbackNode(SetWorkerFallbackNodeRequest) returns (SetWorkerFallbackNodeResponse);
 
   rpc ListProfiles(ListProfilesRequest) returns (ListProfilesResponse);
   rpc CreateProfile(CreateProfileRequest) returns (CreateProfileResponse);
   // Appends a revision; never mutates an existing one.
   rpc UpdateProfile(UpdateProfileRequest) returns (UpdateProfileResponse);
   rpc ArchiveProfile(ArchiveProfileRequest) returns (ArchiveProfileResponse);
+  // Fallback auto-placement (workload#122 part 2): while a profile is fallback-eligible, it is kept
+  // auto-assigned to the shared fallback node (the oldest active worker with fallback_node = true)
+  // whenever no dedicated assignment to a currently-active worker exists for it, and is migrated off
+  // automatically the moment one appears. The auto-created assignment is otherwise an ordinary
+  // Assignment, distinguishable only by its created_by ("system:fallback-placement").
+  rpc SetProfileFallbackEligible(SetProfileFallbackEligibleRequest)
+      returns (SetProfileFallbackEligibleResponse);
   rpc ListProfileRevisions(ListProfileRevisionsRequest) returns (ListProfileRevisionsResponse);
   // Dry-run mint against the latest revision's target service account; never returns a usable
   // token. CreateProfile/UpdateProfile run this implicitly against the revision they create.
@@ -33,6 +46,15 @@ service FleetService {
 
   rpc GrantProfile(GrantProfileRequest) returns (GrantProfileResponse);
   rpc RevokeProfileGrant(RevokeProfileGrantRequest) returns (RevokeProfileGrantResponse);
+
+  // Assignments: a first-class, admin-managed placement record — distinct from a grant. A grant is
+  // authorization ("worker X may run profile Y"); an assignment is the placement decision itself
+  // ("worker X is assigned profile Y"), independently listable, creatable, and deletable, with its
+  // own id. Today creating an assignment does not also grant the profile (and vice versa) — the two
+  // are deliberately separate primitives; a caller that wants both makes both calls.
+  rpc ListAssignments(ListAssignmentsRequest) returns (ListAssignmentsResponse);
+  rpc CreateAssignment(CreateAssignmentRequest) returns (CreateAssignmentResponse);
+  rpc DeleteAssignment(DeleteAssignmentRequest) returns (DeleteAssignmentResponse);
 
   // Runs (M6-B1/B2): "who is running what". A run is created when a worker starts a `workload
   // run`/`exec`, heartbeats while alive, and ends with an exit code. Presence is derived from live
@@ -79,11 +101,13 @@ enum ImageStatus {
   IMAGE_STATUS_UNDETERMINED = 4;
 }
 
-// A run's kind. Extensible: M7 adds AGENT (a session with no profile/revision).
+// A run's kind. AGENT (M7-05) is a long-lived agent-daemon presence session: no profile/revision,
+// heartbeated for as long as workload-agent is up, ended when it shuts down cleanly.
 enum RunKind {
   RUN_KIND_UNSPECIFIED = 0;
   RUN_KIND_RUN = 1;
   RUN_KIND_EXEC = 2;
+  RUN_KIND_AGENT = 3;
 }
 
 // A run's lifecycle state. RUNNING/SUCCEEDED/FAILED are stored; LOST is derived at read time from a
@@ -122,6 +146,53 @@ message Worker {
   string source_ip = 14;
   // When the worker was revoked; empty unless status is REVOKED (M6-B2).
   string revoked_at = 15;
+  // The operator pause/serve switch (M7-05). While true, this worker's workload-agent reconciles
+  // its assignment set down to empty instead of the granted set — a drain, not a revoke: the
+  // worker stays ACTIVE and keeps its grants, it just runs nothing until un-paused.
+  bool paused = 16;
+  // When paused was last set to true; empty unless paused.
+  string paused_at = 17;
+  // Marks this worker as (one of) the shared fallback node(s) for fallback-eligible profiles
+  // (workload#122 part 2). See FallbackPlacementReconciler.
+  bool fallback_node = 18;
+  // Per-profile reconcile status (M7 automated rollout), reported by workload-agent's own
+  // `POST /worker/v2/status` each tick — running/desired digest, drain/crashloop state. What
+  // `admin workers list` shows as fleet version + drain state per worker. Empty for a worker whose
+  // agent hasn't reported yet (a pre-M7 CLI-only worker, or one that just registered).
+  repeated AgentAssignmentStatus assignment_statuses = 19;
+}
+
+// A profile's point-in-time reconcile status on one worker (M7 automated rollout). Derived, never
+// stored durably beyond the latest report — see WorkerAssignmentsService's sibling status-report
+// endpoint.
+message AgentAssignmentStatus {
+  string profile_id = 1;
+  // Empty if nothing is currently running for this profile on this worker.
+  string running_digest = 2;
+  // Empty if the profile isn't currently desired on this worker at all (e.g. mid-drain after
+  // being unassigned).
+  string desired_digest = 3;
+  AgentAssignmentState state = 4;
+  // When `state` was entered (RFC 3339). Exact for DRAINING and CRASHLOOP_HOLD; approximated as
+  // the report time for REPLACING, which has no durable marker of its own once the pre-
+  // replacement container is gone.
+  string since = 5;
+  // Only set while `state` is DRAINING — when the drain will escalate to SIGKILL.
+  string drain_deadline = 6;
+}
+
+enum AgentAssignmentState {
+  AGENT_ASSIGNMENT_STATE_UNSPECIFIED = 0;
+  // Running digest matches desired digest — nothing to do.
+  AGENT_ASSIGNMENT_STATE_CONVERGED = 1;
+  // The previous container is being SIGTERM-drained (see ProfileRevision.drain_deadline) before
+  // its replacement (or, if unassigned, nothing) starts.
+  AGENT_ASSIGNMENT_STATE_DRAINING = 2;
+  // The desired digest has crashed more than the crashloop threshold within the crashloop window;
+  // the agent has stopped restarting it and is waiting on operator intervention.
+  AGENT_ASSIGNMENT_STATE_CRASHLOOP_HOLD = 3;
+  // Between drained-and-gone and started — a normal, usually brief, transient state.
+  AGENT_ASSIGNMENT_STATE_REPLACING = 4;
 }
 
 // A run of a workload (M6-B1/B2). state may be LOST (a read-time derivation); everything else is as
@@ -190,12 +261,33 @@ message RevokeWorkerResponse {
   Worker worker = 1;
 }
 
+message SetWorkerPausedRequest {
+  string worker_id = 1;
+  bool paused = 2;
+}
+
+message SetWorkerPausedResponse {
+  Worker worker = 1;
+}
+
+message SetWorkerFallbackNodeRequest {
+  string worker_id = 1;
+  bool fallback_node = 2;
+}
+
+message SetWorkerFallbackNodeResponse {
+  Worker worker = 1;
+}
+
 message Profile {
   string profile_id = 1;
   string display_name = 2;
   int32 latest_revision = 3;
   bool archived = 4;
   string created_at = 5;
+  // Tags this profile for fallback auto-placement (workload#122 part 2). See
+  // SetProfileFallbackEligible.
+  bool fallback_eligible = 6;
 }
 
 message ProfileRevision {
@@ -219,6 +311,12 @@ message ProfileRevision {
   string docker_image_digest = 11;
   // Resolution verdict for docker_image.
   ImageStatus image_status = 12;
+  // Payload-declared stop timeout the supervisor passes as `D` when SIGTERM-draining a claim of
+  // this revision (e.g. "6h" for the Flow worker) — how long the workload gets to finish an
+  // in-flight session before the supervisor escalates to SIGKILL. Empty means the supervisor's own
+  // default applies. A free-form duration string (e.g. "90m", "6h"); the CLI/console validate the
+  // format, the backend stores it opaquely.
+  string drain_deadline = 13;
 }
 
 message ListProfilesRequest {}
@@ -241,6 +339,8 @@ message CreateProfileRequest {
   // when it no longer resolves to this digest — so the admin can only ever pin the exact digest they
   // previewed. Empty means "resolve fresh, no check" (e.g. non-console clients).
   string expected_docker_image_digest = 8;
+  // See ProfileRevision.drain_deadline. Empty means "no change from the supervisor's default".
+  string drain_deadline = 9;
 }
 
 message CreateProfileResponse {
@@ -258,6 +358,8 @@ message UpdateProfileRequest {
   string docker_image = 6;
   // Compare-and-swap token; see CreateProfileRequest.expected_docker_image_digest.
   string expected_docker_image_digest = 7;
+  // See ProfileRevision.drain_deadline. Empty means "no change from the supervisor's default".
+  string drain_deadline = 8;
 }
 
 message ResolveImageRequest {
@@ -283,6 +385,15 @@ message ArchiveProfileRequest {
 }
 
 message ArchiveProfileResponse {
+  Profile profile = 1;
+}
+
+message SetProfileFallbackEligibleRequest {
+  string profile_id = 1;
+  bool fallback_eligible = 2;
+}
+
+message SetProfileFallbackEligibleResponse {
   Profile profile = 1;
 }
 
@@ -355,3 +466,38 @@ message RevokeProfileGrantRequest {
 }
 
 message RevokeProfileGrantResponse {}
+
+// A first-class (worker, profile) placement record — see FleetService's doc comment on the
+// Assignment RPCs for how this differs from a Grant.
+message Assignment {
+  string assignment_id = 1;
+  string worker_id = 2;
+  string profile_id = 3;
+  string created_at = 4;
+  string created_by = 5;
+}
+
+message ListAssignmentsRequest {
+  // Optional filters; empty string means "no filter on this dimension".
+  string worker_id = 1;
+  string profile_id = 2;
+}
+
+message ListAssignmentsResponse {
+  repeated Assignment assignments = 1;
+}
+
+message CreateAssignmentRequest {
+  string worker_id = 1;
+  string profile_id = 2;
+}
+
+message CreateAssignmentResponse {
+  Assignment assignment = 1;
+}
+
+message DeleteAssignmentRequest {
+  string assignment_id = 1;
+}
+
+message DeleteAssignmentResponse {}

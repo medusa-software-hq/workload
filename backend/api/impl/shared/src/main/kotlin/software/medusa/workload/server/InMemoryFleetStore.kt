@@ -11,6 +11,7 @@ class InMemoryFleetStore : FleetStore {
   private val grants = ConcurrentHashMap<Pair<WorkerId, ProfileId>, Grant>()
   private val enrollmentTokens = ConcurrentHashMap<EnrollmentTokenId, EnrollmentToken>()
   private val runs = ConcurrentHashMap<RunId, Run>()
+  private val assignments = ConcurrentHashMap<AssignmentId, Assignment>()
 
   override suspend fun createWorker(worker: NewWorker): Worker {
     val created =
@@ -92,8 +93,23 @@ class InMemoryFleetStore : FleetStore {
         worker.copy(status = WorkerStatus.REVOKED, revokedAt = Instant.now())
       }
 
+  override suspend fun setWorkerPaused(workerId: WorkerId, paused: Boolean, now: Instant): Worker? =
+      workers.computeIfPresent(workerId) { _, worker ->
+        worker.copy(paused = paused, pausedAt = if (paused) now else null)
+      }
+
   override suspend fun touchLastSeen(workerId: WorkerId) {
     workers.computeIfPresent(workerId) { _, worker -> worker.copy(lastSeenAt = Instant.now()) }
+  }
+
+  override suspend fun setWorkerFallbackNode(workerId: WorkerId, fallbackNode: Boolean): Worker? =
+      workers.computeIfPresent(workerId) { _, worker -> worker.copy(fallbackNode = fallbackNode) }
+
+  override suspend fun updateAssignmentStatuses(
+      workerId: WorkerId,
+      statuses: List<AgentAssignmentStatus>,
+  ) {
+    workers.computeIfPresent(workerId) { _, worker -> worker.copy(assignmentStatuses = statuses) }
   }
 
   override suspend fun createProfile(
@@ -123,6 +139,7 @@ class InMemoryFleetStore : FleetStore {
             secretEnvVars = revision.secretEnvVars,
             dockerImage = revision.dockerImage,
             imageStatus = initialImageStatus(revision.dockerImage),
+            drainDeadline = revision.drainDeadline,
         )
     revisions[profileId] = mutableListOf(firstRevision)
     profiles[profileId] = profile
@@ -150,6 +167,7 @@ class InMemoryFleetStore : FleetStore {
               secretEnvVars = revision.secretEnvVars,
               dockerImage = revision.dockerImage,
               imageStatus = initialImageStatus(revision.dockerImage),
+              drainDeadline = revision.drainDeadline,
           )
       profileRevisions.add(newRevision)
       profiles.computeIfPresent(profileId) { _, profile ->
@@ -161,6 +179,14 @@ class InMemoryFleetStore : FleetStore {
 
   override suspend fun archiveProfile(profileId: ProfileId): Profile? =
       profiles.computeIfPresent(profileId) { _, profile -> profile.copy(archived = true) }
+
+  override suspend fun setProfileFallbackEligible(
+      profileId: ProfileId,
+      fallbackEligible: Boolean,
+  ): Profile? =
+      profiles.computeIfPresent(profileId) { _, profile ->
+        profile.copy(fallbackEligible = fallbackEligible)
+      }
 
   override suspend fun getProfile(profileId: ProfileId): Profile? = profiles[profileId]
 
@@ -220,8 +246,29 @@ class InMemoryFleetStore : FleetStore {
   override suspend fun hasGrant(workerId: WorkerId, profileId: ProfileId): Boolean =
       grants.containsKey(workerId to profileId)
 
+  override suspend fun getGrant(workerId: WorkerId, profileId: ProfileId): Grant? =
+      grants[workerId to profileId]
+
   override suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId> =
       grants.keys.filter { it.first == workerId }.map { it.second }.sortedBy { it.value }
+
+  override suspend fun createAssignment(assignment: NewAssignment): Assignment {
+    val created =
+        Assignment(
+            id = AssignmentId(UUID.randomUUID()),
+            workerId = assignment.workerId,
+            profileId = assignment.profileId,
+            createdAt = Instant.now(),
+            createdBy = assignment.createdBy,
+        )
+    assignments[created.id] = created
+    return created
+  }
+
+  override suspend fun deleteAssignment(id: AssignmentId): Assignment? = assignments.remove(id)
+
+  override suspend fun listAssignments(): List<Assignment> =
+      assignments.values.sortedByDescending { it.createdAt }
 
   override suspend fun createEnrollmentToken(token: NewEnrollmentToken): EnrollmentToken {
     val created =

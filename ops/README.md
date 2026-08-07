@@ -58,3 +58,27 @@ meant to absorb wholesale.
 worker doesn't need to forget and re-register — restarting the loop that calls `run` is enough for
 it to pick up the newly pinned digest on its next claim. Revoking/re-registering would be a bigger
 hammer than the digest bump calls for, and would needlessly churn the worker's identity.
+
+## measure-fallback-node-idle-memory / verify-multi-arch-on-node
+
+Acceptance tooling for the real cloud fallback node (workload#122 part 4 — see
+`infra/gcp-fallback-node.tf` and `node/README.md`).
+
+```console
+$ ops/measure-fallback-node-idle-memory --out fallback-node-idle-memory.md
+$ ops/verify-multi-arch-on-node us-docker.pkg.dev/ms-workload-d91b0eaf/workload/metadata-emulator:latest
+```
+
+- **`measure-fallback-node-idle-memory`** SSHes to the node (via IAP tunnel, no public IP needed —
+  see the instance's `fallback_node_ssh_command` Terraform output) and records `free -h`, active
+  swap, and per-process RSS while the node should be idle (no live run — confirm with `workload
+  admin runs list --worker <fallback-node-id> --live-only --json` first). `--out` appends the
+  reading to a file for the acceptance record.
+- **`verify-multi-arch-on-node`** confirms a published image's manifest carries both
+  `linux/amd64` and `linux/arm64` (see `.github/workflows/publish-metadata-emulator.yml` /
+  `publish-hello-workload.yml`), then pulls and runs it on the real node — proving the amd64 leg
+  actually works on real hardware, not just that CI's buildx step produced a manifest list.
+
+Both take `--instance`/`--zone`/`--project` (defaults match `gcp-fallback-node.tf`) and need
+`gcloud` authenticated against the node's project; the manifest check additionally needs `docker`
+and `jq`.

@@ -178,6 +178,21 @@ internal abstract class SystemTestBase {
   }
 
   /**
+   * Flags [workerId] as (one of) the shared fallback node(s) — see
+   * [AdminClient.setWorkerFallbackNode].
+   */
+  protected fun markFallbackNode(workerId: String) = runBlocking {
+    target.admin.setWorkerFallbackNode(workerId, true)
+  }
+
+  /**
+   * Tags [profileId] for fallback auto-placement — see [AdminClient.setProfileFallbackEligible].
+   */
+  protected fun markFallbackEligible(profileId: String) = runBlocking {
+    target.admin.setProfileFallbackEligible(profileId, true)
+  }
+
+  /**
    * Registers a worker via the real CLI (`workload worker register`) and waits for it to settle
    * (active, or — for a require-approval token — the poll timeout, which the caller then approves
    * past out-of-band). Returns the worker's admin-visible id once it exists.

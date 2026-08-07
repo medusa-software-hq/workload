@@ -70,6 +70,42 @@ data class CreateRunResponse(
     val heartbeatIntervalSeconds: Long,
 )
 
+/** One profile `workload-agent` should keep running continuously on this node (M7-05). */
+@Serializable
+data class Assignment(
+    val profileId: String,
+    val revision: Int,
+    val dockerImage: String,
+    val dockerImageDigest: String,
+    // The revision's declared stop timeout (`ProfileRevision.drainDeadline`, e.g. "6h") — free-form
+    // and possibly unparseable; see [parseDrainDeadline]. Null/blank means the supervisor's own
+    // default applies.
+    val drainDeadline: String? = null,
+)
+
+/** `GET /worker/v2/assignments`'s body — the node's desired container set plus pause/serve. */
+@Serializable
+data class AssignmentsResponse(
+    val assignments: List<Assignment>,
+    val paused: Boolean,
+)
+
+/** One profile's point-in-time reconcile status, reported by `POST /worker/v2/status` each tick. */
+@Serializable
+data class AssignmentStatusReport(
+    val profileId: String,
+    val runningDigest: String? = null,
+    val desiredDigest: String? = null,
+    // "converged" | "draining" | "crashloop_hold" | "replacing" — lowercased
+    // [AgentAssignmentState].
+    val state: String,
+    val since: String,
+    val drainDeadline: String? = null,
+)
+
+@Serializable
+private data class ReportAssignmentStatusRequest(val statuses: List<AssignmentStatusReport>)
+
 @Serializable private data class RegisterWorkerRequest(val name: String, val hostname: String?)
 
 @Serializable
@@ -180,6 +216,56 @@ fun fetchSelfStatus(brokerBaseUrl: String, auth: BrokerAuth): SelfStatusResponse
   return json.decodeFromString(response.body())
 }
 
+/**
+ * Calls `GET <brokerBaseUrl>/worker/v2/assignments` (M7-05): the node's assignment set —
+ * `workload-agent` reconciles its running containers against it — plus the pause/serve switch.
+ */
+fun fetchAssignments(brokerBaseUrl: String, auth: BrokerAuth): AssignmentsResponse {
+  val request =
+      HttpRequest.newBuilder()
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/assignments"))
+          .header("Authorization", auth.authorizationHeader())
+          .timeout(Duration.ofSeconds(10))
+          .GET()
+          .build()
+
+  val response = send(request)
+  if (response.statusCode() != 200) {
+    throw WorkerApiException(response.statusCode(), errorReason(response.body()))
+  }
+  return json.decodeFromString(response.body())
+}
+
+/**
+ * Calls `POST <brokerBaseUrl>/worker/v2/status` (M7): reports this tick's per-profile reconcile
+ * status — running/desired digest, drain/crashloop state — for `admin workers list` to surface.
+ * Best-effort from the caller's point of view (see `Main.kt`): a failure here must never block the
+ * reconcile loop itself, only the observability the backend shows about it.
+ */
+fun reportAssignmentStatuses(
+    brokerBaseUrl: String,
+    auth: BrokerAuth,
+    statuses: List<AssignmentStatusReport>,
+) {
+  val request =
+      HttpRequest.newBuilder()
+          .uri(URI.create("${brokerBaseUrl.trimEnd('/')}/worker/v2/status"))
+          .header("Authorization", auth.authorizationHeader())
+          .header("Content-Type", "application/json")
+          .timeout(Duration.ofSeconds(10))
+          .POST(
+              HttpRequest.BodyPublishers.ofString(
+                  json.encodeToString(ReportAssignmentStatusRequest(statuses))
+              )
+          )
+          .build()
+
+  val response = send(request)
+  if (response.statusCode() != 204) {
+    throw WorkerApiException(response.statusCode(), errorReason(response.body()))
+  }
+}
+
 /** Calls `POST <brokerBaseUrl>/worker/v2/token`. */
 fun claimToken(brokerBaseUrl: String, auth: BrokerAuth, profileId: String): TokenClaimResponse {
   val request =
@@ -251,13 +337,14 @@ fun claimWorkload(brokerBaseUrl: String, auth: BrokerAuth, profileId: String): W
 /**
  * Calls `POST <brokerBaseUrl>/worker/v2/runs`: records the start of a run (M6-B1), returning its id
  * and the server-controlled heartbeat cadence. Called after a successful claim, right before the
- * workload launches.
+ * workload launches. [profileId]/[revision] are null for an `agent`-kind presence session (M7-05),
+ * which has neither.
  */
 fun createRun(
     brokerBaseUrl: String,
     auth: BrokerAuth,
-    profileId: String,
-    revision: Int,
+    profileId: String?,
+    revision: Int?,
     kind: String,
     imageDigest: String?,
 ): CreateRunResponse {

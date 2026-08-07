@@ -97,6 +97,53 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
+  fun `setWorkerPaused pauses and unpauses without touching status`() = test { store ->
+    val created = store.createWorker(newWorker())
+    store.approveWorker(created.workerId, approvedBy = "admin@example.com")
+    assertFalse(store.getWorker(created.workerId)!!.paused)
+
+    val paused = store.setWorkerPaused(created.workerId, paused = true)
+    assertNotNull(paused)
+    assertTrue(paused.paused)
+    assertNotNull(paused.pausedAt)
+    assertEquals(WorkerStatus.ACTIVE, paused.status)
+    assertTrue(store.getWorker(created.workerId)!!.paused)
+
+    val served = store.setWorkerPaused(created.workerId, paused = false)
+    assertNotNull(served)
+    assertFalse(served.paused)
+    assertNull(served.pausedAt)
+  }
+
+  @Test
+  fun `setWorkerPaused on an unknown id returns null`() = test { store ->
+    assertNull(store.setWorkerPaused(WorkerId(java.util.UUID.randomUUID()), paused = true))
+  }
+
+  @Test
+  fun `setWorkerFallbackNode flags and unflags without touching status`() = test { store ->
+    val created = store.createWorker(newWorker())
+    assertFalse(store.getWorker(created.workerId)!!.fallbackNode)
+
+    val flagged = store.setWorkerFallbackNode(created.workerId, fallbackNode = true)
+    assertNotNull(flagged)
+    assertTrue(flagged.fallbackNode)
+    assertEquals(WorkerStatus.PENDING, flagged.status)
+    assertTrue(store.getWorker(created.workerId)!!.fallbackNode)
+
+    val unflagged = store.setWorkerFallbackNode(created.workerId, fallbackNode = false)
+    assertNotNull(unflagged)
+    assertFalse(unflagged.fallbackNode)
+  }
+
+  @Test
+  fun `setWorkerFallbackNode on an unknown id returns null`() = test { store ->
+    assertNull(
+        store.setWorkerFallbackNode(WorkerId(java.util.UUID.randomUUID()), fallbackNode = true)
+    )
+  }
+
+  @Test
   fun `touchLastSeen sets lastSeenAt on the worker`() = test { store ->
     val created = store.createWorker(newWorker())
     assertNull(created.lastSeenAt)
@@ -399,6 +446,38 @@ abstract class FleetStoreContractTest {
   }
 
   @Test
+  fun `setProfileFallbackEligible tags and untags without touching other fields`() = test { store ->
+    val created =
+        store.createProfile(
+            ProfileId("fallback-tag-profile"),
+            displayName = null,
+            revision =
+                NewProfileRevision(
+                    "sa@project.iam.gserviceaccount.com",
+                    createdBy = "admin@example.com",
+                ),
+        )
+    assertFalse(created.fallbackEligible)
+
+    val tagged = store.setProfileFallbackEligible(created.profileId, fallbackEligible = true)
+    assertNotNull(tagged)
+    assertTrue(tagged.fallbackEligible)
+    assertFalse(tagged.archived)
+    assertTrue(store.getProfile(created.profileId)!!.fallbackEligible)
+
+    val untagged = store.setProfileFallbackEligible(created.profileId, fallbackEligible = false)
+    assertNotNull(untagged)
+    assertFalse(untagged.fallbackEligible)
+  }
+
+  @Test
+  fun `setProfileFallbackEligible on an unknown id returns null`() = test { store ->
+    assertNull(
+        store.setProfileFallbackEligible(ProfileId("no-such-profile"), fallbackEligible = true)
+    )
+  }
+
+  @Test
   fun `grant then revoke round-trips hasGrant`() = test { store ->
     val worker = store.createWorker(newWorker())
     val profile =
@@ -420,6 +499,32 @@ abstract class FleetStoreContractTest {
     store.revoke(worker.workerId, profile.profileId)
     assertFalse(store.hasGrant(worker.workerId, profile.profileId))
   }
+
+  @Test
+  fun `getGrant returns the grant with who granted it, null once revoked or if never granted`() =
+      test { store ->
+        val worker = store.createWorker(newWorker())
+        val profile =
+            store.createProfile(
+                ProfileId("my-profile-grant-lookup"),
+                displayName = null,
+                revision =
+                    NewProfileRevision(
+                        "sa@project.iam.gserviceaccount.com",
+                        createdBy = "admin@example.com",
+                    ),
+            )
+
+        assertNull(store.getGrant(worker.workerId, profile.profileId))
+
+        store.grant(worker.workerId, profile.profileId, grantedBy = "admin@example.com")
+        val grant = store.getGrant(worker.workerId, profile.profileId)
+        assertNotNull(grant)
+        assertEquals("admin@example.com", grant.grantedBy)
+
+        store.revoke(worker.workerId, profile.profileId)
+        assertNull(store.getGrant(worker.workerId, profile.profileId))
+      }
 
   @Test
   fun `listGrantedProfileIds reflects grant and revoke`() = test { store ->
@@ -476,6 +581,86 @@ abstract class FleetStoreContractTest {
     store.grant(worker.workerId, profile.profileId, grantedBy = "admin2@example.com")
     assertTrue(store.hasGrant(worker.workerId, profile.profileId))
   }
+
+  @Test
+  fun `createAssignment persists a first-class placement record distinct from a grant`() =
+      test { store ->
+        val worker = store.createWorker(newWorker())
+        val profile =
+            store.createProfile(
+                ProfileId("assignment-profile-1"),
+                displayName = null,
+                revision =
+                    NewProfileRevision(
+                        "sa@project.iam.gserviceaccount.com",
+                        createdBy = "admin@example.com",
+                    ),
+            )
+
+        val created =
+            store.createAssignment(
+                NewAssignment(worker.workerId, profile.profileId, createdBy = "admin@example.com")
+            )
+        assertEquals(worker.workerId, created.workerId)
+        assertEquals(profile.profileId, created.profileId)
+        assertEquals("admin@example.com", created.createdBy)
+        assertNotNull(created.createdAt)
+        // Creating an assignment must not also create a grant — the two are separate primitives.
+        assertFalse(store.hasGrant(worker.workerId, profile.profileId))
+      }
+
+  @Test
+  fun `listAssignments returns every created assignment, newest first`() = test { store ->
+    val worker = store.createWorker(newWorker())
+    val profile =
+        store.createProfile(
+            ProfileId("assignment-profile-2"),
+            displayName = null,
+            revision =
+                NewProfileRevision(
+                    "sa@project.iam.gserviceaccount.com",
+                    createdBy = "admin@example.com",
+                ),
+        )
+
+    val first =
+        store.createAssignment(
+            NewAssignment(worker.workerId, profile.profileId, createdBy = "admin@example.com")
+        )
+    val second =
+        store.createAssignment(
+            NewAssignment(worker.workerId, profile.profileId, createdBy = "admin@example.com")
+        )
+
+    val ids = store.listAssignments().map { it.id }
+    assertTrue(ids.containsAll(listOf(first.id, second.id)))
+  }
+
+  @Test
+  fun `deleteAssignment removes it and returns the deleted record, unknown id returns null`() =
+      test { store ->
+        val worker = store.createWorker(newWorker())
+        val profile =
+            store.createProfile(
+                ProfileId("assignment-profile-3"),
+                displayName = null,
+                revision =
+                    NewProfileRevision(
+                        "sa@project.iam.gserviceaccount.com",
+                        createdBy = "admin@example.com",
+                    ),
+            )
+        val created =
+            store.createAssignment(
+                NewAssignment(worker.workerId, profile.profileId, createdBy = "admin@example.com")
+            )
+
+        val deleted = store.deleteAssignment(created.id)
+        assertEquals(created, deleted)
+        assertTrue(store.listAssignments().none { it.id == created.id })
+        assertNull(store.deleteAssignment(created.id))
+        assertNull(store.deleteAssignment(AssignmentId(java.util.UUID.randomUUID())))
+      }
 
   private fun newEnrollmentToken(
       plaintext: String,

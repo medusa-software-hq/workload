@@ -42,6 +42,22 @@ data class AdminWorker(
     val grantedProfileIds: List<String> = emptyList(),
     val sourceIp: String = "",
     val revokedAt: String = "",
+    val assignmentStatuses: List<AdminAssignmentStatus> = emptyList(),
+)
+
+/**
+ * One profile's reconcile status on a worker (M7 automated rollout), as reported by
+ * `workload-agent`. `state` arrives as its proto enum name (e.g. AGENT_ASSIGNMENT_STATE_CONVERGED),
+ * mapped for display in [AdminFormat].
+ */
+@Serializable
+data class AdminAssignmentStatus(
+    val profileId: String = "",
+    val runningDigest: String = "",
+    val desiredDigest: String = "",
+    val state: String = "",
+    val since: String = "",
+    val drainDeadline: String = "",
 )
 
 /**
@@ -81,6 +97,7 @@ data class AdminProfileRevision(
     val dockerImage: String = "",
     val dockerImageDigest: String = "",
     val imageStatus: String = "",
+    val drainDeadline: String = "",
 )
 
 @Serializable
@@ -89,6 +106,32 @@ internal data class ListProfilesResponse(val profiles: List<AdminProfile> = empt
 @Serializable internal data class ListWorkersResponse(val workers: List<AdminWorker> = emptyList())
 
 @Serializable internal data class ListRunsResponse(val runs: List<AdminRun> = emptyList())
+
+/**
+ * A first-class (worker, profile) placement record as FleetService lists it (proto3 JSON —
+ * camelCase). Distinct from a grant: see the Assignment RPCs' doc comment in fleet_service.proto.
+ */
+@Serializable
+data class AdminAssignment(
+    val assignmentId: String = "",
+    val workerId: String = "",
+    val profileId: String = "",
+    val createdAt: String = "",
+    val createdBy: String = "",
+)
+
+@Serializable
+internal data class ListAssignmentsResponse(val assignments: List<AdminAssignment> = emptyList())
+
+@Serializable private data class ListAssignmentsRequest(val workerId: String, val profileId: String)
+
+@Serializable
+internal data class AssignmentResponse(val assignment: AdminAssignment = AdminAssignment())
+
+@Serializable
+private data class CreateAssignmentRequest(val workerId: String, val profileId: String)
+
+@Serializable private data class DeleteAssignmentRequest(val assignmentId: String)
 
 @Serializable
 private data class ListRunsRequest(
@@ -127,6 +170,7 @@ private data class CreateProfileRequest(
     val envVars: Map<String, String>,
     val secretEnvVars: Map<String, String>,
     val dockerImage: String,
+    val drainDeadline: String,
 )
 
 @Serializable
@@ -137,6 +181,7 @@ private data class UpdateProfileRequest(
     val envVars: Map<String, String>,
     val secretEnvVars: Map<String, String>,
     val dockerImage: String,
+    val drainDeadline: String,
 )
 
 /**
@@ -234,6 +279,7 @@ class AdminApiClient(
                           envVars = spec.envVars,
                           secretEnvVars = spec.secretEnvVars,
                           dockerImage = spec.dockerImage,
+                          drainDeadline = spec.drainDeadline,
                       )
                   ),
               )
@@ -253,6 +299,7 @@ class AdminApiClient(
                           envVars = spec.envVars,
                           secretEnvVars = spec.secretEnvVars,
                           dockerImage = spec.dockerImage,
+                          drainDeadline = spec.drainDeadline,
                       )
                   ),
               )
@@ -294,6 +341,36 @@ class AdminApiClient(
 
   fun revokeProfileGrant(workerId: String, profileId: String) {
     post("RevokeProfileGrant", apiJson.encodeToString(GrantRequest(workerId, profileId)))
+  }
+
+  /**
+   * Lists assignments (a first-class placement record, distinct from a grant).
+   * [workerId]/[profileId] narrow the result (null = no filter on that dimension).
+   */
+  fun listAssignments(workerId: String? = null, profileId: String? = null): List<AdminAssignment> =
+      apiJson
+          .decodeFromString<ListAssignmentsResponse>(
+              post(
+                  "ListAssignments",
+                  apiJson.encodeToString(
+                      ListAssignmentsRequest(workerId.orEmpty(), profileId.orEmpty())
+                  ),
+              )
+          )
+          .assignments
+
+  fun createAssignment(workerId: String, profileId: String): AdminAssignment =
+      apiJson
+          .decodeFromString<AssignmentResponse>(
+              post(
+                  "CreateAssignment",
+                  apiJson.encodeToString(CreateAssignmentRequest(workerId, profileId)),
+              )
+          )
+          .assignment
+
+  fun deleteAssignment(assignmentId: String) {
+    post("DeleteAssignment", apiJson.encodeToString(DeleteAssignmentRequest(assignmentId)))
   }
 
   /**

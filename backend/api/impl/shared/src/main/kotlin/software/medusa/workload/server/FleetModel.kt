@@ -72,6 +72,43 @@ data class Worker(
     val sourceIp: String? = null,
     // When the worker was revoked (M6-B2); null unless status is REVOKED.
     val revokedAt: Instant? = null,
+    // The operator pause/serve switch (M7-05): a drain, not a revoke. While true, this worker's
+    // workload-agent reconciles its assignment set down to empty; the worker stays ACTIVE and
+    // keeps its grants.
+    val paused: Boolean = false,
+    val pausedAt: Instant? = null,
+    // Marks this worker as (one of) the shared fallback node(s) for fallback-eligible profiles
+    // (workload#122 part 2). When more than one worker is flagged, the oldest active one is used —
+    // see FallbackPlacementReconciler.
+    val fallbackNode: Boolean = false,
+    // Per-profile reconcile status (M7 automated rollout), last reported by this worker's own
+    // workload-agent via `POST /worker/v2/status` — see WorkerStatusReportService. Point-in-time,
+    // not audit history: each report replaces the previous one wholesale. Empty for a worker whose
+    // agent hasn't reported yet.
+    val assignmentStatuses: List<AgentAssignmentStatus> = emptyList(),
+)
+
+/** A profile's point-in-time reconcile state on one worker, as workload-agent last reported it. */
+enum class AgentAssignmentState {
+  CONVERGED,
+  DRAINING,
+  CRASHLOOP_HOLD,
+  REPLACING,
+}
+
+/**
+ * One profile's reconcile status on a worker (M7 automated rollout) — what `admin workers list`
+ * shows as fleet version + drain state. See `AgentReconciler.kt`'s `AgentAssignmentStatus` (the
+ * agent-side counterpart this is reported from) for the full contract.
+ */
+data class AgentAssignmentStatus(
+    val profileId: ProfileId,
+    val runningDigest: String?,
+    val desiredDigest: String?,
+    val state: AgentAssignmentState,
+    val since: Instant,
+    // Only meaningful while [state] is [AgentAssignmentState.DRAINING].
+    val drainDeadline: Instant? = null,
 )
 
 data class NewWorker(
@@ -88,6 +125,10 @@ data class Profile(
     val latestRevision: Int,
     val archived: Boolean,
     val createdAt: Instant,
+    // Tags this profile for fallback auto-placement (workload#122 part 2): while true and no
+    // dedicated node is present, FallbackPlacementReconciler keeps it running on the shared
+    // fallback node, migrating it off automatically the moment a dedicated node appears.
+    val fallbackEligible: Boolean = false,
 )
 
 /**
@@ -135,6 +176,9 @@ data class ProfileRevision(
     val dockerImage: String? = null,
     val dockerImageDigest: String? = null,
     val imageStatus: ImageStatus = ImageStatus.NOT_APPLICABLE,
+    // The payload-declared stop timeout ("D") a supervisor passes when SIGTERM-draining a claim of
+    // this revision, e.g. "6h" for the Flow worker. Null means "the supervisor's own default".
+    val drainDeadline: String? = null,
 )
 
 data class NewProfileRevision(
@@ -144,6 +188,7 @@ data class NewProfileRevision(
     val envVars: Map<String, String> = emptyMap(),
     val secretEnvVars: Map<String, String> = emptyMap(),
     val dockerImage: String? = null,
+    val drainDeadline: String? = null,
 )
 
 /**
@@ -159,6 +204,31 @@ data class Grant(
     val profileId: ProfileId,
     val grantedAt: Instant,
     val grantedBy: String,
+)
+
+@JvmInline
+value class AssignmentId(
+    val value: UUID,
+)
+
+/**
+ * A first-class, admin-managed (worker, profile) placement record — distinct from a [Grant]. A
+ * grant is authorization ("worker may run profile"); an assignment is the placement decision
+ * itself, with its own id, independently listable/creatable/deletable. The two are deliberately
+ * separate primitives — creating one does not imply the other.
+ */
+data class Assignment(
+    val id: AssignmentId,
+    val workerId: WorkerId,
+    val profileId: ProfileId,
+    val createdAt: Instant,
+    val createdBy: String,
+)
+
+data class NewAssignment(
+    val workerId: WorkerId,
+    val profileId: ProfileId,
+    val createdBy: String,
 )
 
 @JvmInline
@@ -202,12 +272,14 @@ value class RunId(
 )
 
 /**
- * What kind of workload a run represents. Extensible: M7 adds `AGENT` (a long-lived agent session,
- * with no profile/revision), which is why [Run.profileId]/[Run.revision] are nullable.
+ * What kind of workload a run represents. `AGENT` (M7-05) is a long-lived `workload-agent` presence
+ * session — no profile/revision, which is why [Run.profileId]/[Run.revision] are nullable —
+ * heartbeated for as long as the daemon is up and ended on clean shutdown.
  */
 enum class RunKind {
   RUN,
   EXEC,
+  AGENT,
 }
 
 /**

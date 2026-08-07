@@ -44,8 +44,32 @@ interface FleetStore {
 
   suspend fun revokeWorker(workerId: WorkerId): Worker?
 
+  /**
+   * Sets the operator pause/serve switch (M7-05): [paused] true records [now] as `pausedAt`; false
+   * clears it. Never touches `status` — a paused worker stays exactly as active/pending/etc as it
+   * was. Returns null if the worker doesn't exist.
+   */
+  suspend fun setWorkerPaused(
+      workerId: WorkerId,
+      paused: Boolean,
+      now: Instant = Instant.now(),
+  ): Worker?
+
   /** Updates `lastSeenAt` to now; a no-op if the worker doesn't exist. */
   suspend fun touchLastSeen(workerId: WorkerId)
+
+  /**
+   * Marks/unmarks this worker as (one of) the shared fallback node(s) (workload#122 part 2).
+   * Returns null if the worker doesn't exist.
+   */
+  suspend fun setWorkerFallbackNode(workerId: WorkerId, fallbackNode: Boolean): Worker?
+
+  /**
+   * Replaces this worker's [Worker.assignmentStatuses] wholesale with [statuses] (M7 automated
+   * rollout) — each `POST /worker/v2/status` report supersedes the last entirely, it never merges.
+   * A no-op if the worker doesn't exist.
+   */
+  suspend fun updateAssignmentStatuses(workerId: WorkerId, statuses: List<AgentAssignmentStatus>)
 
   // Profiles + revisions
 
@@ -63,6 +87,12 @@ interface FleetStore {
   ): ProfileRevision
 
   suspend fun archiveProfile(profileId: ProfileId): Profile?
+
+  /**
+   * Tags/untags this profile for fallback auto-placement (workload#122 part 2). Returns null if the
+   * profile doesn't exist.
+   */
+  suspend fun setProfileFallbackEligible(profileId: ProfileId, fallbackEligible: Boolean): Profile?
 
   suspend fun getProfile(profileId: ProfileId): Profile?
 
@@ -99,7 +129,20 @@ interface FleetStore {
 
   suspend fun hasGrant(workerId: WorkerId, profileId: ProfileId): Boolean
 
+  /** The grant for this (worker, profile) pair, or null if none exists. */
+  suspend fun getGrant(workerId: WorkerId, profileId: ProfileId): Grant?
+
   suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId>
+
+  // Assignments — a first-class placement record, distinct from a grant (see [Assignment]).
+
+  suspend fun createAssignment(assignment: NewAssignment): Assignment
+
+  /** Returns the deleted assignment, or null if no assignment with that id exists. */
+  suspend fun deleteAssignment(id: AssignmentId): Assignment?
+
+  /** All assignments, newest first. */
+  suspend fun listAssignments(): List<Assignment>
 
   // Enrollment tokens
 

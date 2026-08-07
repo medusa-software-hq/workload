@@ -6,9 +6,11 @@ import java.time.ZoneOffset
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import software.medusa.workload.db.Assignments
 import software.medusa.workload.db.Enrollment_tokens
 import software.medusa.workload.db.Profile_revisions
 import software.medusa.workload.db.Profiles
@@ -26,6 +28,47 @@ private fun Map<String, String>.toJson(): String = envVarsJson.encodeToString(th
 
 private fun String.toEnvVarMap(): Map<String, String> = envVarsJson.decodeFromString(this)
 
+@Serializable
+private data class AgentAssignmentStatusDto(
+    val profileId: String,
+    val runningDigest: String? = null,
+    val desiredDigest: String? = null,
+    val state: String,
+    val since: String,
+    val drainDeadline: String? = null,
+)
+
+private fun List<AgentAssignmentStatus>.toJson(): String =
+    envVarsJson.encodeToString(
+        map {
+          AgentAssignmentStatusDto(
+              profileId = it.profileId.value,
+              runningDigest = it.runningDigest,
+              desiredDigest = it.desiredDigest,
+              state = it.state.name,
+              since = it.since.toString(),
+              drainDeadline = it.drainDeadline?.toString(),
+          )
+        }
+    )
+
+private fun String?.toAssignmentStatuses(): List<AgentAssignmentStatus> =
+    this?.let { raw ->
+      runCatching {
+            envVarsJson.decodeFromString<List<AgentAssignmentStatusDto>>(raw).map {
+              AgentAssignmentStatus(
+                  profileId = ProfileId(it.profileId),
+                  runningDigest = it.runningDigest,
+                  desiredDigest = it.desiredDigest,
+                  state = AgentAssignmentState.valueOf(it.state),
+                  since = Instant.parse(it.since),
+                  drainDeadline = it.drainDeadline?.let(Instant::parse),
+              )
+            }
+          }
+          .getOrDefault(emptyList())
+    } ?: emptyList()
+
 private fun Workers.toDomain(): Worker =
     Worker(
         workerId = WorkerId(worker_id),
@@ -42,6 +85,10 @@ private fun Workers.toDomain(): Worker =
         registeredVia = RegisteredVia.valueOf(registered_via),
         sourceIp = source_ip,
         revokedAt = revoked_at?.toInstant(),
+        paused = paused,
+        pausedAt = paused_at?.toInstant(),
+        fallbackNode = fallback_node,
+        assignmentStatuses = assignment_status_json.toAssignmentStatuses(),
     )
 
 private fun Profiles.toDomain(): Profile =
@@ -51,6 +98,7 @@ private fun Profiles.toDomain(): Profile =
         latestRevision = latest_revision,
         archived = archived,
         createdAt = created_at.toInstant(),
+        fallbackEligible = fallback_eligible,
     )
 
 private fun Profile_revisions.toDomain(): ProfileRevision =
@@ -67,6 +115,7 @@ private fun Profile_revisions.toDomain(): ProfileRevision =
         dockerImage = docker_image,
         dockerImageDigest = docker_image_digest,
         imageStatus = ImageStatus.valueOf(image_status),
+        drainDeadline = drain_deadline,
     )
 
 private fun Worker_profile_grants.toDomain(): Grant =
@@ -75,6 +124,15 @@ private fun Worker_profile_grants.toDomain(): Grant =
         profileId = ProfileId(profile_id),
         grantedAt = granted_at.toInstant(),
         grantedBy = granted_by,
+    )
+
+private fun Assignments.toDomain(): Assignment =
+    Assignment(
+        id = AssignmentId(assignment_id),
+        workerId = WorkerId(worker_id),
+        profileId = ProfileId(profile_id),
+        createdAt = created_at.toInstant(),
+        createdBy = created_by,
     )
 
 private fun Runs.toDomain(): Run =
@@ -204,9 +262,34 @@ class PostgresFleetStore(
         database.fleetQueries.selectWorkerById(workerId.value).executeAsOneOrNull()?.toDomain()
       }
 
+  override suspend fun setWorkerPaused(workerId: WorkerId, paused: Boolean, now: Instant): Worker? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.setWorkerPaused(
+            paused = paused,
+            paused_at = if (paused) now.toOffsetDateTime() else null,
+            worker_id = workerId.value,
+        )
+        database.fleetQueries.selectWorkerById(workerId.value).executeAsOneOrNull()?.toDomain()
+      }
+
   override suspend fun touchLastSeen(workerId: WorkerId) {
     withContext(Dispatchers.IO) {
       database.fleetQueries.updateLastSeen(Instant.now().toOffsetDateTime(), workerId.value)
+    }
+  }
+
+  override suspend fun setWorkerFallbackNode(workerId: WorkerId, fallbackNode: Boolean): Worker? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.setWorkerFallbackNode(fallbackNode, workerId.value)
+        database.fleetQueries.selectWorkerById(workerId.value).executeAsOneOrNull()?.toDomain()
+      }
+
+  override suspend fun updateAssignmentStatuses(
+      workerId: WorkerId,
+      statuses: List<AgentAssignmentStatus>,
+  ) {
+    withContext(Dispatchers.IO) {
+      database.fleetQueries.updateAssignmentStatuses(statuses.toJson(), workerId.value)
     }
   }
 
@@ -237,6 +320,7 @@ class PostgresFleetStore(
               docker_image = revision.dockerImage,
               docker_image_digest = null,
               image_status = initialImageStatus(revision.dockerImage).name,
+              drain_deadline = revision.drainDeadline,
           )
         }
         database.fleetQueries.selectProfileById(profileId.value).executeAsOne().toDomain()
@@ -263,6 +347,7 @@ class PostgresFleetStore(
               docker_image = revision.dockerImage,
               docker_image_digest = null,
               image_status = initialImageStatus(revision.dockerImage).name,
+              drain_deadline = revision.drainDeadline,
           )
           database.fleetQueries.updateProfileLatestRevision(nextRevisionNumber, profileId.value)
         }
@@ -277,6 +362,15 @@ class PostgresFleetStore(
   override suspend fun archiveProfile(profileId: ProfileId): Profile? =
       withContext(Dispatchers.IO) {
         database.fleetQueries.archiveProfile(profileId.value)
+        database.fleetQueries.selectProfileById(profileId.value).executeAsOneOrNull()?.toDomain()
+      }
+
+  override suspend fun setProfileFallbackEligible(
+      profileId: ProfileId,
+      fallbackEligible: Boolean,
+  ): Profile? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.setProfileFallbackEligible(fallbackEligible, profileId.value)
         database.fleetQueries.selectProfileById(profileId.value).executeAsOneOrNull()?.toDomain()
       }
 
@@ -368,11 +462,42 @@ class PostgresFleetStore(
             null
       }
 
+  override suspend fun getGrant(workerId: WorkerId, profileId: ProfileId): Grant? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries
+            .selectGrant(workerId.value, profileId.value)
+            .executeAsOneOrNull()
+            ?.toDomain()
+      }
+
   override suspend fun listGrantedProfileIds(workerId: WorkerId): List<ProfileId> =
       withContext(Dispatchers.IO) {
         database.fleetQueries.selectGrantsByWorker(workerId.value).executeAsList().map {
           ProfileId(it.profile_id)
         }
+      }
+
+  override suspend fun createAssignment(assignment: NewAssignment): Assignment =
+      withContext(Dispatchers.IO) {
+        val id = UUID.randomUUID()
+        database.fleetQueries.insertAssignment(
+            assignment_id = id,
+            worker_id = assignment.workerId.value,
+            profile_id = assignment.profileId.value,
+            created_at = Instant.now().toOffsetDateTime(),
+            created_by = assignment.createdBy,
+        )
+        database.fleetQueries.selectAssignmentById(id).executeAsOne().toDomain()
+      }
+
+  override suspend fun deleteAssignment(id: AssignmentId): Assignment? =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.deleteAssignment(id.value).executeAsOneOrNull()?.toDomain()
+      }
+
+  override suspend fun listAssignments(): List<Assignment> =
+      withContext(Dispatchers.IO) {
+        database.fleetQueries.selectAllAssignments().executeAsList().map { it.toDomain() }
       }
 
   override suspend fun createEnrollmentToken(token: NewEnrollmentToken): EnrollmentToken =

@@ -154,6 +154,10 @@ Top-level, by role:
 - **`infra/`** — shared platform infrastructure (Terraform), split by concern
   into separate roots, and the module other projects consume to opt a service
   account in.
+- **`node/`** — the unified node image: one cloud-init template, rendered
+  either as Terraform user-data (`infra/modules/node-template`) or an ISO seed
+  image, plus the swappable identity-volume mechanism `workload node
+  enroll`/`node create` drive. See `node/README.md`.
 - **`worker-mvp/`** — a deliberately throwaway, separately-managed slice of
   infra that exercises the broker flow end to end without touching the real
   backend.

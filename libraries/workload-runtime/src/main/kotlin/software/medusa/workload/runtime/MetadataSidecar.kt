@@ -200,8 +200,12 @@ suspend fun startMetadataSidecar(
 /**
  * Polls `containers.inspect` for [containerId]'s address on [network] — the daemon assigns it as
  * part of starting the container, which can lag `start`'s own response by a beat.
+ *
+ * `internal`, not `private`: `startCloudflaredAccessSidecar` (CloudflaredAccessSidecar.kt) joins a
+ * container to an already-created per-run network the same way this file's [startMetadataSidecar]
+ * does, and needs the exact same polling.
  */
-private suspend fun awaitNetworkAddress(
+internal suspend fun awaitNetworkAddress(
     connector: DockerConnector,
     containerId: String,
     network: String,

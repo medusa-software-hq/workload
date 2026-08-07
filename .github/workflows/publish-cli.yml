@@ -5,6 +5,12 @@ on:
     branches: ["trunk/*"]
     paths:
       - "cli/**"
+      # workload-agent ships in this same release (see the "Build workload-agent fat jar" step
+      # below) — node.yaml.tmpl downloads both jars from one release tag, so a change to the
+      # daemon or the runtime library it (and the CLI) shares needs to cut a release too.
+      - "workload-agent/**"
+      - "libraries/workload-runtime/**"
+      - "libraries/docker-connector/**"
 
   workflow_dispatch:
 
@@ -44,13 +50,27 @@ jobs:
           ADMIN_OAUTH_CLIENT_SECRET: ${{ secrets.WORKLOAD_ADMIN_OAUTH_CLIENT_SECRET }}
           STAGING_ADMIN_OAUTH_CLIENT_SECRET: ${{ secrets.WORKLOAD_ADMIN_OAUTH_CLIENT_SECRET_STAGING }}
           METADATA_SIDECAR_IMAGE: ${{ vars.GCP_AR_REPO_ENDPOINT }}/workload/metadata-emulator
+          CLOUDFLARED_ACCESS_SIDECAR_IMAGE: ${{ vars.GCP_AR_REPO_ENDPOINT }}/workload/cloudflared-access
         run: |
           ../gradlew shadowJar \
             -PadminOauthClientSecret="$ADMIN_OAUTH_CLIENT_SECRET" \
             -PstagingAdminOauthClientSecret="$STAGING_ADMIN_OAUTH_CLIENT_SECRET" \
-            -PmetadataSidecarImage="$METADATA_SIDECAR_IMAGE"
+            -PmetadataSidecarImage="$METADATA_SIDECAR_IMAGE" \
+            -PcloudflaredAccessSidecarImage="$CLOUDFLARED_ACCESS_SIDECAR_IMAGE"
           echo "JAR=$GITHUB_WORKSPACE/cli/build/libs/workload-cli.jar" >> $GITHUB_ENV
           echo "VERSION=0.0.${{ github.run_number }}" >> $GITHUB_ENV
+
+      # workload-agent is the node daemon node.yaml.tmpl's workload-agent.service unit runs. It
+      # ships under the same $VERSION tag as the CLI so the node template's single cli_version
+      # placeholder resolves both downloads off one release (see node/cloud-init/node.yaml.tmpl).
+      # Renamed from the shadowJar's default "-all" classifier output to the plain
+      # "workload-agent.jar" the node template downloads — see workload-agent/build.gradle.kts for
+      # why the classifier itself can't be blanked the way cli's is.
+      - name: Build workload-agent fat jar
+        run: |
+          ./gradlew :workload-agent:shadowJar
+          cp workload-agent/build/libs/workload-agent-all.jar workload-agent/build/libs/workload-agent.jar
+          echo "AGENT_JAR=$GITHUB_WORKSPACE/workload-agent/build/libs/workload-agent.jar" >> $GITHUB_ENV
 
       - name: Create GitHub App token
         uses: actions/create-github-app-token@v3.2.0
@@ -69,7 +89,7 @@ jobs:
             --repo medusa-software-hq/workload-releases \
             --title "Workload CLI ${VERSION}" \
             --notes "Built from ${GITHUB_REPOSITORY}@${GITHUB_SHA}" \
-            "${JAR}"
+            "${JAR}" "${AGENT_JAR}"
 
       - uses: astral-sh/setup-uv@v8.2.0
 

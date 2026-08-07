@@ -57,6 +57,27 @@ output "gcp_ci_admin_sa_email" {
   value       = google_service_account.ci_admin.email
 }
 
+# Flow worker digest-push principal (Phase 2 of the automated-rollout epic, workload#126): a
+# separate, narrower s2s principal Flow's own CI impersonates via WIF (from *its* repo, not this
+# one — the WI binding below is intentionally left for that repo's own Terraform to grant) to push
+# a freshly-published worker image's digest into the flow-worker profile. Allow-listed on
+# ADMIN_SERVICE_ACCOUNTS like ci_admin, but given a non-empty profile scope
+# (ADMIN_SERVICE_ACCOUNT_PROFILE_SCOPES, see backend/infra/gcp-service.tf) so it can only ever
+# create/update the flow-worker profile — never approve workers, grant profiles, or touch any
+# other profile, unlike the unrestricted ci_admin.
+resource "google_service_account" "flow_worker_ci" {
+  project      = local.gcp_project_id
+  account_id   = "flow-worker-ci"
+  display_name = "Flow worker CI (scoped digest-push principal)"
+
+  depends_on = [google_project_service.apis["iam.googleapis.com"]]
+}
+
+output "gcp_flow_worker_ci_sa_email" {
+  description = "GCP scoped CI principal e-mail Flow's release automation impersonates to push the flow-worker profile's digest."
+  value       = google_service_account.flow_worker_ci.email
+}
+
 # Grant CI/CD SA read access to all Terraform state
 resource "google_storage_bucket_iam_member" "cicd_sa_object_viewer" {
   bucket = module.common.gcp_terraform_state_bucket_name

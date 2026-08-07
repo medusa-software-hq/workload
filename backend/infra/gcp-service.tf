@@ -1,9 +1,11 @@
 # GCE worker-plane node identities (M7): VMs allow-listed to authenticate to the broker with their
-# own service-account ID token (fetched from the metadata server) instead of a worker secret. Empty
-# by default — no node is accepted until an environment populates this with real node SA emails.
+# own service-account ID token (fetched from the metadata server) instead of a worker secret.
 # Separate from ADMIN_SERVICE_ACCOUNTS below: allow-listing a node here grants it no admin power.
+#
+# Empty by default — extra, environment-specific nodes beyond the one real fallback node (which
+# the GCE_NODE_SERVICE_ACCOUNTS env below always includes; see its own comment) go here.
 variable "gce_node_service_accounts" {
-  description = "GCE VM service-account emails allow-listed as worker-plane node identities."
+  description = "Extra GCE VM service-account emails allow-listed as worker-plane node identities, beyond the fallback node."
   type        = list(string)
   default     = []
 }
@@ -44,6 +46,15 @@ resource "google_cloud_run_v2_service" "primary" {
         container_port = 8080
       }
 
+      resources {
+        # Extra CPU during container startup only — no idle cost. Cuts the JVM cold-start
+        # time that was tripping worker/console request timeouts while the service scales
+        # to zero. See backend/infra/README.md's bills-over-availability stance: this keeps
+        # min instances at 0 (no always-warm billing), it just makes the unavoidable cold
+        # start fast.
+        startup_cpu_boost = true
+      }
+
       env {
         name  = "GOOGLE_CLIENT_ID"
         value = module.common.google_client_id
@@ -69,16 +80,39 @@ resource "google_cloud_run_v2_service" "primary" {
       }
 
       env {
-        name  = "ADMIN_SERVICE_ACCOUNTS"
-        value = "workload-ci-admin@${var.gcp_project_id}.iam.gserviceaccount.com"
+        name = "ADMIN_SERVICE_ACCOUNTS"
+        value = join(",", [
+          "workload-ci-admin@${var.gcp_project_id}.iam.gserviceaccount.com",
+          "flow-worker-ci@${var.gcp_project_id}.iam.gserviceaccount.com",
+        ])
+      }
+
+      # Phase 2 of the automated-rollout epic (workload#126): confines flow-worker-ci to exactly
+      # the flow-worker profile (create/update/read only — see requireProfileScope/
+      # requireUnscopedPrincipal in FleetServiceImpl). workload-ci-admin is absent from this map, so
+      # it stays the pre-existing unrestricted s2s admin.
+      env {
+        name  = "ADMIN_SERVICE_ACCOUNT_PROFILE_SCOPES"
+        value = "flow-worker-ci@${var.gcp_project_id}.iam.gserviceaccount.com=flow-worker"
       }
 
       # GCE node principal (M7): the worker plane's counterpart to ADMIN_SERVICE_ACCOUNTS above,
       # verified with the same API_URL audience but a separate allowlist (see
       # var.gce_node_service_accounts and WorkerNodeIdentityService).
+      #
+      # Always includes the one real fallback node's SA email (workload#122 part 4 — see
+      # infra/gcp-fallback-node.tf's google_service_account.fallback_node), computed the same
+      # deterministic way ADMIN_SERVICE_ACCOUNT_PROFILE_SCOPES's email is above rather than read
+      # from that root's state — infra/ and this root are separate Terraform states with no data
+      # dependency between them. Allow-listing an SA that doesn't exist yet (until infra/'s
+      # fallback node is actually applied with enable_fallback_node = true) is inert; extra
+      # environment-specific nodes go in var.gce_node_service_accounts.
       env {
-        name  = "GCE_NODE_SERVICE_ACCOUNTS"
-        value = join(",", var.gce_node_service_accounts)
+        name = "GCE_NODE_SERVICE_ACCOUNTS"
+        value = join(",", concat(
+          ["workload-fallback-node@${var.gcp_project_id}.iam.gserviceaccount.com"],
+          var.gce_node_service_accounts,
+        ))
       }
 
       env {

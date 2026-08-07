@@ -29,10 +29,14 @@ locals {
     # identity under test. Env-scoped only (no legacy repo-level twin) — its sole consumer, the
     # smoke job, already declares `environment:`.
     GCP_CI_ADMIN_SA_EMAIL = google_service_account.ci_admin.email
-    GCP_AR_REPO_HOSTNAME  = split("/", google_artifact_registry_repository.primary.registry_uri)[0]
-    GCP_AR_REPO_ENDPOINT  = local.gcp_ar_repo_endpoint
-    GOOGLE_CLIENT_ID      = module.common.google_client_id
-    GOOGLE_ALLOWED_DOMAIN = module.common.organization_domain
+    # The scoped digest-push principal (Phase 2, workload#126) — Flow's own CI repo consumes this
+    # to configure its WIF impersonation; it grants itself the impersonation right from its own
+    # Terraform, same pattern as ci_admin/cicd_sa above.
+    GCP_FLOW_WORKER_CI_SA_EMAIL = google_service_account.flow_worker_ci.email
+    GCP_AR_REPO_HOSTNAME        = split("/", google_artifact_registry_repository.primary.registry_uri)[0]
+    GCP_AR_REPO_ENDPOINT        = local.gcp_ar_repo_endpoint
+    GOOGLE_CLIENT_ID            = module.common.google_client_id
+    GOOGLE_ALLOWED_DOMAIN       = module.common.organization_domain
   }
 }
 
