@@ -82,20 +82,42 @@ rotating an already-running node without touching its boot media at all.
 ## `workload node create --driver utm` (local UTM VMs, macOS)
 
 `utm` is a convenience layer over the exact same manual flow above, scripted
-against a local [UTM.app](https://mac.getutm.app) instance instead of a human:
+against a local [UTM.app](https://mac.getutm.app) instance instead of a human —
+and, unlike the rest of this section's earlier revisions, plug-and-play: it
+needs nothing pre-staged beyond UTM.app itself.
 
 ```
-workload node create --driver utm --name my-node --utm-template ~/vms/node-template.utm
+workload node create --driver utm --name my-node
 ```
 
 It mints the enrollment token and renders the boot/identity media exactly like
-`--driver none`, then clones `--utm-template` (a `.utm` bundle you build once
-by hand — base OS installed, two empty removable CD-ROM drives named
-`boot.iso` / `identity.iso` in its `Images/` directory), swaps in the freshly
+`--driver none`, then **stages its own template**: fetches (or reuses a cached
+copy of) the current Ubuntu LTS cloud image for the host arch, checksum-verified
+against Ubuntu's `SHA256SUMS`, and assembles a `.utm` bundle around it — base
+disk plus two empty removable CD-ROM drives named `boot.iso` / `identity.iso` in
+its `Images/` directory. It then clones that template, swaps in the freshly
 rendered ISOs, registers the clone with UTM, and starts it — see
-[`UtmDriver.kt`](../cli/src/main/kotlin/software/medusa/workload/cli/UtmDriver.kt).
-It shells out to `utmctl` for start/stop/status and to AppleScript only for the
-one thing `utmctl` can't do (registering a newly cloned bundle).
+[`UtmDriver.kt`](../cli/src/main/kotlin/software/medusa/workload/cli/UtmDriver.kt),
+[`UtmImageCache.kt`](../cli/src/main/kotlin/software/medusa/workload/cli/UtmImageCache.kt),
+[`UtmTemplateAssembler.kt`](../cli/src/main/kotlin/software/medusa/workload/cli/UtmTemplateAssembler.kt),
+and [`utm-template-staging.md`](utm-template-staging.md) for what's staged, how
+it's cached (`~/.cache/workload/images/`, downloaded/assembled at most once and
+reused across creates), and the one part of it (the assembled bundle's
+`config.plist`) that couldn't be verified against a real UTM.app in this
+environment.  It shells out to `utmctl` for start/stop/status and to AppleScript
+only for the one thing `utmctl` can't do (registering a newly cloned bundle).
+
+Three flags tune or bypass staging:
+
+- `--image-release <codename>` — Ubuntu release to stage (e.g. `noble`); defaults
+  to the current LTS.
+- `--base-image <url|path>` — use a different base disk (custom/prebuilt) instead
+  of the default Ubuntu cloud image.
+- `--utm-template <path>` — the original bring-your-own-template flow: skips
+  staging entirely and clones this pre-built `.utm` bundle instead (base OS
+  already installed, two empty removable CD-ROM drives named `boot.iso` /
+  `identity.iso` in its `Images/` directory) — still the fallback if staging's
+  assembled `config.plist` doesn't work against your UTM version.
 
 Once created, the VM is controlled the same way:
 
