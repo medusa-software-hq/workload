@@ -110,6 +110,37 @@ a live swap. See [`utm-driver-spike.md`](utm-driver-spike.md) for why: neither
 removable-drive media, only the QEMU monitor UTM keeps internal does, and
 nothing scripts that today.
 
+## The real cloud fallback node (workload#122 part 4)
+
+`infra/gcp-fallback-node.tf` (in the top-level `infra/` root; `enable_fallback_node = true` to
+stand it up — see that file's header comment) is the one real consumer of the Terraform "cloud
+mode" renderer above: an always-on e2-micro GCE VM, boot media rendered by
+`infra/modules/node-template`, identity volume built by
+[`build-gce-identity-image.sh`](cloud-init/build-gce-identity-image.sh) (GCE has no removable
+CD-ROM the way UTM does — see that script's header for how the swappable-identity-volume design
+maps onto a GCE persistent disk instead) from a token `workload node enroll --name
+fallback-node --identity-only` mints, and its own GCE service account allow-listed on
+`GCE_NODE_SERVICE_ACCOUNTS` (`backend/infra/gcp-service.tf`) alongside the pre-existing
+enrollment-token registration path.
+
+`node.yaml.tmpl`'s `runcmd` also provisions a 2G swapfile unconditionally (harmless on a bigger
+node, load-bearing on e2-micro's 1 GiB) — see the template's own comment.
+
+Once the VM registers, an admin flags it via the `SetWorkerFallbackNode` admin RPC (and tags the
+target profile(s) `fallback_eligible` via `SetProfileFallbackEligible`) — Terraform stands the
+machine up; it doesn't touch the fleet-store row the node becomes, same as every node this repo
+provisions. Neither RPC has a CLI subcommand or console control yet (only `ListWorkers`/
+`ListProfiles` surface the flags today) — call them directly against the admin gRPC endpoint (see
+`AdminClient.setWorkerFallbackNode`/`setProfileFallbackEligible` in `system-test` for the exact
+request shape) until that lands. From there the migrate-on-arrival behavior is exactly
+`FallbackPlacementReconciler`'s: a fallback-eligible profile with no dedicated node runs here, and
+migrates off automatically the instant a dedicated node (e.g. a developer's laptop) is granted it —
+proven end to end against the real backend by
+`system-test/.../FallbackMigrationSystemTest.kt`, and against the real node by `ops/roll-worker`'s
+neighbors `ops/measure-fallback-node-idle-memory` (idle footprint) and
+`ops/verify-multi-arch-on-node` (the multi-arch images `workload run` depends on actually resolve
+and run on real e2-micro/amd64 hardware, not just in CI) — see `ops/README.md`.
+
 ## Acceptance walkthrough
 
 - **Rendering the template both ways yields a bootable node.** Both

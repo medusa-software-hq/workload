@@ -7,12 +7,14 @@
 #   - node/cloud-init/render-iso.sh fills it in with `sed` and burns it onto a
 #     NoCloud seed ISO for a manually-attached (driver "none") static VM.
 #
-# Both renderers only ever touch the three ${...} placeholders below
-# (workload_environment, node_name, cli_version) — every other "$" in this
-# file is a literal shell variable meant to be expanded on the node at boot,
-# always written *without* braces (bare $VAR) so neither renderer mistakes it
-# for a template placeholder. Terraform's templatefile() would otherwise choke
-# on any other ${...} it doesn't recognize as one of its vars.
+# Both renderers only ever touch the three named placeholders below
+# (workload_environment, node_name, cli_version), written as dollar-brace
+# expressions — every other "$" in this file is a literal shell variable
+# meant to be expanded on the node at boot, always written *without* braces
+# (bare $VAR) so neither renderer mistakes it for a template placeholder.
+# Terraform's templatefile() would otherwise choke on any other dollar-brace
+# expression it doesn't recognize as one of its vars — this comment included,
+# which is why it's worded to avoid one.
 #
 # Node identity is never baked into this file. It is carried on a small,
 # separate, swappable "identity volume" — a block device labeled WLIDENTITY
@@ -127,6 +129,21 @@ runcmd:
       DOWNLOAD_URL="https://github.com/medusa-software-hq/workload-releases/releases/download/$CLI_VERSION/workload-cli.jar"
     fi
     curl -fsSL "$DOWNLOAD_URL" -o /opt/workload/workload-cli.jar
+  # Smallest supported cloud shapes (e.g. e2-micro, 1 GiB RAM — see infra/gcp-fallback-node.tf)
+  # have no swap by default, so a JRE + Docker + a workload's own container can OOM well before
+  # disk fills up. A 2G swapfile is cheap insurance on any node, cloud or static, and a no-op
+  # (skipped) on one that already has swap configured some other way. Not sized off actual RAM:
+  # this template has no reliable way to know the shape it's rendered onto ahead of boot, and 2G
+  # is small enough to be harmless on a bigger node too.
+  - |
+    set -eu
+    if [ "$(swapon --show --noheadings | wc -l)" -eq 0 ] && [ ! -f /swapfile ]; then
+      fallocate -l 2G /swapfile
+      chmod 600 /swapfile
+      mkswap /swapfile
+      swapon /swapfile
+      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
   - systemctl enable --now docker.service
   - udevadm control --reload-rules
   - systemctl enable --now workload-node-identity-sync.service

@@ -18,6 +18,8 @@ import software.medusa.workload.v1.RevokeEnrollmentTokenRequest
 import software.medusa.workload.v1.RevokeProfileGrantRequest
 import software.medusa.workload.v1.RevokeWorkerRequest
 import software.medusa.workload.v1.Run
+import software.medusa.workload.v1.SetProfileFallbackEligibleRequest
+import software.medusa.workload.v1.SetWorkerFallbackNodeRequest
 import software.medusa.workload.v1.Worker
 
 /**
@@ -86,6 +88,35 @@ internal class AdminClient(private val stub: FleetServiceGrpcKt.FleetServiceCoro
 
   suspend fun revokeWorker(workerId: String): Worker =
       stub.revokeWorker(RevokeWorkerRequest.newBuilder().setWorkerId(workerId).build()).worker
+
+  /**
+   * Flags/unflags [workerId] as (one of) the shared fallback node(s) — see
+   * [software.medusa.workload.server.FallbackPlacementReconciler]. Triggers a fleet-wide reconcile
+   * server-side, so fallback-eligible profiles land on (or move off) this worker as a side effect
+   * of this call.
+   */
+  suspend fun setWorkerFallbackNode(workerId: String, fallbackNode: Boolean): Worker =
+      stub
+          .setWorkerFallbackNode(
+              SetWorkerFallbackNodeRequest.newBuilder()
+                  .setWorkerId(workerId)
+                  .setFallbackNode(fallbackNode)
+                  .build()
+          )
+          .worker
+
+  /**
+   * Tags/untags [profileId] for fallback auto-placement; triggers a reconcile of just this profile.
+   */
+  suspend fun setProfileFallbackEligible(profileId: String, fallbackEligible: Boolean): Profile =
+      stub
+          .setProfileFallbackEligible(
+              SetProfileFallbackEligibleRequest.newBuilder()
+                  .setProfileId(profileId)
+                  .setFallbackEligible(fallbackEligible)
+                  .build()
+          )
+          .profile
 
   suspend fun createExecProfile(
       profileId: String,

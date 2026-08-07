@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+#
+# verify-multi-arch-on-node — confirms the multi-arch images every `workload run` depends on
+# (metadata-emulator, plus a named product image) actually resolve and run on a real node's own
+# architecture, not just that CI published a multi-arch manifest for them. Written for the real
+# fallback node (workload#122 part 4, an e2-micro / linux_amd64 GCE VM — see
+# infra/gcp-fallback-node.tf), but takes any SSH-reachable node.
+#
+# Two checks, in order:
+#   1. Locally (wherever this script runs): `docker manifest inspect` each image and assert both
+#      linux/amd64 and linux/arm64 are present in the manifest list — catches a publish regression
+#      before it ever reaches a node.
+#   2. On the node itself, over SSH: `docker pull` + `docker run --rm` each image for a trivial
+#      command — catches anything the manifest check can't (e.g. a registry auth problem specific
+#      to that node's credentials, or an image that resolves but doesn't actually run on that arch).
+#
+# Usage:
+#   ops/verify-multi-arch-on-node [options] IMAGE_REF [IMAGE_REF ...]
+#
+# Options:
+#   --instance NAME   GCE instance name (default: workload-fallback-node).
+#   --zone ZONE       GCE zone (default: MEASURE_NODE_ZONE, then europe-west1-b).
+#   --project PROJECT GCP project (default: MEASURE_NODE_PROJECT, then gcloud's current config).
+#   --skip-remote     Only run the local manifest check (no SSH).
+#   -h, --help        Print this help and exit.
+#
+# Example:
+#   ops/verify-multi-arch-on-node \
+#     us-docker.pkg.dev/ms-workload-d91b0eaf/workload/metadata-emulator:latest
+#
+# Requires: docker (with buildx/manifest support), jq, and for the remote leg, gcloud with IAP
+# tunnel access to the node.
+
+set -euo pipefail
+
+script_name="$(basename "${BASH_SOURCE[0]}")"
+
+usage() {
+  sed -n '2,26p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+}
+
+fail() {
+  echo "$script_name: $*" >&2
+  exit 1
+}
+
+instance="workload-fallback-node"
+zone="${MEASURE_NODE_ZONE:-europe-west1-b}"
+project="${MEASURE_NODE_PROJECT:-}"
+skip_remote=false
+images=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --instance) instance="${2:?--instance requires a value}"; shift 2 ;;
+    --zone) zone="${2:?--zone requires a value}"; shift 2 ;;
+    --project) project="${2:?--project requires a value}"; shift 2 ;;
+    --skip-remote) skip_remote=true; shift ;;
+    -h | --help) usage; exit 0 ;;
+    -*) fail "unknown option: $1 (see --help)" ;;
+    *) images+=("$1"); shift ;;
+  esac
+done
+
+[ "${#images[@]}" -gt 0 ] || fail "usage: $script_name [options] IMAGE_REF [IMAGE_REF ...] (see --help)"
+command -v docker >/dev/null 2>&1 || fail "docker is required."
+command -v jq >/dev/null 2>&1 || fail "jq is required."
+
+echo "== [1/2] local manifest check =="
+manifest_failed=false
+for image in "${images[@]}"; do
+  echo "-- $image"
+  manifest_json="$(docker manifest inspect "$image" 2>/dev/null || true)"
+  if [ -z "$manifest_json" ]; then
+    echo "   FAIL: could not read a manifest list for $image (is it a single-arch image?)"
+    manifest_failed=true
+    continue
+  fi
+  platforms="$(echo "$manifest_json" | jq -r '[.manifests[]?.platform | "\(.os)/\(.architecture)"] | unique | join(",")')"
+  if [ -z "$platforms" ]; then
+    echo "   FAIL: $image has no manifest list entries (single-arch image?)"
+    manifest_failed=true
+    continue
+  fi
+  echo "   platforms: $platforms"
+  if ! echo ",$platforms," | grep -q ",linux/amd64,"; then
+    echo "   FAIL: linux/amd64 missing from $image's manifest"
+    manifest_failed=true
+  fi
+  if ! echo ",$platforms," | grep -q ",linux/arm64,"; then
+    echo "   FAIL: linux/arm64 missing from $image's manifest"
+    manifest_failed=true
+  fi
+done
+$manifest_failed && fail "one or more images failed the local manifest check (see above)."
+echo "   all images carry both linux/amd64 and linux/arm64."
+
+if $skip_remote; then
+  echo "== [2/2] skipped (--skip-remote) =="
+  exit 0
+fi
+
+echo "== [2/2] pull + run on $instance ($zone) =="
+command -v gcloud >/dev/null 2>&1 || fail "gcloud is required for the remote leg (or pass --skip-remote)."
+
+project_args=()
+[ -n "$project" ] && project_args=(--project "$project")
+
+for image in "${images[@]}"; do
+  echo "-- $image"
+  remote_cmd="set -eu; echo node arch: \$(uname -m); docker pull '$image' && docker run --rm '$image' true && echo OK"
+  gcloud compute ssh "$instance" --zone "$zone" "${project_args[@]}" \
+    --tunnel-through-iap --command "$remote_cmd"
+done
+
+echo "== verify-multi-arch-on-node: all images pulled and ran on $instance =="

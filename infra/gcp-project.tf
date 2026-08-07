@@ -38,6 +38,9 @@ resource "google_project_service" "apis" {
     "artifactregistry.googleapis.com",
     "cloudresourcemanager.googleapis.com",
     "cloudscheduler.googleapis.com",
+    # The fallback node's one GCE VM (gcp-fallback-node.tf) — nothing needed this before, since
+    # everything else in this project is serverless (Cloud Run).
+    "compute.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "iap.googleapis.com",
