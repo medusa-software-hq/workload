@@ -333,9 +333,26 @@ class NodeCreateCommand : NodeProvisionCommand(name = "create") {
       option(
           "--utm-template",
           help =
-              "Path to a template .utm VM bundle to clone for --driver utm — base OS already " +
-                  "installed, plus two empty removable CD-ROM drives named boot.iso / " +
-                  "identity.iso in its Images/ dir. Required with --driver utm.",
+              "Path to a pre-built template .utm VM bundle to clone for --driver utm instead of " +
+                  "staging one automatically — base OS already installed, plus two empty " +
+                  "removable CD-ROM drives named boot.iso / identity.iso in its Images/ dir.",
+      )
+  private val baseImage by
+      option(
+          "--base-image",
+          help =
+              "Base disk image for a staged --driver utm template: an http(s) URL or a local " +
+                  "path to a qcow2/img file. Defaults to the current Ubuntu LTS cloud image for " +
+                  "the host arch, fetched and cached under ~/.cache/workload/images/. Ignored " +
+                  "if --utm-template is given.",
+      )
+  private val imageRelease by
+      option(
+          "--image-release",
+          help =
+              "Ubuntu release codename to stage the default cloud image from (e.g. 'noble'). " +
+                  "Defaults to ${UbuntuCloudImageSpec.DEFAULT_RELEASE}. Ignored if --utm-template " +
+                  "or --base-image is given.",
       )
   private val utmctlPath by
       option("--utmctl", help = "Path to the utmctl binary (--driver utm only).").default("utmctl")
@@ -343,7 +360,8 @@ class NodeCreateCommand : NodeProvisionCommand(name = "create") {
   override fun help(context: Context) =
       "Create a node. With --driver none, this mints credentials and renders boot/identity media " +
           "for a VM you attach by hand — no hypervisor is touched. With --driver utm, it also " +
-          "clones a template UTM VM, attaches the rendered media, and starts it."
+          "stages a template UTM VM (a cached Ubuntu cloud image by default, or --base-image / " +
+          "--utm-template to override), clones it, attaches the rendered media, and starts it."
 
   override fun run() {
     val nodeName = resolvedName()
@@ -378,14 +396,7 @@ class NodeCreateCommand : NodeProvisionCommand(name = "create") {
                 statusCode = 1,
                 printError = true,
             )
-    val template =
-        utmTemplate?.let(Path::of)
-            ?: throw PrintMessage(
-                "--driver utm requires --utm-template <path to a template .utm bundle>. See " +
-                    "node/README.md.",
-                statusCode = 1,
-                printError = true,
-            )
+    val template = utmTemplate?.let(Path::of) ?: stageUtmTemplate()
     val vmDriver: NodeVmDriver = UtmNodeVmDriver(UtmVmConfig(utmctlPath = utmctlPath))
     echo("Cloning UTM template and starting '$nodeName'...")
     try {
@@ -396,6 +407,36 @@ class NodeCreateCommand : NodeProvisionCommand(name = "create") {
     echo("Node '$nodeName' created and started via UTM.")
     echo("  status: workload node status --name $nodeName --driver utm")
     echo("  stop:   workload node stop --name $nodeName --driver utm")
+  }
+
+  /**
+   * No --utm-template given: stage one instead of asking the operator to hand-build it — resolve
+   * the base disk (cached Ubuntu LTS cloud image, or --base-image), then assemble/cache a `.utm`
+   * template bundle around it. Both steps are cached (by file name + checksum, and by the disk's
+   * content hash, respectively) so this is a no-op download/assembly on every create after the
+   * first. See node/utm-template-staging.md.
+   */
+  private fun stageUtmTemplate(): Path {
+    val arch = hostImageArch()
+    val cache = ImageCache()
+    val baseDisk =
+        try {
+          baseImage?.let(cache::resolveBaseImage)
+              ?: cache.resolveUbuntuCloudImage(
+                  UbuntuCloudImageSpec(
+                      release = imageRelease ?: UbuntuCloudImageSpec.DEFAULT_RELEASE,
+                      arch = arch,
+                  )
+              )
+        } catch (e: NodeVmDriverException) {
+          throw PrintMessage(
+              e.message ?: "Failed to stage base image.",
+              statusCode = 1,
+              printError = true,
+          )
+        }
+    echo("Staging UTM template from $baseDisk...")
+    return UtmTemplateAssembler.assemble(baseDisk, arch)
   }
 }
 
