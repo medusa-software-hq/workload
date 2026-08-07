@@ -23,7 +23,7 @@
     is answerable from a run's logs without reproduction. Named to INFO so it surfaces while the root
     stays quiet at WARN. Rare in practice — one line per token lifetime (~hourly), not per request.
   -->
-  <logger name="software.medusa.workload.cli.RefreshingTokenCache" level="INFO" />
+  <logger name="software.medusa.workload.runtime.RefreshingTokenCache" level="INFO" />
 
   <root level="WARN">
     <appender-ref ref="STDERR" />
