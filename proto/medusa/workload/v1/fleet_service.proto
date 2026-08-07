@@ -38,6 +38,15 @@ service FleetService {
   rpc GrantProfile(GrantProfileRequest) returns (GrantProfileResponse);
   rpc RevokeProfileGrant(RevokeProfileGrantRequest) returns (RevokeProfileGrantResponse);
 
+  // Assignments: a first-class, admin-managed placement record — distinct from a grant. A grant is
+  // authorization ("worker X may run profile Y"); an assignment is the placement decision itself
+  // ("worker X is assigned profile Y"), independently listable, creatable, and deletable, with its
+  // own id. Today creating an assignment does not also grant the profile (and vice versa) — the two
+  // are deliberately separate primitives; a caller that wants both makes both calls.
+  rpc ListAssignments(ListAssignmentsRequest) returns (ListAssignmentsResponse);
+  rpc CreateAssignment(CreateAssignmentRequest) returns (CreateAssignmentResponse);
+  rpc DeleteAssignment(DeleteAssignmentRequest) returns (DeleteAssignmentResponse);
+
   // Runs (M6-B1/B2): "who is running what". A run is created when a worker starts a `workload
   // run`/`exec`, heartbeats while alive, and ends with an exit code. Presence is derived from live
   // runs, never stored separately.
@@ -386,3 +395,38 @@ message RevokeProfileGrantRequest {
 }
 
 message RevokeProfileGrantResponse {}
+
+// A first-class (worker, profile) placement record — see FleetService's doc comment on the
+// Assignment RPCs for how this differs from a Grant.
+message Assignment {
+  string assignment_id = 1;
+  string worker_id = 2;
+  string profile_id = 3;
+  string created_at = 4;
+  string created_by = 5;
+}
+
+message ListAssignmentsRequest {
+  // Optional filters; empty string means "no filter on this dimension".
+  string worker_id = 1;
+  string profile_id = 2;
+}
+
+message ListAssignmentsResponse {
+  repeated Assignment assignments = 1;
+}
+
+message CreateAssignmentRequest {
+  string worker_id = 1;
+  string profile_id = 2;
+}
+
+message CreateAssignmentResponse {
+  Assignment assignment = 1;
+}
+
+message DeleteAssignmentRequest {
+  string assignment_id = 1;
+}
+
+message DeleteAssignmentResponse {}

@@ -11,15 +11,22 @@ import software.medusa.workload.v1.ApproveWorkerRequest
 import software.medusa.workload.v1.ApproveWorkerResponse
 import software.medusa.workload.v1.ArchiveProfileRequest
 import software.medusa.workload.v1.ArchiveProfileResponse
+import software.medusa.workload.v1.Assignment as AssignmentProto
+import software.medusa.workload.v1.CreateAssignmentRequest
+import software.medusa.workload.v1.CreateAssignmentResponse
 import software.medusa.workload.v1.CreateEnrollmentTokenRequest
 import software.medusa.workload.v1.CreateEnrollmentTokenResponse
 import software.medusa.workload.v1.CreateProfileRequest
 import software.medusa.workload.v1.CreateProfileResponse
+import software.medusa.workload.v1.DeleteAssignmentRequest
+import software.medusa.workload.v1.DeleteAssignmentResponse
 import software.medusa.workload.v1.EnrollmentToken as EnrollmentTokenProto
 import software.medusa.workload.v1.FleetServiceGrpcKt
 import software.medusa.workload.v1.GrantProfileRequest
 import software.medusa.workload.v1.GrantProfileResponse
 import software.medusa.workload.v1.ImageStatus as ImageStatusProto
+import software.medusa.workload.v1.ListAssignmentsRequest
+import software.medusa.workload.v1.ListAssignmentsResponse
 import software.medusa.workload.v1.ListEnrollmentTokensRequest
 import software.medusa.workload.v1.ListEnrollmentTokensResponse
 import software.medusa.workload.v1.ListProfileRevisionsRequest
@@ -159,6 +166,15 @@ private fun ProfileRevision.toProto(): ProfileRevisionProto =
         .setDrainDeadline(drainDeadline.orEmpty())
         .build()
 
+private fun Assignment.toProto(): AssignmentProto =
+    AssignmentProto.newBuilder()
+        .setAssignmentId(id.value.toString())
+        .setWorkerId(workerId.value.toString())
+        .setProfileId(profileId.value)
+        .setCreatedAt(createdAt.toString())
+        .setCreatedBy(createdBy)
+        .build()
+
 private fun EnrollmentToken.toProto(): EnrollmentTokenProto =
     EnrollmentTokenProto.newBuilder()
         .setEnrollmentTokenId(id.value.toString())
@@ -181,6 +197,15 @@ private fun parseEnrollmentTokenId(raw: String): EnrollmentTokenId =
     } catch (e: IllegalArgumentException) {
       throw StatusException(
           Status.INVALID_ARGUMENT.withDescription("Invalid enrollment_token_id: '$raw'")
+      )
+    }
+
+private fun parseAssignmentId(raw: String): AssignmentId =
+    try {
+      AssignmentId(UUID.fromString(raw))
+    } catch (e: IllegalArgumentException) {
+      throw StatusException(
+          Status.INVALID_ARGUMENT.withDescription("Invalid assignment_id: '$raw'")
       )
     }
 
@@ -659,6 +684,72 @@ class FleetServiceImpl(
         )
     )
     return RevokeProfileGrantResponse.getDefaultInstance()
+  }
+
+  override suspend fun listAssignments(request: ListAssignmentsRequest): ListAssignmentsResponse {
+    requireUnscopedPrincipal("ListAssignments")
+    val workerFilter = request.workerId.ifBlank { null }?.let { parseWorkerId(it) }
+    val profileFilter = request.profileId.ifBlank { null }?.let { parseProfileId(it) }
+    val assignments =
+        fleetStore.listAssignments().filter {
+          (workerFilter == null || it.workerId == workerFilter) &&
+              (profileFilter == null || it.profileId == profileFilter)
+        }
+    return ListAssignmentsResponse.newBuilder()
+        .addAllAssignments(assignments.map { it.toProto() })
+        .build()
+  }
+
+  override suspend fun createAssignment(
+      request: CreateAssignmentRequest
+  ): CreateAssignmentResponse {
+    requireUnscopedPrincipal("CreateAssignment")
+    val workerId = parseWorkerId(request.workerId)
+    val profileId = parseProfileId(request.profileId)
+    fleetStore.getWorker(workerId) ?: throw notFound("worker", request.workerId)
+    val profile = fleetStore.getProfile(profileId) ?: throw notFound("profile", request.profileId)
+    if (profile.archived) {
+      throw failedPrecondition("profile '${profileId.value}' is archived")
+    }
+
+    val admin = currentAdminEmail()
+    val created =
+        fleetStore.createAssignment(
+            NewAssignment(workerId = workerId, profileId = profileId, createdBy = admin)
+        )
+    adminAudit(
+        AuditLogEntry(
+            event = "assignment_created",
+            requestId = UUID.randomUUID().toString(),
+            timestamp = Instant.now().toString(),
+            sourceIp = currentSourceIp(),
+            workerId = workerId.value.toString(),
+            profileId = profileId.value,
+            result = "success",
+        )
+    )
+    return CreateAssignmentResponse.newBuilder().setAssignment(created.toProto()).build()
+  }
+
+  override suspend fun deleteAssignment(
+      request: DeleteAssignmentRequest
+  ): DeleteAssignmentResponse {
+    requireUnscopedPrincipal("DeleteAssignment")
+    val id = parseAssignmentId(request.assignmentId)
+    val deleted =
+        fleetStore.deleteAssignment(id) ?: throw notFound("assignment", request.assignmentId)
+    adminAudit(
+        AuditLogEntry(
+            event = "assignment_deleted",
+            requestId = UUID.randomUUID().toString(),
+            timestamp = Instant.now().toString(),
+            sourceIp = currentSourceIp(),
+            workerId = deleted.workerId.value.toString(),
+            profileId = deleted.profileId.value,
+            result = "success",
+        )
+    )
+    return DeleteAssignmentResponse.getDefaultInstance()
   }
 
   override suspend fun createEnrollmentToken(

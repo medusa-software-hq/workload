@@ -134,6 +134,12 @@ private fun run(
                           AdminEnrollmentListCommand(),
                           AdminEnrollmentRevokeCommand(),
                       ),
+                  AdminAssignmentsCommand()
+                      .subcommands(
+                          AdminAssignmentsListCommand(),
+                          AdminAssignmentsCreateCommand(),
+                          AdminAssignmentsDeleteCommand(),
+                      ),
                   AdminRunsCommand().subcommands(AdminRunsListCommand()),
               ),
           NodeCommand()

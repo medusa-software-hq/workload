@@ -111,7 +111,7 @@ class WorkerAssignmentsServiceTest {
 
     val response = get(bearer(workerId, secret))
     assertEquals(HttpStatus.OK, response.status())
-    val body = workerJson.decodeFromString<AssignmentsResponse>(response.contentUtf8())
+    val body = workerJson.decodeFromString<AgentAssignmentsResponse>(response.contentUtf8())
 
     assertEquals(1, body.assignments.size)
     assertEquals("img-profile", body.assignments.single().profileId)
@@ -125,7 +125,7 @@ class WorkerAssignmentsServiceTest {
     runBlocking { grantImageProfile(workerId, "unresolved-profile", resolved = false) }
 
     val response = get(bearer(workerId, secret))
-    val body = workerJson.decodeFromString<AssignmentsResponse>(response.contentUtf8())
+    val body = workerJson.decodeFromString<AgentAssignmentsResponse>(response.contentUtf8())
     assertTrue(body.assignments.isEmpty())
   }
 
@@ -138,7 +138,7 @@ class WorkerAssignmentsServiceTest {
     }
 
     val body =
-        workerJson.decodeFromString<AssignmentsResponse>(
+        workerJson.decodeFromString<AgentAssignmentsResponse>(
             get(bearer(workerId, secret)).contentUtf8()
         )
     assertTrue(body.paused)

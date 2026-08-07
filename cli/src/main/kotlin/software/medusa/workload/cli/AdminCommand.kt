@@ -461,6 +461,51 @@ private fun CliktCommand.echoWorker(worker: AdminWorker, verb: String) {
 }
 
 // ---------------------------------------------------------------------------
+// admin assignments ...
+// ---------------------------------------------------------------------------
+
+class AdminAssignmentsCommand : NoOpCliktCommand(name = "assignments") {
+  override fun help(context: Context) =
+      "Inspect and manage assignments — a first-class (worker, profile) placement record, " +
+          "distinct from a grant."
+}
+
+class AdminAssignmentsListCommand : AdminActionCommand(name = "list") {
+  private val workerId by option("--worker", "-w", help = "Only assignments on this worker.")
+  private val profileId by option("--profile", "-p", help = "Only assignments of this profile.")
+
+  override fun help(context: Context) = "List assignments."
+
+  override fun run() {
+    echo(formatAssignmentTable(runAdmin { client().listAssignments(workerId, profileId) }))
+  }
+}
+
+class AdminAssignmentsCreateCommand : AdminActionCommand(name = "create") {
+  private val profileId by argument(name = "profile-id")
+  private val workerId by argument(name = "worker-id")
+
+  override fun help(context: Context) =
+      "Assign a profile to a worker (does not also grant it — see 'admin profiles grant')."
+
+  override fun run() {
+    val assignment = runAdmin { client().createAssignment(workerId, profileId) }
+    echo("Created assignment ${assignment.assignmentId}: $profileId -> $workerId.")
+  }
+}
+
+class AdminAssignmentsDeleteCommand : AdminActionCommand(name = "delete") {
+  private val assignmentId by argument(name = "assignment-id")
+
+  override fun help(context: Context) = "Delete an assignment."
+
+  override fun run() {
+    runAdmin { client().deleteAssignment(assignmentId) }
+    echo("Deleted assignment $assignmentId.")
+  }
+}
+
+// ---------------------------------------------------------------------------
 // enrollment
 // ---------------------------------------------------------------------------
 
@@ -666,6 +711,22 @@ internal fun formatProfileTable(profiles: List<AdminProfile>, liveRuns: List<Adm
             it.latestRevision.toString(),
             if (it.archived) "archived" else "active",
             activeRunsCell(running[it.profileId].orEmpty()),
+            formatTimestamp(it.createdAt),
+        )
+      },
+  )
+}
+
+internal fun formatAssignmentTable(assignments: List<AdminAssignment>): String {
+  if (assignments.isEmpty()) return "No assignments."
+  return renderTable(
+      listOf("ASSIGNMENT ID", "WORKER ID", "PROFILE ID", "CREATED BY", "CREATED"),
+      assignments.map {
+        listOf(
+            it.assignmentId,
+            it.workerId,
+            it.profileId,
+            it.createdBy.ifBlank { "-" },
             formatTimestamp(it.createdAt),
         )
       },

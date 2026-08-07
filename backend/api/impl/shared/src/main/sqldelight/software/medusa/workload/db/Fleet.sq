@@ -61,6 +61,16 @@ CREATE TABLE worker_profile_grants (
     PRIMARY KEY (worker_id, profile_id)
 );
 
+-- Kept in sync with V14__create_assignments.sql. A first-class placement record, distinct from
+-- worker_profile_grants (see Assignment's doc comment in fleet_service.proto).
+CREATE TABLE assignments (
+    assignment_id uuid PRIMARY KEY,
+    worker_id     uuid NOT NULL REFERENCES workers,
+    profile_id    text NOT NULL REFERENCES profiles,
+    created_at    TIMESTAMPTZ NOT NULL,
+    created_by    text NOT NULL
+);
+
 -- Kept in sync with V7__create_enrollment_tokens.sql.
 CREATE TABLE enrollment_tokens (
     enrollment_token_id uuid PRIMARY KEY,
@@ -172,6 +182,20 @@ SELECT * FROM worker_profile_grants WHERE worker_id = ? AND profile_id = ?;
 
 selectGrantsByWorker:
 SELECT * FROM worker_profile_grants WHERE worker_id = ? ORDER BY profile_id;
+
+insertAssignment:
+INSERT INTO assignments (assignment_id, worker_id, profile_id, created_at, created_by)
+VALUES (?, ?, ?, ?, ?);
+
+selectAssignmentById:
+SELECT * FROM assignments WHERE assignment_id = ?;
+
+deleteAssignment:
+DELETE FROM assignments WHERE assignment_id = ?
+RETURNING *;
+
+selectAllAssignments:
+SELECT * FROM assignments ORDER BY created_at DESC;
 
 insertEnrollmentToken:
 INSERT INTO enrollment_tokens (enrollment_token_id, token_hash, note, created_by, created_at, expires_at, require_approval)

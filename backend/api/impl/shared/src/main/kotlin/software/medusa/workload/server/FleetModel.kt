@@ -171,6 +171,31 @@ data class Grant(
 )
 
 @JvmInline
+value class AssignmentId(
+    val value: UUID,
+)
+
+/**
+ * A first-class, admin-managed (worker, profile) placement record — distinct from a [Grant]. A
+ * grant is authorization ("worker may run profile"); an assignment is the placement decision
+ * itself, with its own id, independently listable/creatable/deletable. The two are deliberately
+ * separate primitives — creating one does not imply the other.
+ */
+data class Assignment(
+    val id: AssignmentId,
+    val workerId: WorkerId,
+    val profileId: ProfileId,
+    val createdAt: Instant,
+    val createdBy: String,
+)
+
+data class NewAssignment(
+    val workerId: WorkerId,
+    val profileId: ProfileId,
+    val createdBy: String,
+)
+
+@JvmInline
 value class EnrollmentTokenId(
     val value: UUID,
 )

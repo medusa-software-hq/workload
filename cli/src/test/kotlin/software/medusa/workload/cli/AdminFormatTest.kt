@@ -228,6 +228,30 @@ class AdminFormatTest {
   }
 
   @Test
+  fun `assignment table lists id, worker, profile, and who created it`() {
+    val table =
+        formatAssignmentTable(
+            listOf(
+                AdminAssignment(
+                    assignmentId = "a-1",
+                    workerId = "w-1",
+                    profileId = "flow-worker",
+                    createdBy = "admin@example.com",
+                    createdAt = "2026-07-22T10:00:00Z",
+                )
+            )
+        )
+    assertTrue(table.lines()[0].startsWith("ASSIGNMENT ID"))
+    assertTrue(table.contains("a-1") && table.contains("w-1") && table.contains("flow-worker"))
+    assertTrue(table.contains("admin@example.com"))
+  }
+
+  @Test
+  fun `assignment table reports empty state`() {
+    assertEquals("No assignments.", formatAssignmentTable(emptyList()))
+  }
+
+  @Test
   fun `revision detail shows image, pin, and sorted env`() {
     val detail =
         formatRevisionDetail(
