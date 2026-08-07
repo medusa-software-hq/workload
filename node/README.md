@@ -79,12 +79,67 @@ itself); `none` is what exists today — attach the media to a VM yourself.
 `--identity-only` mints and renders just a fresh identity volume, for
 rotating an already-running node without touching its boot media at all.
 
-## `workload node create --driver utm` (local UTM VMs, macOS)
+## `workload node create --driver vz` (local Virtualization.framework VMs, macOS/Apple Silicon)
 
-`utm` is a convenience layer over the exact same manual flow above, scripted
-against a local [UTM.app](https://mac.getutm.app) instance instead of a human —
-and, unlike the rest of this section's earlier revisions, plug-and-play: it
-needs nothing pre-staged beyond UTM.app itself.
+`vz` is the primary local-node driver: it runs the node under Apple's
+Virtualization.framework via [`vfkit`](https://github.com/crc-org/vfkit) (Red
+Hat's headless VZ wrapper — the same one `podman machine`/`crc`/minikube use),
+instead of the older `utm` driver below. Where `utm` drives a GUI app's own
+on-disk VM-library format (`utmctl`/AppleScript against a `.utm` bundle —
+fragile across UTM versions, and a foot-gun in practice: no bundled ISO
+tooling, a cloned bundle UTM won't recognize until renamed correctly, and a
+`config.plist` schema that drifts), `vfkit` *is* the running VM: a single
+process this driver launches and controls directly, with a REST API over a
+unix socket for start/stop/status. There's no GUI app, no VM-library format,
+and no bundle-layout mismatch to get wrong.
+
+```
+workload node create --driver vz --name my-node
+```
+
+It mints the enrollment token and renders the boot/identity media exactly like
+`--driver none`, stages a raw base disk (the cached Ubuntu LTS cloud image for
+the host arch by default, same [`ImageCache`](../cli/src/main/kotlin/software/medusa/workload/cli/UtmImageCache.kt)
+`--driver utm` uses — see `--base-image`/`--image-release` below), converts it
+to the raw format Apple's Virtualization.framework requires (Ubuntu's cloud
+images are qcow2 despite their `.img` extension; conversion is cached by the
+source's content hash under `~/.cache/workload/images/raw/` — see
+[`VfkitDiskStager.kt`](../cli/src/main/kotlin/software/medusa/workload/cli/VfkitDiskStager.kt)),
+then launches `vfkit` with the disk and the two rendered ISOs attached as
+virtio-blk devices and a unix-socket REST API for control — see
+[`VfkitDriver.kt`](../cli/src/main/kotlin/software/medusa/workload/cli/VfkitDriver.kt).
+A node's whole state (disk, ISOs, EFI variable store, console log, socket)
+lives under `~/.workload/vz-nodes/<name>/`.
+
+`--base-image`/`--image-release` are the same flags `--driver utm` takes (see
+below); `--vfkit` points at the `vfkit` binary itself if it isn't on PATH
+(`brew install vfkit`).
+
+Once created, the VM is controlled the same way as any driver-managed node:
+
+```
+workload node status --name my-node --driver vz
+workload node stop --name my-node --driver vz
+workload node start --name my-node --driver vz
+workload node rotate-identity --name my-node --driver vz
+```
+
+`vz` is the default driver for `node start`/`stop`/`status`/`rotate-identity`
+(pass `--driver utm` explicitly for a `utm`-managed node). Like `utm`,
+`rotate-identity` stops the VM, swaps `identity.iso`, and restarts it — not a
+live swap: `vfkit`'s REST API has no "change this device's backing file" verb
+any more than `utmctl`/AppleScript do (see node/utm-driver-spike.md), so both
+drivers fall back to the same stop/swap/start bracket.
+
+## `workload node create --driver utm` (local UTM VMs, macOS, legacy)
+
+**Superseded by `--driver vz` above** — kept working for anyone with an
+existing UTM-based setup or who needs UTM's GUI (e.g. to watch the console),
+but no longer the recommended local driver. `utm` is a convenience layer over
+the exact same manual flow above, scripted against a local
+[UTM.app](https://mac.getutm.app) instance instead of a human — and, unlike
+the rest of this section's earlier revisions, plug-and-play: it needs nothing
+pre-staged beyond UTM.app itself.
 
 ```
 workload node create --driver utm --name my-node
@@ -119,13 +174,15 @@ Three flags tune or bypass staging:
   `identity.iso` in its `Images/` directory) — still the fallback if staging's
   assembled `config.plist` doesn't work against your UTM version.
 
-Once created, the VM is controlled the same way:
+Once created, the VM is controlled the same way (note `--driver utm` is now
+required on these — `vz` is the default for `node start`/`stop`/`status`/
+`rotate-identity`):
 
 ```
-workload node status --name my-node
-workload node stop --name my-node
-workload node start --name my-node
-workload node rotate-identity --name my-node   # mint + swap a fresh identity volume
+workload node status --name my-node --driver utm
+workload node stop --name my-node --driver utm
+workload node start --name my-node --driver utm
+workload node rotate-identity --name my-node --driver utm   # mint + swap a fresh identity volume
 ```
 
 `rotate-identity` stops the VM, swaps `identity.iso`, and restarts it — **not**

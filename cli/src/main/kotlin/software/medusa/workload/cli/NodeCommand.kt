@@ -316,18 +316,21 @@ class NodeEnrollCommand : NodeProvisionCommand(name = "enroll") {
 
 class NodeCreateCommand : NodeProvisionCommand(name = "create") {
   // "none" mints credentials and renders media for a human to manually attach to a VM they
-  // provision themselves — still the only cross-platform option. "utm" is a convenience layer
-  // over that exact same flow, scripted against a local UTM.app (macOS) instead of a human; see
-  // UtmDriver.kt. A future cloud driver (e.g. "gce") would implement the same NodeVmDriver seam
-  // against the Google API instead of utmctl/AppleScript.
+  // provision themselves — still the only cross-platform option. "vz" is the primary local-node
+  // driver (Apple Virtualization.framework via vfkit, macOS/Apple Silicon; see VfkitDriver.kt):
+  // no bundle format, no GUI app, just a process and a REST socket it opens for us. "utm" is the
+  // older convenience layer scripted against a local UTM.app instead — kept working, but "vz"
+  // should be preferred; see node/README.md. A future cloud driver (e.g. "gce") would implement
+  // the same NodeVmDriver seam against the Google API instead.
   private val driver by
       option(
               "--driver",
               help =
-                  "Provisioning driver: 'none' (manual attach, default) or 'utm' (local UTM.app " +
-                      "VM, macOS only).",
+                  "Provisioning driver: 'none' (manual attach, default), 'vz' (local " +
+                      "Virtualization.framework VM via vfkit, macOS/Apple Silicon), or 'utm' " +
+                      "(local UTM.app VM, macOS, legacy).",
           )
-          .choice("none", "utm")
+          .choice("none", "utm", "vz")
           .required()
   private val utmTemplate by
       option(
@@ -341,7 +344,7 @@ class NodeCreateCommand : NodeProvisionCommand(name = "create") {
       option(
           "--base-image",
           help =
-              "Base disk image for a staged --driver utm template: an http(s) URL or a local " +
+              "Base disk image for a staged --driver utm/vz template: an http(s) URL or a local " +
                   "path to a qcow2/img file. Defaults to the current Ubuntu LTS cloud image for " +
                   "the host arch, fetched and cached under ~/.cache/workload/images/. Ignored " +
                   "if --utm-template is given.",
@@ -356,12 +359,16 @@ class NodeCreateCommand : NodeProvisionCommand(name = "create") {
       )
   private val utmctlPath by
       option("--utmctl", help = "Path to the utmctl binary (--driver utm only).").default("utmctl")
+  private val vfkitPath by
+      option("--vfkit", help = "Path to the vfkit binary (--driver vz only).").default("vfkit")
 
   override fun help(context: Context) =
       "Create a node. With --driver none, this mints credentials and renders boot/identity media " +
-          "for a VM you attach by hand — no hypervisor is touched. With --driver utm, it also " +
-          "stages a template UTM VM (a cached Ubuntu cloud image by default, or --base-image / " +
-          "--utm-template to override), clones it, attaches the rendered media, and starts it."
+          "for a VM you attach by hand — no hypervisor is touched. With --driver vz, it stages a " +
+          "raw base disk (a cached Ubuntu cloud image by default, or --base-image to override), " +
+          "then launches it under vfkit (Apple Virtualization.framework) with the rendered media " +
+          "attached. With --driver utm (legacy), it does the equivalent against a local UTM.app " +
+          "VM instead."
 
   override fun run() {
     val nodeName = resolvedName()
@@ -376,6 +383,73 @@ class NodeCreateCommand : NodeProvisionCommand(name = "create") {
         printAttachInstructions(this, artifacts)
       }
       "utm" -> createUtmVm(nodeName, artifacts)
+      "vz" -> createVzVm(nodeName, artifacts)
+    }
+  }
+
+  private fun createVzVm(nodeName: String, artifacts: NodeArtifacts) {
+    val bootIso =
+        artifacts.bootIso
+            ?: throw PrintMessage(
+                "--driver vz needs a boot ISO, but no genisoimage/mkisofs/xorriso was found on " +
+                    "PATH.",
+                statusCode = 1,
+                printError = true,
+            )
+    val identityIso =
+        artifacts.identityIso
+            ?: throw PrintMessage(
+                "--driver vz needs an identity ISO, but no genisoimage/mkisofs/xorriso was " +
+                    "found on PATH.",
+                statusCode = 1,
+                printError = true,
+            )
+    val rawDisk = stageVfkitBaseDisk()
+    val vmDriver: NodeVmDriver = VfkitNodeVmDriver(VfkitConfig(vfkitPath = vfkitPath))
+    echo("Launching '$nodeName' under vfkit...")
+    try {
+      vmDriver.create(nodeName, rawDisk, bootIso, identityIso)
+    } catch (e: NodeVmDriverException) {
+      throw PrintMessage(e.message ?: "vz driver failed.", statusCode = 1, printError = true)
+    }
+    echo("Node '$nodeName' created and started via vfkit (Apple Virtualization.framework).")
+    echo("  status: workload node status --name $nodeName --driver vz")
+    echo("  stop:   workload node stop --name $nodeName --driver vz")
+  }
+
+  /**
+   * Resolves the same base disk --driver utm stages (see [stageUtmTemplate]) via the shared
+   * [ImageCache] — workload#165 — then converts it to the raw format Apple's
+   * Virtualization.framework requires; see [VfkitDiskStager].
+   */
+  private fun stageVfkitBaseDisk(): Path {
+    val arch = hostImageArch()
+    val cache = ImageCache()
+    val baseDisk =
+        try {
+          baseImage?.let(cache::resolveBaseImage)
+              ?: cache.resolveUbuntuCloudImage(
+                  UbuntuCloudImageSpec(
+                      release = imageRelease ?: UbuntuCloudImageSpec.DEFAULT_RELEASE,
+                      arch = arch,
+                  )
+              )
+        } catch (e: NodeVmDriverException) {
+          throw PrintMessage(
+              e.message ?: "Failed to stage base image.",
+              statusCode = 1,
+              printError = true,
+          )
+        }
+    echo("Staging raw disk for vfkit from $baseDisk...")
+    return try {
+      VfkitDiskStager.stageRawDisk(baseDisk)
+    } catch (e: NodeVmDriverException) {
+      throw PrintMessage(
+          e.message ?: "Failed to convert base image to raw.",
+          statusCode = 1,
+          printError = true,
+      )
     }
   }
 
@@ -448,15 +522,18 @@ class NodeCreateCommand : NodeProvisionCommand(name = "create") {
 abstract class NodeVmCommand(name: String) : CliktCommand(name) {
   val nodeName by option("--name", help = "Node/VM name.").required()
   private val driver by
-      option("--driver", help = "VM driver. Only 'utm' controls a VM today.")
-          .choice("utm")
-          .default("utm")
+      option("--driver", help = "VM driver: 'vz' or 'utm' (legacy).")
+          .choice("utm", "vz")
+          .default("vz")
   private val utmctlPath by
       option("--utmctl", help = "Path to the utmctl binary (--driver utm only).").default("utmctl")
+  private val vfkitPath by
+      option("--vfkit", help = "Path to the vfkit binary (--driver vz only).").default("vfkit")
 
   internal fun driverFor(): NodeVmDriver =
       when (driver) {
         "utm" -> UtmNodeVmDriver(UtmVmConfig(utmctlPath = utmctlPath))
+        "vz" -> VfkitNodeVmDriver(VfkitConfig(vfkitPath = vfkitPath))
         else -> throw PrintMessage("Unknown driver '$driver'.", statusCode = 1, printError = true)
       }
 
@@ -516,16 +593,19 @@ class NodeRotateIdentityCommand : AdminActionCommand(name = "rotate-identity") {
           help = "Directory to write the fresh identity volume to (default: ./node-<name>).",
       )
   private val driver by
-      option("--driver", help = "VM driver to swap the identity volume on. Only 'utm' today.")
-          .choice("utm")
-          .default("utm")
+      option("--driver", help = "VM driver to swap the identity volume on: 'vz' or 'utm' (legacy).")
+          .choice("utm", "vz")
+          .default("vz")
   private val utmctlPath by
       option("--utmctl", help = "Path to the utmctl binary (--driver utm only).").default("utmctl")
+  private val vfkitPath by
+      option("--vfkit", help = "Path to the vfkit binary (--driver vz only).").default("vfkit")
 
   override fun help(context: Context) =
       "Mint a fresh enrollment token, render a new identity volume, and swap it into a " +
-          "driver-managed node VM. See node/utm-driver-spike.md: this is a stop -> swap -> start " +
-          "cycle under the hood, not a live hot-swap."
+          "driver-managed node VM. This is a stop -> swap -> start cycle under the hood, not a " +
+          "live hot-swap — neither driver exposes a way to change a running VM's block-device " +
+          "media."
 
   override fun run() {
     val result = runAdmin {
@@ -549,14 +629,15 @@ class NodeRotateIdentityCommand : AdminActionCommand(name = "rotate-identity") {
     val identityIso =
         artifacts.identityIso
             ?: throw PrintMessage(
-                "No genisoimage/mkisofs/xorriso on PATH — can't build the identity ISO --driver " +
-                    "utm needs.",
+                "No genisoimage/mkisofs/xorriso on PATH — can't build the identity ISO the $driver " +
+                    "driver needs.",
                 statusCode = 1,
                 printError = true,
             )
     val vmDriver: NodeVmDriver =
         when (driver) {
           "utm" -> UtmNodeVmDriver(UtmVmConfig(utmctlPath = utmctlPath))
+          "vz" -> VfkitNodeVmDriver(VfkitConfig(vfkitPath = vfkitPath))
           else -> throw PrintMessage("Unknown driver '$driver'.", statusCode = 1, printError = true)
         }
     try {
@@ -568,6 +649,6 @@ class NodeRotateIdentityCommand : AdminActionCommand(name = "rotate-identity") {
           printError = true,
       )
     }
-    echo("Rotated '$nodeName''s identity volume via UTM.")
+    echo("Rotated '$nodeName''s identity volume via $driver.")
   }
 }

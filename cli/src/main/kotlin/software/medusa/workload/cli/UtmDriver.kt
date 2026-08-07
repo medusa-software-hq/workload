@@ -8,8 +8,9 @@ import java.nio.file.StandardCopyOption
  * What `node create --driver <x>` needs from a hypervisor to be a convenience layer over the manual
  * attach flow in [printAttachInstructions]: register a VM seeded with the two rendered ISOs and
  * start it, then control that VM afterward. `none` doesn't implement this — there's no VM for the
- * CLI to reach; `utm` ([UtmNodeVmDriver]) is the first driver that does. A future cloud driver
- * (e.g. `gce`) would implement this same interface against the Google API instead.
+ * CLI to reach. `utm` ([UtmNodeVmDriver]) was the first driver that does; `vz`
+ * ([VfkitNodeVmDriver]) is the primary one today — see node/README.md. A future cloud driver (e.g.
+ * `gce`) would implement this same interface against the Google API instead.
  */
 internal interface NodeVmDriver {
   /**
