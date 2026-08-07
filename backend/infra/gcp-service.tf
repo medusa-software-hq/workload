@@ -1,9 +1,11 @@
 # GCE worker-plane node identities (M7): VMs allow-listed to authenticate to the broker with their
-# own service-account ID token (fetched from the metadata server) instead of a worker secret. Empty
-# by default — no node is accepted until an environment populates this with real node SA emails.
+# own service-account ID token (fetched from the metadata server) instead of a worker secret.
 # Separate from ADMIN_SERVICE_ACCOUNTS below: allow-listing a node here grants it no admin power.
+#
+# Empty by default — extra, environment-specific nodes beyond the one real fallback node (which
+# the GCE_NODE_SERVICE_ACCOUNTS env below always includes; see its own comment) go here.
 variable "gce_node_service_accounts" {
-  description = "GCE VM service-account emails allow-listed as worker-plane node identities."
+  description = "Extra GCE VM service-account emails allow-listed as worker-plane node identities, beyond the fallback node."
   type        = list(string)
   default     = []
 }
@@ -97,9 +99,20 @@ resource "google_cloud_run_v2_service" "primary" {
       # GCE node principal (M7): the worker plane's counterpart to ADMIN_SERVICE_ACCOUNTS above,
       # verified with the same API_URL audience but a separate allowlist (see
       # var.gce_node_service_accounts and WorkerNodeIdentityService).
+      #
+      # Always includes the one real fallback node's SA email (workload#122 part 4 — see
+      # infra/gcp-fallback-node.tf's google_service_account.fallback_node), computed the same
+      # deterministic way ADMIN_SERVICE_ACCOUNT_PROFILE_SCOPES's email is above rather than read
+      # from that root's state — infra/ and this root are separate Terraform states with no data
+      # dependency between them. Allow-listing an SA that doesn't exist yet (until infra/'s
+      # fallback node is actually applied with enable_fallback_node = true) is inert; extra
+      # environment-specific nodes go in var.gce_node_service_accounts.
       env {
-        name  = "GCE_NODE_SERVICE_ACCOUNTS"
-        value = join(",", var.gce_node_service_accounts)
+        name = "GCE_NODE_SERVICE_ACCOUNTS"
+        value = join(",", concat(
+          ["workload-fallback-node@${var.gcp_project_id}.iam.gserviceaccount.com"],
+          var.gce_node_service_accounts,
+        ))
       }
 
       env {

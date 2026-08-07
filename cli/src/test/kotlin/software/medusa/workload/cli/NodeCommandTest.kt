@@ -76,6 +76,9 @@ class NodeCommandTest {
     // The identity-volume mechanism: present regardless of how this render is used.
     assertTrue(rendered.contains("WLIDENTITY"))
     assertTrue(rendered.contains("workload-node-identity-sync"))
+    // Swap setup: present regardless of how this render is used — smallest cloud shapes (e.g.
+    // e2-micro) have no swap by default and need it to avoid OOMing under Docker + a JVM.
+    assertTrue(rendered.contains("/swapfile"))
   }
 
   // ---------------------------------------------------------------------
